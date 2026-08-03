@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-08-03T23:40:58Z",
+  "actor": "visualjc",
+  "baselineSha": "7bfe2565d9ef2bc1af6f5caacc298aa32e5efbaa",
+  "development": "https://github.com/visualjc/agentic-shipyard",
+  "destination": "https://github.com/NativeInteractive/agentic-shipyard",
+  "localDevelopmentRoot": "/Users/jimcarter/projects/computer-management/shipyard",
+  "developmentRemotes": [
+    "origin"
+  ],
+  "globalGhConfigUnchanged": true
+}
