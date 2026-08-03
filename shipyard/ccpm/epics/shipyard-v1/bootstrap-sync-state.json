@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "epic": {
+    "number": 1,
+    "url": "https://github.com/visualjc/agentic-shipyard/issues/1"
+  },
+  "tasks": {
+    "001": {
+      "number": 2,
+      "url": "https://github.com/visualjc/agentic-shipyard/issues/2"
+    },
+    "002": {
+      "number": 3,
+      "url": "https://github.com/visualjc/agentic-shipyard/issues/3"
+    },
+    "003": {
+      "number": 4,
+      "url": "https://github.com/visualjc/agentic-shipyard/issues/4"
+    },
+    "004": {
+      "number": 5,
+      "url": "https://github.com/visualjc/agentic-shipyard/issues/5"
+    },
+    "005": {
+      "number": 6,
+      "url": "https://github.com/visualjc/agentic-shipyard/issues/6"
+    },
+    "006": {
+      "number": 7,
+      "url": "https://github.com/visualjc/agentic-shipyard/issues/7"
+    },
+    "007": {
+      "number": 8,
+      "url": "https://github.com/visualjc/agentic-shipyard/issues/8"
+    },
+    "008": {
+      "number": 9,
+      "url": "https://github.com/visualjc/agentic-shipyard/issues/9"
+    },
+    "009": {
+      "number": 10,
+      "url": "https://github.com/visualjc/agentic-shipyard/issues/10"
+    },
+    "010": {
+      "number": 11,
+      "url": "https://github.com/visualjc/agentic-shipyard/issues/11"
+    }
+  }
+}

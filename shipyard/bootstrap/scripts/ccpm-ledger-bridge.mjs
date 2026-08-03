@@ -87,7 +87,7 @@ if (existsSync(link)) {
   symlinkSync(target, link, "dir");
 }
 
-appendExclude(repoRoot, ".claude");
+appendExclude(repoRoot, "/.claude");
 
 process.stdout.write(
   `${JSON.stringify({

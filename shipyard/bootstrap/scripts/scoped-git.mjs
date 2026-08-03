@@ -42,7 +42,8 @@ if (!["push", "fetch"].includes(gitArgs[0])) fail("only push and fetch are allow
 if (gitArgs.some((arg) => arg === "--force" || arg.startsWith("--force-") || arg.startsWith("+"))) {
   fail("force operations are prohibited");
 }
-if (gitArgs[1] !== "origin") fail("the remote argument must be origin");
+const remote = gitArgs.slice(1).find((arg) => !arg.startsWith("-"));
+if (remote !== "origin") fail("the remote argument must be origin");
 if (run("git", ["remote", "get-url", "origin"], { cwd: repoRoot }) !== expectedOrigin) fail("origin mismatch");
 if (run("git", ["remote"], { cwd: repoRoot }).split("\n").filter(Boolean).join(",") !== "origin") {
   fail("unexpected additional remote");

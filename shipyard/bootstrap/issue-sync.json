@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "syncedAt": "2026-08-03T23:43:04Z",
+  "actor": "visualjc",
+  "targetRepo": "visualjc/agentic-shipyard",
+  "destinationRepo": "NativeInteractive/agentic-shipyard",
+  "destinationIssueCount": 0,
+  "globalGhConfigUnchanged": true,
+  "epic": {
+    "number": 1,
+    "url": "https://github.com/visualjc/agentic-shipyard/issues/1"
+  },
+  "tasks": {
+    "001": 2,
+    "002": 3,
+    "003": 4,
+    "004": 5,
+    "005": 6,
+    "006": 7,
+    "007": 8,
+    "008": 9,
+    "009": 10,
+    "010": 11
+  },
+  "nativeSubIssueHierarchy": true
+}

@@ -243,6 +243,35 @@ for (const task of taskFiles) {
   checkpoint();
 }
 
+const extensionList = run("gh", ["extension", "list"]).stdout;
+if (extensionList.includes("yahsan2/gh-sub-issue")) {
+  const listed = gh([
+    "sub-issue",
+    "list",
+    String(epicIssue.number),
+    "--repo",
+    targetRepo,
+  ], { allowFailure: true });
+  const linked = new Set(
+    `${listed.stdout}\n${listed.stderr}`
+      .split("\n")
+      .map((line) => Number(line.split("\t")[0]))
+      .filter(Number.isInteger),
+  );
+  for (const issueNumber of Object.values(mapping)) {
+    if (!linked.has(issueNumber)) {
+      gh([
+        "sub-issue",
+        "add",
+        String(epicIssue.number),
+        String(issueNumber),
+        "--repo",
+        targetRepo,
+      ]);
+    }
+  }
+}
+
 const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 for (const task of taskFiles) {
   const issueNumber = mapping[task.bootstrapId];

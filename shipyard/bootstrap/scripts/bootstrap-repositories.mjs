@@ -152,7 +152,7 @@ try {
   if (git(repoRoot, "rev-parse", "HEAD") !== baselineSha) fail("local development main does not match destination main");
   remoteGit(repoRoot, "push", "-u", "origin", "main");
 
-  for (const pattern of ["PREMISE.md", ".scratch/", "bootstrap/", ".claude"]) appendExclude(repoRoot, pattern);
+  for (const pattern of ["/PREMISE.md", "/.scratch/", "/bootstrap/", "/.claude"]) appendExclude(repoRoot, pattern);
   if (git(repoRoot, "status", "--porcelain=v1") !== "") fail("development main is not clean after local exclusions");
 
   const developmentRemoteSha = remoteGit(repoRoot, "ls-remote", developmentUrl, "refs/heads/main").split(/\s+/)[0];

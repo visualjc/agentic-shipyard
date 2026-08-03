@@ -102,3 +102,27 @@ Non-blocking recommendations were also adopted where they clarified provider
 checkpoint integration, staged-pair milestones, and the Codex-only CCPM path.
 A second independent Codex gate returned `pass`, with all four findings resolved
 and issue synchronization judged safe only for `visualjc/agentic-shipyard`.
+
+## D-011 — Completed bootstrap state
+
+The guarded bootstrap completed with command-scoped `visualjc` authority:
+
+- private repositories:
+  `visualjc/agentic-shipyard` and
+  `NativeInteractive/agentic-shipyard`;
+- identical clean baseline commit:
+  `7bfe2565d9ef2bc1af6f5caacc298aa32e5efbaa`;
+- local development clone:
+  `/Users/jimcarter/projects/computer-management/shipyard`, with only the
+  VisualJC `origin`;
+- durable `shipyard-ledger` worktree:
+  `/Users/jimcarter/projects/computer-management/shipyard-worktrees/shipyard-ledger`;
+- CCPM epic: VisualJC issue #1;
+- CCPM tasks: VisualJC issues #2 through #11, also linked as native GitHub
+  sub-issues of #1; and
+- NativeInteractive workflow issue count: zero.
+
+The product repository contains only the bootstrap README and `.gitignore`.
+Premise, Wayfinder records, prototypes, CCPM records, bootstrap scripts,
+receipts, and Codex reviews live on the VisualJC ledger branch. No product
+implementation was started.
