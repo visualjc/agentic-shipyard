@@ -86,7 +86,7 @@ test("every Node sync Git command is killed on timeout or bounded output", async
     const root = await mkdtemp(join(tmpdir(), `shipyard-sync-${mode}-`)); const executable = join(root, "git");
     try {
       await writeFile(executable, mode === "hang" ? "#!/bin/sh\nwhile :; do :; done\n" : "#!/bin/sh\nwhile :; do echo github_pat_never_surface; done\n"); await chmod(executable, 0o700);
-      const adapter = new NodeSyncGit(executable, { commandTimeoutMs: 150, commandMaxOutputBytes: 128 }); const started = Date.now(); let message = "";
+      const adapter = new NodeSyncGit(executable, { commandTimeoutMs: mode === "hang" ? 150 : 1_000, commandMaxOutputBytes: 128 }); const started = Date.now(); let message = "";
       try { await adapter.observe("/repo", "upstream", "main", "main"); assert.fail("expected bounded Git failure"); } catch (error) { message = String(error); }
       assert.match(message, mode === "hang" ? /timed out.*killed/i : /output limit.*killed/i); assert.doesNotMatch(message, /github_pat/); assert.ok(Date.now() - started < 3_000);
     } finally { await rm(root, { recursive: true, force: true }); }
