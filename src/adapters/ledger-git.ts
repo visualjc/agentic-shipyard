@@ -110,7 +110,7 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader, ObjectFo
     } finally { await rm(indexDirectory, { recursive: true, force: true }); }
   }
 
-  /** A destination may stage product refs only; reject any refspec that can read or write the ledger ref. */
+  /** A destination may stage product refs only; reject isolated or local-internal metadata refs. */
   static excludesRefspec(refspec: string): boolean {
     if (typeof refspec !== "string" || refspec.length === 0) return false;
     let normalized = refspec.startsWith("+") ? refspec.slice(1) : refspec;
@@ -120,7 +120,7 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader, ObjectFo
     const source = separator < 0 ? normalized : normalized.slice(0, separator);
     const destination = separator < 0 ? source : normalized.slice(separator + 1);
     if (!source || !destination) return false;
-    return !refspecPatternMatches(source, this.ref) && !refspecPatternMatches(destination, this.ref);
+    return !protectedRefspecPattern(source, this.ref) && !protectedRefspecPattern(destination, this.ref);
   }
 
   /**
@@ -130,8 +130,8 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader, ObjectFo
    */
   static requireProductOnlyTransport(refspecs: readonly string[], payload?: string): void {
     if (!Array.isArray(refspecs) || refspecs.length === 0 || refspecs.some((refspec) => !this.excludesRefspec(refspec)) ||
-      (payload !== undefined && (typeof payload !== "string" || payload.includes(this.ref)))) {
-      throw new LedgerError("ledger-invalid-record", "Product transport must not carry the isolated ledger ref.");
+      (payload !== undefined && (typeof payload !== "string" || payload.includes(this.ref) || payload.includes("refs/shipyard/")))) {
+      throw new LedgerError("ledger-invalid-record", "Product transport must not carry isolated ledger or local Shipyard metadata refs.");
     }
   }
 
@@ -277,6 +277,12 @@ function refspecPatternMatches(pattern: string, ref: string): boolean {
   if (stars > 1) return true; // invalid/unfamiliar patterns are unsafe to authorize.
   const expression = `^${pattern.split("*").map(escapeRegExp).join(".*")}$`;
   return new RegExp(expression).test(ref);
+}
+
+function protectedRefspecPattern(pattern: string, ledgerRef: string): boolean {
+  return refspecPatternMatches(pattern, ledgerRef)
+    || pattern.startsWith("refs/shipyard/")
+    || refspecPatternMatches(pattern, "refs/shipyard/workspace-ready/11111111-1111-4111-8111-111111111111");
 }
 function escapeRegExp(value: string): string { return value.replace(/[|\\{}()[\]^$+?.]/g, "\\$&"); }
 function fullObjectIdFor(format: GitObjectFormat, value: string): boolean { return new RegExp(`^[a-f0-9]{${format === "sha1" ? 40 : 64}}$`).test(value); }

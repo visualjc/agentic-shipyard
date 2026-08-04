@@ -68,6 +68,31 @@ test("verifies the actor first and creates the staged-pair issue and PR only in 
   assert.equal(checkpoint.actorLogin, "shipyard-actor");
 });
 
+test("rejects malformed public request fields before authority or provider access", async () => {
+  const malformed = [
+    { ...request, issue: { ...request.issue, body: {} } },
+    { ...request, issue: { ...request.issue, title: 1 } },
+    { ...request, issue: { ...request.issue, body: "   " } },
+    { ...request, pullRequest: { ...request.pullRequest, title: "" } },
+    { ...request, pullRequest: { ...request.pullRequest, body: [] } },
+    { ...request, resume: { issueId: " " } },
+    { ...request, resume: { pullRequestId: 42 } },
+    { ...request, resume: { issueId: " I_1" } },
+    { ...request, resume: { issueId: "I_1", unknown: true } },
+    { ...request, issue: { ...request.issue, unknown: true } },
+  ];
+  for (const input of malformed) {
+    const api = new RecordingApi(() => assert.fail("invalid input must not reach the provider"));
+    let authorityCalls = 0;
+    const authority = api.authority();
+    authority.trackingAuthority = { resolve: async () => { authorityCalls += 1; throw new Error("must not resolve authority"); } };
+    await assert.rejects(trackDevelopmentRecords(authority, input as never), (error: unknown) => error instanceof GitHubTrackerError && error.code === "invalid-request" && !error.message.includes("[object Object]"));
+    assert.equal(authorityCalls, 0);
+    assert.equal(api.calls.length, 0);
+    assert.equal(api.writes.length, 0);
+  }
+});
+
 test("a destination-returning resolver cannot escape a real staged-pair bound guard", async () => {
   const api = new RecordingApi(rest => rest.path === "/user" ? { login: "shipyard-actor" } : []);
   const authority = api.authority(staged);

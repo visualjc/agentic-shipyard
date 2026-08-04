@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access, realpath } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
@@ -33,11 +33,16 @@ export interface WorkspaceGit {
   createClaimedBranch(repositoryPath: string, branch: string, startSha: string, token: string): Promise<boolean>;
   /** True only when the canonical branch's creation reflog marker matches the claim. */
   branchCreationMatches(repositoryPath: string, branch: string, token: string): Promise<boolean>;
+  /** Reads the token-keyed local readiness proof and its exact creation marker. */
+  readinessProof(repositoryPath: string, token: string): Promise<WorkspaceReadinessProof | undefined>;
+  /** Atomically verifies the branch start SHA and creates the immutable readiness proof. */
+  createReadinessProof(repositoryPath: string, branch: string, startSha: string, token: string): Promise<boolean>;
   productHead(repositoryPath: string): Promise<string>;
   /** True only when this invocation successfully created the linked worktree. */
   ensureWorktree(repositoryPath: string, branch: string, path: string, intent: WorktreeEnsureIntent): Promise<boolean>;
 }
 export type WorkspaceGitIdentity = Readonly<{ commonDirectory: string; branch: string }>;
+export type WorkspaceReadinessProof = Readonly<{ startSha: string; marker: string | undefined }>;
 export type InitialDeliveryLedgerRecord = Readonly<{
   schemaVersion: 1;
   deliveryId: string;
@@ -111,15 +116,23 @@ export class WorkspaceService {
       if (claimed.state === "ready" && !claimedBranchExists) {
         throw new WorkspaceError("workspace-conflict", "The ready canonical feature branch is missing.");
       }
+      const readinessProof = claimed.state === "creating" ? await this.git.readinessProof(request.repositoryPath, claimed.creationToken) : undefined;
+      if (readinessProof && !matchesReadinessProof(readinessProof, provenance, claimed.creationToken)) {
+        throw new WorkspaceError("workspace-conflict", "The delivery readiness proof does not match this creating claim.");
+      }
       if (claimed.state === "creating") {
-        if (claimedBranchExists) await this.assertCreatingBranchProvenance(request, provenance, claimed.creationToken);
-        if (!claimedBranchExists && !await this.git.createClaimedBranch(request.repositoryPath, request.branch, provenance.startProductSha, claimed.creationToken)) {
-          throw new WorkspaceError("workspace-conflict", "The canonical feature branch appeared during creation; refusing to adopt it.");
+        if (!readinessProof) {
+          if (claimedBranchExists) await this.assertCreatingBranchProvenance(request, provenance, claimed.creationToken);
+          if (!claimedBranchExists && !await this.git.createClaimedBranch(request.repositoryPath, request.branch, provenance.startProductSha, claimed.creationToken)) {
+            throw new WorkspaceError("workspace-conflict", "The canonical feature branch appeared during creation; refusing to adopt it.");
+          }
+          // The branch may have been replaced or advanced after it was claimed.
+          // Prove both the recorded starting SHA and creation reflog marker at
+          // the last possible point before attaching a worktree.
+          await this.assertCreatingBranchProvenance(request, provenance, claimed.creationToken);
+        } else if (!claimedBranchExists) {
+          throw new WorkspaceError("workspace-conflict", "The readiness-proven canonical feature branch is missing.");
         }
-        // The branch may have been replaced or advanced after it was claimed.
-        // Prove both the recorded starting SHA and creation reflog marker at
-        // the last possible point before attaching a worktree.
-        await this.assertCreatingBranchProvenance(request, provenance, claimed.creationToken);
       }
       // This is deliberately decided here, under the workspace lock. The Git
       // adapter must not inspect the branch again and silently turn a create
@@ -127,9 +140,19 @@ export class WorkspaceService {
       const worktreeIntent: WorktreeEnsureIntent = { mode: "attach" };
       await this.ensureExpectedWorktree(request, actualCommonDirectory, worktreeIntent);
       if (claimed.state === "creating") {
-        // Worktree attachment cannot be atomically coupled to a ref/reflog
-        // read. Do not promote the claim if either changed during attachment.
-        await this.assertCreatingBranchProvenance(request, provenance, claimed.creationToken);
+        if (!readinessProof) {
+          await this.assertCreatingBranchProvenance(request, provenance, claimed.creationToken);
+          // This transaction is the readiness linearization point: Git creates
+          // the durable token proof only if the feature ref is still exactly at
+          // the ledger start SHA. A later branch move is therefore after ready.
+          if (!await this.git.createReadinessProof(request.repositoryPath, request.branch, provenance.startProductSha, claimed.creationToken)) {
+            throw new WorkspaceError("workspace-conflict", "The canonical feature branch changed before readiness could be proven.");
+          }
+          const createdProof = await this.git.readinessProof(request.repositoryPath, claimed.creationToken);
+          if (!createdProof || !matchesReadinessProof(createdProof, provenance, claimed.creationToken)) {
+            throw new WorkspaceError("workspace-conflict", "Git did not create the exact delivery readiness proof.");
+          }
+        }
         try { await this.registry.write(newDeliveryRegistryDocument((document?.workspaces ?? []).filter((candidate) => candidate.deliveryId !== request.deliveryId).concat({ ...readyWorkspace, creationToken: claimed.creationToken }))); }
         catch (error: unknown) { if (error instanceof DeliveryError) throw new WorkspaceError("workspace-registry-invalid", error.message); throw error; }
       }
@@ -282,6 +305,17 @@ export function createNodeWorkspaceGit(executable = DEFAULT_NODE_GIT_EXECUTABLE)
     }
   },
   async branchCreationMatches(repositoryPath, branch, token) { return await git(repositoryPath, ["reflog", "show", "-1", "--format=%gs", `refs/heads/${branch}`]) === creationMarker(token); },
+  async readinessProof(repositoryPath, token) {
+    const ref = readinessProofRef(token);
+    const startSha = await git(repositoryPath, ["rev-parse", "--verify", "--quiet", ref]);
+    if (startSha === undefined) return undefined;
+    return { startSha, marker: await git(repositoryPath, ["reflog", "show", "-1", "--format=%gs", ref]) };
+  },
+  async createReadinessProof(repositoryPath, branch, startSha, token) {
+    const transaction = `start\nverify refs/heads/${branch} ${startSha}\ncreate ${readinessProofRef(token)} ${startSha}\nprepare\ncommit\n`;
+    try { await gitWithInputRequired(gitExecutable(), repositoryPath, ["update-ref", "--stdin", "--create-reflog", "-m", readinessMarker(token)], transaction); return true; }
+    catch { return false; }
+  },
   async productHead(repositoryPath) { return gitRequired(repositoryPath, ["rev-parse", "--verify", "HEAD"]); },
   async ensureWorktree(repositoryPath, branch, path, intent) {
     await gitRequired(repositoryPath, intent.mode === "attach"
@@ -313,5 +347,24 @@ function workspaceGitEnvironment(): NodeJS.ProcessEnv {
   return sanitizedGitEnvironment();
 }
 function creationMarker(token: string): string { return `shipyard-workspace-create:${token}`; }
+function readinessMarker(token: string): string { return `shipyard-workspace-ready:${token}`; }
+function readinessProofRef(token: string): string {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(token)) throw new Error("Invalid workspace creation token.");
+  return `refs/shipyard/workspace-ready/${token}`;
+}
+function matchesReadinessProof(proof: WorkspaceReadinessProof, provenance: InitialDeliveryLedgerRecord, token: string): boolean {
+  return proof.startSha === provenance.startProductSha && proof.marker === readinessMarker(token);
+}
+async function gitWithInputRequired(executable: string, repositoryPath: string, args: readonly string[], input: string): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(executable, ["-C", repositoryPath, ...args], { env: workspaceGitEnvironment(), stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = ""; let stderr = "";
+    child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+    child.stdout.on("data", chunk => { stdout += chunk; }); child.stderr.on("data", chunk => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("close", code => code === 0 ? resolvePromise(stdout.trim()) : reject(new Error(`Git worktree operation failed with code ${code}: ${stderr.trim()}`)));
+    child.stdin.end(input);
+  });
+}
 /** Convenient default workspace adapter; Git lookup remains lazy. */
 export const nodeWorkspaceGit = createNodeWorkspaceGit();

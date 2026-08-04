@@ -22,13 +22,13 @@ async function git(repository: string, args: string[]): Promise<string> {
 }
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
-async function fixture() {
+async function fixture(objectFormat: "sha1" | "sha256" = "sha1") {
   const root = await mkdtemp(join(tmpdir(), "shipyard-workspace-test-"));
   const repository = join(root, "repository");
   const worktrees = join(root, "worktrees");
   const state = join(root, "state");
   await mkdir(repository); await mkdir(worktrees); await mkdir(state);
-  await git(repository, ["init", "-b", "main"]);
+  await git(repository, ["init", `--object-format=${objectFormat}`, "-b", "main"]);
   await git(repository, ["config", "user.name", "test"]); await git(repository, ["config", "user.email", "test@example.test"]);
   await git(repository, ["commit", "--allow-empty", "-m", "product"]);
   const commonDirectory = await realpath(await git(repository, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
@@ -72,7 +72,8 @@ test("rejects non-string or empty initial ledger contents before touching any st
   const git = {
     async commonDirectory() { mutations += 1; return request.commonDirectory; }, async worktreeExists() { mutations += 1; return false; }, async worktreeIdentity() { mutations += 1; return undefined; },
     async branchExists() { mutations += 1; return false; }, async branchHead() { mutations += 1; return undefined; }, async productHead() { mutations += 1; return "a".repeat(40); },
-    async createClaimedBranch() { mutations += 1; return true; }, async branchCreationMatches() { mutations += 1; return true; }, async ensureWorktree() { mutations += 1; return true; },
+    async createClaimedBranch() { mutations += 1; return true; }, async branchCreationMatches() { mutations += 1; return true; },
+    async readinessProof() { mutations += 1; return undefined; }, async createReadinessProof() { mutations += 1; return true; }, async ensureWorktree() { mutations += 1; return true; },
   };
   const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
 
@@ -92,7 +93,8 @@ test("fails closed before attach when a newly claimed branch loses its recorded 
   const git = {
     async commonDirectory() { return request.commonDirectory; }, async worktreeExists() { return attached; }, async worktreeIdentity() { return attached ? { commonDirectory: request.commonDirectory, branch: request.branch } : undefined; },
     async branchExists() { return branchExists; }, async branchHead() { return replacementSha; }, async productHead() { return startSha; },
-    async createClaimedBranch() { branchExists = true; return true; }, async branchCreationMatches() { return false; }, async ensureWorktree() { attached = true; return true; },
+    async createClaimedBranch() { branchExists = true; return true; }, async branchCreationMatches() { return false; },
+    async readinessProof() { return undefined; }, async createReadinessProof() { return true; }, async ensureWorktree() { attached = true; return true; },
   };
   const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
 
@@ -111,13 +113,135 @@ test("never promotes a creating claim when provenance changes during worktree at
   const git = {
     async commonDirectory() { return request.commonDirectory; }, async worktreeExists() { return attached; }, async worktreeIdentity() { return attached ? { commonDirectory: request.commonDirectory, branch: request.branch } : undefined; },
     async branchExists() { return branchExists; }, async branchHead() { return startSha; }, async productHead() { return startSha; },
-    async createClaimedBranch() { branchExists = true; return true; }, async branchCreationMatches() { return ++provenanceChecks === 1; }, async ensureWorktree() { attached = true; return true; },
+    async createClaimedBranch() { branchExists = true; return true; }, async branchCreationMatches() { return ++provenanceChecks === 1; },
+    async readinessProof() { return undefined; }, async createReadinessProof() { return true; }, async ensureWorktree() { attached = true; return true; },
   };
   const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
 
   await assert.rejects(service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
   assert.equal(attached, true);
   assert.equal(document?.workspaces[0]?.state, "creating");
+});
+
+test("linearizes readiness before a branch move triggered inside the ready registry write", async () => {
+  const value = await fixture();
+  try {
+    const request = value.request("d-linearized");
+    const startSha = await nodeWorkspaceGit.productHead(value.repository);
+    let movedDuringReadyWrite = false;
+    const registry = {
+      lockScope: value.registry.lockScope.bind(value.registry), read: value.registry.read.bind(value.registry),
+      async write(document: DeliveryRegistryDocument) {
+        const workspace = document.workspaces.find(candidate => candidate.deliveryId === request.deliveryId);
+        if (workspace?.state === "ready") {
+          const proof = await nodeWorkspaceGit.readinessProof(value.repository, workspace.creationToken);
+          assert.deepEqual(proof, { startSha, marker: `shipyard-workspace-ready:${workspace.creationToken}` });
+          await git(request.worktreePath, ["commit", "--allow-empty", "-m", "move during ready registry write"]);
+          movedDuringReadyWrite = true;
+        }
+        await value.registry.write(document);
+      },
+    };
+    const service = new WorkspaceService(registry, value.ledger, nodeWorkspaceGit, new MutationLockService(nodeFilesystem, nodeProcess));
+
+    const workspace = await service.createOrResume(request);
+    assert.equal(movedDuringReadyWrite, true);
+    assert.notEqual(await nodeWorkspaceGit.branchHead(value.repository, request.branch), startSha);
+    assert.equal((await value.registry.read())?.workspaces[0]?.state, "ready");
+    assert.deepEqual(await nodeWorkspaceGit.readinessProof(value.repository, workspace.creationToken), { startSha, marker: `shipyard-workspace-ready:${workspace.creationToken}` });
+  } finally { await dispose(value); }
+});
+
+test("resumes a crash after readiness proof without requiring the branch to remain at its start SHA", async () => {
+  const value = await fixture();
+  try {
+    const request = value.request("d-proof-resume");
+    const startSha = await nodeWorkspaceGit.productHead(value.repository);
+    let failReadyWrite = true;
+    const registry = {
+      lockScope: value.registry.lockScope.bind(value.registry), read: value.registry.read.bind(value.registry),
+      async write(document: DeliveryRegistryDocument) {
+        const workspace = document.workspaces.find(candidate => candidate.deliveryId === request.deliveryId);
+        if (workspace?.state === "ready" && failReadyWrite) {
+          failReadyWrite = false;
+          assert.deepEqual(await nodeWorkspaceGit.readinessProof(value.repository, workspace.creationToken), { startSha, marker: `shipyard-workspace-ready:${workspace.creationToken}` });
+          throw new Error("crash-after-readiness-proof");
+        }
+        await value.registry.write(document);
+      },
+    };
+    const interrupted = new WorkspaceService(registry, value.ledger, nodeWorkspaceGit, new MutationLockService(nodeFilesystem, nodeProcess));
+
+    await assert.rejects(interrupted.createOrResume(request), /crash-after-readiness-proof/);
+    const creating = (await value.registry.read())?.workspaces[0];
+    assert.equal(creating?.state, "creating");
+    await git(request.worktreePath, ["commit", "--allow-empty", "-m", "delivery work after readiness"]);
+    const advancedSha = await nodeWorkspaceGit.branchHead(value.repository, request.branch);
+    assert.notEqual(advancedSha, startSha);
+    await git(value.repository, ["worktree", "remove", request.worktreePath]);
+    assert.equal(await nodeWorkspaceGit.worktreeExists(request.worktreePath), false);
+
+    const resumed = await value.service.createOrResume(request);
+    assert.equal(resumed.state, "ready");
+    assert.equal((await nodeWorkspaceGit.worktreeIdentity(request.worktreePath))?.branch, request.branch);
+    assert.equal(await nodeWorkspaceGit.branchHead(value.repository, request.branch), advancedSha);
+    assert.equal((await value.registry.read())?.workspaces[0]?.state, "ready");
+  } finally { await dispose(value); }
+});
+
+test("rejects a mismatched token readiness proof without promoting its creating claim", async () => {
+  const value = await fixture();
+  try {
+    const request = value.request("d-proof-mismatch");
+    const workspace = await value.service.createOrResume(request);
+    const proofRef = `refs/shipyard/workspace-ready/${workspace.creationToken}`;
+    await git(value.repository, ["commit", "--allow-empty", "-m", "foreign proof target"]);
+    const foreignSha = await nodeWorkspaceGit.productHead(value.repository);
+    await git(value.repository, ["update-ref", "-m", "foreign-readiness-proof", proofRef, foreignSha]);
+    const ready = (await value.registry.read())!;
+    await value.registry.write({ schemaVersion: 1, workspaces: ready.workspaces.map(candidate => candidate.deliveryId === request.deliveryId ? { ...candidate, state: "creating" } : candidate) });
+
+    await assert.rejects(value.service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict" && error.message.includes("readiness proof"));
+    assert.equal((await value.registry.read())?.workspaces[0]?.state, "creating");
+    assert.deepEqual(await nodeWorkspaceGit.readinessProof(value.repository, workspace.creationToken), { startSha: foreignSha, marker: "foreign-readiness-proof" });
+  } finally { await dispose(value); }
+});
+
+test("atomic readiness proof creation rejects a branch move immediately before its transaction", async () => {
+  const value = await fixture();
+  try {
+    const request = value.request("d-proof-race");
+    let injected = false;
+    const racingGit = {
+      ...nodeWorkspaceGit,
+      async createReadinessProof(repositoryPath: string, branch: string, startSha: string, token: string) {
+        if (!injected) {
+          injected = true;
+          await git(request.worktreePath, ["commit", "--allow-empty", "-m", "move immediately before readiness transaction"]);
+        }
+        return nodeWorkspaceGit.createReadinessProof(repositoryPath, branch, startSha, token);
+      },
+    };
+    const service = new WorkspaceService(value.registry, value.ledger, racingGit, new MutationLockService(nodeFilesystem, nodeProcess));
+
+    await assert.rejects(service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
+    const creating = (await value.registry.read())?.workspaces[0];
+    assert.equal(creating?.state, "creating");
+    assert.equal(await nodeWorkspaceGit.readinessProof(value.repository, creating!.creationToken), undefined);
+  } finally { await dispose(value); }
+});
+
+test("creates exact token readiness proofs in SHA-1 and SHA-256 repositories", async () => {
+  for (const [objectFormat, length] of [["sha1", 40], ["sha256", 64]] as const) {
+    const value = await fixture(objectFormat);
+    try {
+      const request = value.request(`d-${objectFormat}`);
+      const startSha = await nodeWorkspaceGit.productHead(value.repository);
+      const workspace = await value.service.createOrResume(request);
+      assert.equal(startSha.length, length);
+      assert.deepEqual(await nodeWorkspaceGit.readinessProof(value.repository, workspace.creationToken), { startSha, marker: `shipyard-workspace-ready:${workspace.creationToken}` });
+    } finally { await dispose(value); }
+  }
 });
 
 test("rejects a registered delivery whose removed linked worktree also lost its feature ref without mutating durable state", async () => {
@@ -255,6 +379,7 @@ test("does not delete a foreign replacement during cleanup's adversarial path sw
     async worktreeIdentity() { assert.fail("cleanup must not rely on a non-atomic identity recheck"); },
     async branchExists() { return false; }, async branchHead() { return undefined; }, async productHead() { return "a".repeat(40); },
     async createClaimedBranch() { return false; }, async branchCreationMatches() { return false; },
+    async readinessProof() { return undefined; }, async createReadinessProof() { return false; },
     async ensureWorktree() { return false; },
   };
   const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
@@ -445,6 +570,7 @@ test("create intent rejects a same-SHA foreign branch race without registry adop
     async branchExists() { return branchExists; },
     async branchHead() { return branchExists ? foreignSha : undefined; }, async productHead() { return startSha; },
     async createClaimedBranch() { branchExists = true; return false; }, async branchCreationMatches() { return false; },
+    async readinessProof() { return undefined; }, async createReadinessProof() { return false; },
     async ensureWorktree(_repositoryPath: string, _branch: string, _path: string, intent: WorktreeEnsureIntent) {
       assert.deepEqual(intent, { mode: "create", startSha });
       branchExists = true;
@@ -477,6 +603,7 @@ test("rejects an unregistered matching worktree before writing the initial ledge
     async worktreeIdentity() { assert.fail("create intent must not inspect then adopt an existing path"); },
     async productHead() { return startSha; }, async branchHead() { return startSha; },
     async createClaimedBranch() { return true; }, async branchCreationMatches() { return true; },
+    async readinessProof() { return undefined; }, async createReadinessProof() { return true; },
     async ensureWorktree() { ensureCalls += 1; return true; },
   };
   const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
@@ -502,6 +629,7 @@ test("rejects an unproven false worktree-creation result without adopting its pa
     async worktreeIdentity() { assert.fail("an unproven creation result must not be inspected or adopted"); },
     async productHead() { return startSha; }, async branchHead() { return startSha; }, async ensureWorktree() { return false; },
     async createClaimedBranch() { return true; }, async branchCreationMatches() { return true; },
+    async readinessProof() { return undefined; }, async createReadinessProof() { return true; },
   };
   const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
 
@@ -532,6 +660,7 @@ test("does not remove a swapped path when the branch changes after created-workt
       return changedSha;
     },
     async createClaimedBranch() { return true; }, async branchCreationMatches() { return true; },
+    async readinessProof() { return undefined; }, async createReadinessProof() { return true; },
     async ensureWorktree() { createdPathExists = true; return true; },
     async removeWorktree() { removalAttempts += 1; foreignReplacementExists = false; },
   };

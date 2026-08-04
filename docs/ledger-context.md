@@ -77,17 +77,26 @@ branch's reflog. A retry of a durable `creating` claim may attach or recreate
 only a branch at its recorded start SHA whose creation marker matches the
 claim, then recreate its missing worktree or validate the completed matching
 worktree, without deleting Git state. The creating branch's start SHA and
-creation marker are re-proven immediately before attachment and before the
-claim can advance to `ready`; a change during attachment leaves it `creating`.
-A wrong creating-branch head, creation marker, path, or worktree identity
-fails closed. Conversely,
+creation marker are re-proven immediately before attachment. After attachment,
+one atomic Git ref transaction verifies that the branch is still at the ledger
+start SHA and creates an immutable token-keyed readiness proof under
+`refs/shipyard/workspace-ready/` with an exact token marker. This transaction
+is the readiness linearization point. Only an exact proof permits the registry
+claim to advance to `ready`, so a branch move during the later registry write
+is ordered after readiness. A crash between those operations resumes from the
+proof and may accept normal branch advancement while validating or recreating
+the canonical worktree. Missing, mismatched, or foreign proof state fails
+closed, and token-keying prevents delivery-ID reuse from adopting an older
+proof. A wrong creating-branch head, creation marker, path, or worktree identity
+also fails closed. Conversely,
 before a claim exists Shipyard never adopts an existing branch or worktree path:
 the initial ledger record proves intent but cannot attribute unclaimed Git
 state. A `ready` claim whose branch later disappears also fails closed rather
 than recreating and possibly discarding delivery history. Cleanup retains either
 kind of claim while either its branch or worktree remains, preventing an
 unregistered stranded branch; after both are manually absent it removes only
-the registry entry and retains the ledger. `GitLedgerStore` always writes
+the registry entry and retains the ledger and immutable local readiness proof.
+`GitLedgerStore` always writes
 `refs/heads/shipyard-ledger`; its constructor accepts no configurable ledger
 ref. Its subprocesses use a canonical absolute Git executable and never
 resolve a bare `git` from `PATH`.
@@ -119,6 +128,8 @@ neither tip is an ancestor of the other. Product refs are:
 Shipyard has no supported remote-ledger or ledger-tag namespace. A copied
 ledger commit under a remote-tracking branch or commit tag therefore fails
 closed rather than being silently treated as another ledger retention ref.
+The local `refs/shipyard/` readiness namespace is likewise excluded by the
+mandatory product-only refspec boundary and never participates in transport.
 
 Each successful check reads the product-ref inventory twice. If it changes
 during the check, the operation stops with a transient unavailable error; if

@@ -7,6 +7,7 @@ export function stableShipyardMarker(deliveryId: string): string {
 }
 
 export type GitHubTrackerErrorCode =
+  | "invalid-request"
   | "invalid-delivery-id"
   | "invalid-head-sha"
   | "noncanonical-ref"

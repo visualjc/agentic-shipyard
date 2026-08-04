@@ -71,34 +71,35 @@ export async function trackDevelopmentRecords(
   authority: DevelopmentRecordAuthority,
   request: DevelopmentRecordRequest,
 ): Promise<DevelopmentRecordsCheckpoint> {
-  return authority.guard.run(authority.repositoryPath, request.deliveryId, async bound => {
+  const input = validateDevelopmentRecordRequest(request);
+  const marker = stableShipyardMarker(input.deliveryId);
+  return authority.guard.run(authority.repositoryPath, input.deliveryId, async bound => {
     // Resolve inside the durable mutation boundary so resume/checkpoint writes
     // cannot reuse a profile or binding that changed while waiting for the lock.
-    const trusted = await authority.trackingAuthority.resolve(authority.repositoryPath, request.deliveryId);
-    assertTrackingAuthorityMatchesBound(trusted, bound, request.deliveryId);
+    const trusted = await authority.trackingAuthority.resolve(authority.repositoryPath, input.deliveryId);
+    assertTrackingAuthorityMatchesBound(trusted, bound, input.deliveryId);
     const repository = trusted.repository;
     const tracker = await verifyTrackerActor(trusted.actorLogin, repository, authority.credentials, authority.client);
-    const marker = stableShipyardMarker(request.deliveryId);
     const basePath = `/repos/${repository.owner}/${repository.name}`;
 
     // Fully discover and validate the pair before the first write. This prevents
     // an unsafe PR state from leaving a newly-created issue behind.
     const [foundIssue, foundPullRequest] = await Promise.all([
-      discover(tracker, `${basePath}/issues`, marker, request.resume?.issueId, "issue", isIssueRecord),
-      discover(tracker, `${basePath}/pulls`, marker, request.resume?.pullRequestId, "pull request", isProviderRecord),
+      discover(tracker, `${basePath}/issues`, marker, input.resume?.issueId, "issue", isIssueRecord),
+      discover(tracker, `${basePath}/pulls`, marker, input.resume?.pullRequestId, "pull request", isProviderRecord),
     ]);
     if (foundPullRequest) assertPullRequestMatches(foundPullRequest, trusted);
     let issue: LocatedRecord;
     if (foundIssue) issue = { state: "discovered", record: foundIssue };
     else {
-      await revalidateBeforeWrite(authority, request, trusted, bound);
-      issue = await createAndReconcile(tracker, `${basePath}/issues`, marker, request.issue, "issue", isIssueRecord);
+      await revalidateBeforeWrite(authority, input, trusted, bound);
+      issue = await createAndReconcile(tracker, `${basePath}/issues`, marker, input.issue, "issue", isIssueRecord);
     }
     let pullRequest: LocatedRecord;
     if (foundPullRequest) pullRequest = { state: "discovered", record: foundPullRequest };
     else {
-      await revalidateBeforeWrite(authority, request, trusted, bound);
-      pullRequest = await createAndReconcile(tracker, `${basePath}/pulls`, marker, request.pullRequest, "pull request", isProviderRecord, trusted);
+      await revalidateBeforeWrite(authority, input, trusted, bound);
+      pullRequest = await createAndReconcile(tracker, `${basePath}/pulls`, marker, input.pullRequest, "pull request", isProviderRecord, trusted);
     }
     assertPullRequestMatches(pullRequest.record, trusted);
 
@@ -110,6 +111,40 @@ export async function trackDevelopmentRecords(
     };
   });
 }
+
+/** Validates and snapshots public JS/deserialized input before authority or provider access. */
+function validateDevelopmentRecordRequest(value: unknown): DevelopmentRecordRequest {
+  if (!record(value) || !exactKeys(value, ["deliveryId", "issue", "pullRequest", "resume"], ["resume"]) || typeof value.deliveryId !== "string") throw invalidRequest();
+  const issue = validateDevelopmentRecordInput(value.issue);
+  const pullRequest = validateDevelopmentRecordInput(value.pullRequest);
+  let resume: DevelopmentRecordResume | undefined;
+  if (value.resume !== undefined) {
+    if (!record(value.resume) || !exactKeys(value.resume, ["issueId", "pullRequestId"], ["issueId", "pullRequestId"])) throw invalidRequest();
+    const issueId = optionalCanonicalId(value.resume.issueId);
+    const pullRequestId = optionalCanonicalId(value.resume.pullRequestId);
+    resume = { ...(issueId === undefined ? {} : { issueId }), ...(pullRequestId === undefined ? {} : { pullRequestId }) };
+  }
+  return { deliveryId: value.deliveryId, issue, pullRequest, ...(resume === undefined ? {} : { resume }) };
+}
+
+function validateDevelopmentRecordInput(value: unknown): DevelopmentIssueRequest {
+  if (!record(value) || !exactKeys(value, ["title", "body"]) || !meaningfulString(value.title) || !meaningfulString(value.body)) throw invalidRequest();
+  return { title: value.title, body: value.body };
+}
+
+function optionalCanonicalId(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.trim() === "" || value !== value.trim()) throw invalidRequest();
+  return value;
+}
+
+function record(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
+function exactKeys(value: Record<string, unknown>, allowed: readonly string[], optional: readonly string[] = []): boolean {
+  const required = allowed.filter(key => !optional.includes(key));
+  return required.every(key => Object.hasOwn(value, key)) && Object.keys(value).every(key => allowed.includes(key));
+}
+function meaningfulString(value: unknown): value is string { return typeof value === "string" && value.trim() !== ""; }
+function invalidRequest(): GitHubTrackerError { return new GitHubTrackerError("invalid-request", "Tracker request must contain exact non-empty issue, pull request, and canonical resume fields."); }
 
 async function createIssue(session: GitHubTrackerSession, path: string, marker: string, input: DevelopmentIssueRequest): Promise<LocatedRecord> {
   const record = await session.request<ProviderRecord>({ method: "POST", path, body: { title: input.title, body: withMarker(input.body, marker) } });
