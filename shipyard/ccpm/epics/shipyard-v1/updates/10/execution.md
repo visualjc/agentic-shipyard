@@ -1,18 +1,18 @@
 ---
 issue: 10
-updated: 2026-08-04T00:00:00Z
-status: planned
-progress: 0%
+updated: 2026-08-04T12:12:23Z
+status: completed
+progress: 100%
 product_head_at_analysis: 972cb1b75e6bca766a9489fd928e17431ad9fee1
 ---
 
 # Execution Record: Issue #10
 
-Implementation has not started. `../../10-analysis.md` is the controlling
-plan.  Stream A first publishes the pure graph authority/fingerprint/fake
-contracts.  Streams B (Graphify) and C (CodeGraph) may then run in parallel in
-their disjoint files.  Stream D alone performs the delayed shared status and
-public-export handoff after B/C pass.
+Implementation, correction cycles, integration, and independent review are
+complete at exact product SHA
+`cf67a26e7f0dbdac356739a4f81d9090d1668bcf`. The controlling plan produced a
+pure authority/fingerprint layer, bounded production Graphify and CodeGraph
+lanes, and a delayed read-only status/public-export handoff.
 
 Graphs are experimental and disabled by default.  Exact current commit plus
 working-tree fingerprint, reviewed tool receipt, canonical worktree root, and
@@ -31,8 +31,8 @@ feature-worktree state.
 
 All required tests use deterministic fake adapters and disposable local Git;
 they do not install external tools, contact providers, enable telemetry, or
-send proprietary code.  Before a stream starts, record its exact owned files,
-published API inventory, test commands/results, and handoff here.  Before
-completion, an integration verifier records the exact final product SHA, clean
-working-tree fingerprint, test evidence, and independent review; CCPM/GitHub
-state and tool self-report are non-authoritative.
+send proprietary code. Artifact SHA-256, exact-main cache provenance, stable
+locks, bounded process-group teardown, conservative product-tree auditing, and
+separate sync/graph status projections passed the final gates. See
+`../../evidence/issue-10-cf67a26.md` and
+`../../reviews/issue-10-cf67a26.md`.

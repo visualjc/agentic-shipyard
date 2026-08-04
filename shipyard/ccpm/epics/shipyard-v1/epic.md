@@ -2,8 +2,8 @@
 name: shipyard-v1
 status: backlog
 created: 2026-08-03T23:28:55Z
-updated: 2026-08-04T11:11:27Z
-progress: 30%
+updated: 2026-08-04T12:12:23Z
+progress: 40%
 prd: shipyard/ccpm/prds/shipyard-v1.md
 github: https://github.com/visualjc/agentic-shipyard/issues/1
 storage_root: shipyard/ccpm
@@ -159,7 +159,7 @@ reference documents and shares the same core policy engine.
 - [ ] 7.md - Deliver staged-pair promotion and finalization (parallel: false)
 - [ ] 8.md - Deliver single-repository certification and finalization (parallel: false)
 - [ ] 9.md - Integrate planning lanes and public orchestration (parallel: false)
-- [ ] 10.md - Add experimental graph freshness adapters (parallel: true)
+- [x] 10.md - Add experimental graph freshness adapters (parallel: true)
 - [ ] 11.md - Harden recovery and prove release readiness (parallel: false)
 
 Total tasks: 10  
