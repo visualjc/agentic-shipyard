@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import test from "node:test";
 import { verifyDependencies } from "../../src/dependencies/verification.js";
-const manifest = JSON.parse(await readFile(new URL("../../config/capabilities.v1.json", import.meta.url), "utf8"));
+const manifest = JSON.parse(await readFile(join(process.cwd(), "config", "capabilities.v1.json"), "utf8"));
 const matt = manifest.dependencies[0], ccpm = manifest.dependencies[1], codex = manifest.dependencies[2];
 const observations = [
   {id:"matt-skills",source:matt.source,content:matt.content,discoveryPaths:matt.canonicalDiscovery,invocation:{command:"skills",frontmatterName:"wayfinder"},skillMetadata:matt.content.skills.map((skill:{name:string;requiredFiles:string[]})=>({name:skill.name,frontmatterName:skill.name,files:skill.requiredFiles})),runtimes:[{kind:"runtime-version",host:"codex",version:"0.144.4"}]},

@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import test from "node:test";
 import { validateCapabilityManifest, validateObservedDependencyReceipt } from "../../src/dependencies/schema.js";
 
-const manifest = JSON.parse(await readFile(new URL("../../config/capabilities.v1.json", import.meta.url), "utf8"));
+const manifest = JSON.parse(await readFile(join(process.cwd(), "config", "capabilities.v1.json"), "utf8"));
 test("manifest contains truthful exact Matt, CCPM, and runtime receipts", () => {
   const result = validateCapabilityManifest(manifest), matt = result.dependencies.find(item => item.id === "matt-skills")!, ccpm = result.dependencies.find(item => item.id === "ccpm")!;
   assert.equal(matt.content.kind, "matt-skill-trees"); assert.equal(matt.content.kind === "matt-skill-trees" && matt.content.skills.length, 20);

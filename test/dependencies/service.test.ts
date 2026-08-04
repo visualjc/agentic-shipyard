@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import test from "node:test";
 import { DependencyStatusService } from "../../src/dependencies/service.js";
 import type { ObservedDependencyReceipt } from "../../src/dependencies/types.js";
 
-const manifest = JSON.parse(await readFile(new URL("../../config/capabilities.v1.json", import.meta.url), "utf8"));
+const manifest = JSON.parse(await readFile(join(process.cwd(), "config", "capabilities.v1.json"), "utf8"));
 const matt = manifest.dependencies[0], ccpm = manifest.dependencies[1], codex = manifest.dependencies[2];
 const exact = [
   { id: "matt-skills", source: matt.source, content: matt.content, discoveryPaths: matt.canonicalDiscovery, invocation: { command: "skills", frontmatterName: "wayfinder" }, skillMetadata: matt.content.skills.map((skill: any) => ({ name: skill.name, frontmatterName: skill.name, files: skill.requiredFiles })), runtimes: [{ kind: "runtime-version", host: "codex", version: "0.144.4" }] },

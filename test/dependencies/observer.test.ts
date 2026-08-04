@@ -11,7 +11,7 @@ import { LocalDependencyObserver } from "../../src/dependencies/observer.js";
 import { DependencyStatusService } from "../../src/dependencies/service.js";
 
 type ManifestDocument = { dependencies: Array<{ id: string; source?: unknown; content: { kind: string; skills?: Array<{ name: string; sourcePath: string; treeSha: string; requiredFiles: string[] }>; treeSha?: string; requiredFiles?: string[] }; canonicalDiscovery: string[] }> };
-const loadManifest = async (): Promise<ManifestDocument> => JSON.parse(await (await import("node:fs/promises")).readFile(new URL("../../config/capabilities.v1.json", import.meta.url), "utf8")) as ManifestDocument;
+const loadManifest = async (): Promise<ManifestDocument> => JSON.parse(await (await import("node:fs/promises")).readFile(join(process.cwd(), "config", "capabilities.v1.json"), "utf8")) as ManifestDocument;
 const bytes = (value: string) => new TextEncoder().encode(value);
 
 async function disposableInstallation(): Promise<Readonly<{ root: string; agents: string; claude: string; cursor: string; manifest: ManifestDocument; files: DependencyFilesystem; cleanup(): Promise<void> }>> {
