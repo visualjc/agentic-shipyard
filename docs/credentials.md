@@ -31,7 +31,16 @@ on the platform-default developer toolchain after clearing developer selection
 variables; deployments that require a non-default Git should pass its final,
 existing absolute executable explicitly. Deployments and tests
 that use another executable must provide its existing absolute path to the
-runner factory; relative paths and command names are rejected.
+runner factory; relative paths and command names are rejected. Default Git is
+resolved only when a Git operation runs, never while importing the package.
+Local consumers can inject the same explicit executable with
+`createGitLedgerStore(repositoryPath, executable)` and
+`createNodeWorkspaceGit(executable)`; the convenient default ledger/workspace
+adapters remain lazy for hosts where `/usr/bin/git` is unavailable.
+
+The public package intentionally exposes these safe Git factories and typed
+provider contracts, not raw REST transport constructors. Provider HTTP wiring
+is an internal command-scoped boundary.
 
 Do not paste a token into a remote URL, CLI argument, configuration file, or
 bug report. If Git output includes an authorization header or URL user-info,

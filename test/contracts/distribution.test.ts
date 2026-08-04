@@ -4,7 +4,7 @@ import { lstat, mkdtemp, readFile, readlink, rm, stat, symlink, writeFile } from
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -128,4 +128,15 @@ test("core status module has no upward barrel or Node git adapter dependency", a
   };
   await visit(join(packageRoot, "dist", "src", "commands", "status.js"));
   assert.equal([...visited].some((path) => path.endsWith("/adapters/git.js")), false);
+});
+
+test("public package import does not resolve the default Git executable", async () => {
+  const entry = pathToFileURL(join(packageRoot, "dist", "src", "index.js")).href;
+  const preload = [
+    "const fs = require('node:fs');",
+    "const original = fs.realpathSync;",
+    "fs.realpathSync = (path, ...rest) => { if (path === '/usr/bin/git') throw new Error('simulated missing default Git'); return original(path, ...rest); };",
+    "import(process.argv[1]).catch(error => { console.error(error); process.exitCode = 1; });",
+  ].join(" ");
+  await execFileAsync(process.execPath, ["-e", preload, entry], { encoding: "utf8" });
 });

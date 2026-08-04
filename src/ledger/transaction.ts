@@ -10,6 +10,7 @@ export function applyLedgerTransaction(snapshot: LedgerSnapshot, transaction: Le
     if (!validPath(write.path)) throw new LedgerError("ledger-invalid-path", "Ledger record paths must be relative, normalized paths.");
     if (paths.has(write.path)) throw new LedgerError("ledger-duplicate-path", "A ledger transaction may write each record path only once.");
     paths.add(write.path);
+    if (Object.hasOwn(records, write.path) && write.expectedContents === undefined) throw new LedgerError("ledger-path-conflict", "Overwriting a ledger record requires its expected contents.");
     if (write.expectedContents !== undefined && records[write.path] !== write.expectedContents) throw new LedgerError("ledger-path-conflict", "The ledger record changed; re-read it before retrying.");
     records[write.path] = write.contents;
   }

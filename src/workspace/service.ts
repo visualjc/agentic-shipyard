@@ -9,11 +9,9 @@ import { LedgerError } from "../ledger/errors.js";
 import type { LedgerStore } from "../ledger/types.js";
 import { MutationLockService } from "../locking/mutation-lock.js";
 import { WorkspaceError } from "./errors.js";
-import { canonicalGitExecutable, sanitizedGitEnvironment } from "../adapters/git-transport.js";
+import { canonicalGitExecutable, DEFAULT_NODE_GIT_EXECUTABLE, sanitizedGitEnvironment } from "../adapters/git-transport.js";
 
 const execFileAsync = promisify(execFile);
-// Never allow a worktree mutation to resolve a bare `git` through PATH.
-const gitExecutable = canonicalGitExecutable();
 
 export type CreateOrResumeDelivery = Readonly<{
   repositoryPath: string; commonDirectory: string; deliveryId: string; branch: string; worktreePath: string;
@@ -162,7 +160,23 @@ function validateRequest(request: CreateOrResumeDelivery): void {
 }
 
 /** Production Git worktree boundary; no remote or provider operation is available here. */
-export const nodeWorkspaceGit: WorkspaceGit = {
+/**
+ * Builds the local-only worktree adapter around an absolute Git executable.
+ * It resolves that path on each operation rather than at module evaluation,
+ * allowing package import and dependency construction on Git-less hosts.
+ */
+export function createNodeWorkspaceGit(executable = DEFAULT_NODE_GIT_EXECUTABLE): WorkspaceGit {
+  const gitExecutable = (): string => canonicalGitExecutable(executable);
+  const git = async (repositoryPath: string, args: string[]): Promise<string | undefined> => {
+    try { const { stdout } = await execFileAsync(gitExecutable(), ["-C", repositoryPath, ...args], { encoding: "utf8", env: workspaceGitEnvironment() }); return stdout.trim(); }
+    catch (error: unknown) { const code = (error as { code?: number }).code; if (code === 1) return undefined; throw error; }
+  };
+  const gitRequired = async (repositoryPath: string, args: string[]): Promise<string> => {
+    const result = await git(repositoryPath, args);
+    if (result === undefined) throw new Error(`Git worktree operation failed: ${args.join(" ")}`);
+    return result;
+  };
+  const workspaceGit: WorkspaceGit = {
   async commonDirectory(repositoryPath) {
     const commonDirectory = await gitRequired(repositoryPath, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
     return realpath(isAbsolute(commonDirectory) ? commonDirectory : resolve(repositoryPath, commonDirectory));
@@ -170,7 +184,7 @@ export const nodeWorkspaceGit: WorkspaceGit = {
   async worktreeExists(path) { try { await access(path); return true; } catch (error: unknown) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; } },
   async worktreeIdentity(path) {
     try {
-      const commonDirectory = await nodeWorkspaceGit.commonDirectory(path);
+      const commonDirectory = await workspaceGit.commonDirectory(path);
       const branch = await git(path, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
       return branch === undefined ? undefined : { commonDirectory, branch };
     } catch { return undefined; }
@@ -180,14 +194,12 @@ export const nodeWorkspaceGit: WorkspaceGit = {
   async branchHead(repositoryPath, branch) { return git(repositoryPath, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]); },
   async productHead(repositoryPath) { return gitRequired(repositoryPath, ["rev-parse", "--verify", "HEAD"]); },
   async ensureWorktree(repositoryPath, branch, path, startSha) {
-    const exists = await nodeWorkspaceGit.branchExists(repositoryPath, branch);
+    const exists = await workspaceGit.branchExists(repositoryPath, branch);
     await gitRequired(repositoryPath, exists ? ["worktree", "add", path, branch] : ["worktree", "add", "-b", branch, path, startSha]);
   },
   async removeWorktree(repositoryPath, path) { await gitRequired(repositoryPath, ["worktree", "remove", path]); },
-};
-async function git(repositoryPath: string, args: string[]): Promise<string | undefined> {
-  try { const { stdout } = await execFileAsync(gitExecutable, ["-C", repositoryPath, ...args], { encoding: "utf8", env: workspaceGitEnvironment() }); return stdout.trim(); }
-  catch (error: unknown) { const code = (error as { code?: number }).code; if (code === 1) return undefined; throw error; }
+  };
+  return workspaceGit;
 }
 
 function initialDeliveryRecord(request: CreateOrResumeDelivery, commonDirectory: string, startProductSha: string): InitialDeliveryLedgerRecord {
@@ -209,8 +221,5 @@ function sameProvenance(record: InitialDeliveryLedgerRecord, request: CreateOrRe
 function workspaceGitEnvironment(): NodeJS.ProcessEnv {
   return sanitizedGitEnvironment();
 }
-async function gitRequired(repositoryPath: string, args: string[]): Promise<string> {
-  const result = await git(repositoryPath, args);
-  if (result === undefined) throw new Error(`Git worktree operation failed: ${args.join(" ")}`);
-  return result;
-}
+/** Convenient default workspace adapter; Git lookup remains lazy. */
+export const nodeWorkspaceGit = createNodeWorkspaceGit();

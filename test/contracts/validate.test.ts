@@ -23,6 +23,11 @@ test("requires both a named remote and URL for topology identity", () => {
   assert.throws(() => validateProfile({ schemaVersion: 1, name: "local", actor: { login: "visualjc" }, topology: { kind: "staged-pair", development: repository, destination: { ...repository, name: "destination" } }, allowedOperations: ["setup"], pathPolicy: { schemaVersion: 1, rules: [{ owner: "product", pattern: "src/**" }] } }), (error: unknown) => error instanceof ContractValidationError && error.path === "$.topology");
 });
 
+test("rejects destination-normalization repository segments before any tracker path can be built", () => {
+  for (const unsafe of ["../destination", "acme/destination", "%2fescape", "destination?x=1", "destination#x", ".."])
+    assert.throws(() => validateProfile({ schemaVersion: 1, name: "local", actor: { login: "actor" }, topology: { kind: "single-repository", repository: { ...repository, name: unsafe } }, allowedOperations: ["status"], pathPolicy: { schemaVersion: 1, rules: [{ owner: "product", pattern: "src/**" }] } }), ContractValidationError);
+});
+
 test("reports stable validation code and path for unsupported schema versions", () => {
   assert.throws(() => validateProfile({ schemaVersion: 2 }), (error: unknown) => error instanceof ContractValidationError && error.code === "unsupported-schema-version" && error.path === "$.schemaVersion" && error.message === "unsupported-schema-version:$.schemaVersion: must equal 1");
 });

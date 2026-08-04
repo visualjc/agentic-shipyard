@@ -24,6 +24,11 @@ test("rejects a same-path semantic conflict and leaves explicit retry to the cal
   }), (error: unknown) => error instanceof LedgerError && error.code === "ledger-path-conflict");
 });
 
+test("requires expected contents before overwriting an existing ledger record", () => {
+  assert.throws(() => applyLedgerTransaction(snapshot("a", { "delivery/a.json": "before" }), { expectedHead: "a", writes: [{ path: "delivery/a.json", contents: "after" }] }),
+    (error: unknown) => error instanceof LedgerError && error.code === "ledger-path-conflict");
+});
+
 test("rejects unsafe record paths and duplicate writes", () => {
   assert.throws(() => applyLedgerTransaction(snapshot(undefined), { expectedHead: undefined, writes: [{ path: "../escape", contents: "x" }] }), LedgerError);
   assert.throws(() => applyLedgerTransaction(snapshot(undefined), { expectedHead: undefined, writes: [{ path: "same", contents: "x" }, { path: "same", contents: "y" }] }), LedgerError);

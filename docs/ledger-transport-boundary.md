@@ -13,3 +13,9 @@ executable as the authenticated transport runner. A PATH-prepended executable
 therefore cannot take control of a ledger update or worktree mutation. Their
 children also use the shared minimal environment, clearing developer-tool
 selection and system/global Git configuration before invoking the platform Git.
+
+`GitLedgerStore` and `nodeWorkspaceGit` do not resolve the default Git path at
+module import time. On a portable or minimal host, construct the explicit
+factories `createGitLedgerStore(repositoryPath, executable)` and
+`createNodeWorkspaceGit(executable)` with a reviewed absolute Git path. A
+missing default is reported only when the first default-backed operation runs.

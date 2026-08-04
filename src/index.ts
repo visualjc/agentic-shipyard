@@ -37,10 +37,10 @@ export { LedgerError } from "./ledger/errors.js";
 export type { LedgerFailureCode } from "./ledger/errors.js";
 export { applyLedgerTransaction, validLedgerPath } from "./ledger/transaction.js";
 export type { LedgerSnapshot, LedgerStore, LedgerTransaction, LedgerWrite } from "./ledger/types.js";
-export { GitLedgerStore } from "./adapters/ledger-git.js";
+export { createGitLedgerStore, GitLedgerStore } from "./adapters/ledger-git.js";
 export { WorkspaceError } from "./workspace/errors.js";
 export type { WorkspaceFailureCode } from "./workspace/errors.js";
-export { WorkspaceService, nodeWorkspaceGit } from "./workspace/service.js";
+export { createNodeWorkspaceGit, WorkspaceService, nodeWorkspaceGit } from "./workspace/service.js";
 export type { CreateOrResumeDelivery, InitialDeliveryLedgerRecord, WorkspaceGit, WorkspaceGitIdentity } from "./workspace/service.js";
 
 // Role-limited, exact-SHA worker context.
@@ -55,7 +55,6 @@ export type { ContextAdapterRequest, ContextAuthorityResolver, ContextDispatchEx
 // Command-scoped GitHub API and Git-transport boundaries.
 export { GitHubAuthorityError, redactGitHubCredential } from "./github/errors.js";
 export type { GitHubAuthorityErrorCode } from "./github/errors.js";
-export { FetchGitHubRestTransport, GitHubRestAdapter } from "./adapters/github-rest.js";
 export type { GitHubApiCredential, GitHubApiCredentialResolver, GitHubRestClient, GitHubRestClientFactory, GitHubRestMethod, GitHubRestRequest, GitHubRestTransport, GitHubRestTransportRequest, GitHubRestTransportResponse } from "./github/types.js";
 export { GitHubTrackerError, stableShipyardMarker } from "./github/markers.js";
 export type { GitHubTrackerErrorCode } from "./github/markers.js";

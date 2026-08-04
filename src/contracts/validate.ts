@@ -21,7 +21,14 @@ const version = (value: RecordValue, path: string, code: "invalid-profile" | "in
 function repository(value: unknown, path: string, code: "invalid-profile" | "invalid-binding"): RepositoryRef {
   if (!isRecord(value)) invalid(code, path, "must be an object");
   exactKeys(value, ["owner", "name", "remote", "defaultBranch"], path, code);
-  return { owner: nonEmpty(value.owner, `${path}.owner`, code), name: nonEmpty(value.name, `${path}.name`, code), remote: validateRemoteExpectation(value.remote, `${path}.remote`, code), defaultBranch: nonEmpty(value.defaultBranch, `${path}.defaultBranch`, code) };
+  const owner = githubSegment(value.owner, `${path}.owner`, code);
+  const name = githubSegment(value.name, `${path}.name`, code);
+  return { owner, name, remote: validateRemoteExpectation(value.remote, `${path}.remote`, code), defaultBranch: nonEmpty(value.defaultBranch, `${path}.defaultBranch`, code) };
+}
+function githubSegment(value: unknown, path: string, code: "invalid-profile" | "invalid-binding"): string {
+  const text = nonEmpty(value, path, code);
+  if (text.length > 100 || !/^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(text) || text === "." || text === ".." || text.includes("..")) invalid(code, path, "must be one safe canonical GitHub path segment");
+  return text;
 }
 /** Validates the complete remote identity required before any setup mutation. */
 export function validateRemoteExpectation(value: unknown, path = "$", code: "invalid-profile" | "invalid-binding" = "invalid-profile"): RepositoryRef["remote"] {

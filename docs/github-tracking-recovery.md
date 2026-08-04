@@ -25,6 +25,20 @@ second process cannot race discovery and creation. If profile, fingerprint,
 topology, workspace, or head changed while waiting to resume, Shipyard stops
 before the first provider request; do not recover by substituting caller input.
 
+## Private disposable tracker fixture
+
+The executable private fixture is skipped unless
+`SHIPYARD_PRIVATE_GITHUB_FIXTURE=1`. It requires exact matching
+`SHIPYARD_PRIVATE_GITHUB_REPOSITORY` and
+`SHIPYARD_PRIVATE_GITHUB_APPROVED_REPOSITORY`, the acknowledgement
+`SHIPYARD_PRIVATE_GITHUB_MUTATION_ACKNOWLEDGEMENT=I_ACKNOWLEDGE_DISPOSABLE_GITHUB_MUTATIONS`,
+token, expected actor, existing head ref, base ref, and 40-hex head SHA.
+`NativeInteractive/*` is always rejected. The approved disposable repository
+must already contain that head branch at that SHA. The fixture creates exactly
+one marked development issue/PR through `trackDevelopmentRecords`, proves the
+second call discovers the same provider IDs, then closes both records in
+`finally`; normal tests remain network-free.
+
 The tracker identifies its records only by its exact marker on a standalone
 body line. It excludes pull requests from GitHub's `/issues` listing and stores
 GitHub's stable provider node ID when available, so a resumed run cannot mistake

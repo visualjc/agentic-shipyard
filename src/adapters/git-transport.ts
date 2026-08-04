@@ -119,5 +119,12 @@ export function canonicalGitExecutable(executable = DEFAULT_NODE_GIT_EXECUTABLE)
   return canonical;
 }
 
-/** Default production runner is pinned to the platform's trusted Git path. */
-export const nodeGitTransportCommandRunner = createNodeGitTransportCommandRunner();
+/**
+ * Convenient default that intentionally resolves Git only when a command is
+ * run. Importing Shipyard is therefore safe on a host that does not provide
+ * the platform default; the first Git operation reports that installation
+ * problem instead.
+ */
+export const nodeGitTransportCommandRunner: GitTransportCommandRunner = {
+  run(command) { return createNodeGitTransportCommandRunner().run(command); },
+};

@@ -7,17 +7,22 @@ import { LedgerError } from "../ledger/errors.js";
 import { applyLedgerTransaction, validLedgerPath } from "../ledger/transaction.js";
 import type { LedgerSnapshot, LedgerStore, LedgerTransaction } from "../ledger/types.js";
 import type { PinnedLedgerReader } from "../context/types.js";
-import { canonicalGitExecutable, sanitizedGitEnvironment } from "./git-transport.js";
+import { canonicalGitExecutable, DEFAULT_NODE_GIT_EXECUTABLE, sanitizedGitEnvironment } from "./git-transport.js";
 
 const execFileAsync = promisify(execFile);
 const zeroOid = "0".repeat(40);
-// Never allow a ledger mutation to resolve a bare `git` through PATH.
-const gitExecutable = canonicalGitExecutable();
 
 /** Git object-database ledger that never checks its orphan ref out in a product worktree. */
 export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
   static readonly ref = "refs/heads/shipyard-ledger";
-  constructor(private readonly repositoryPath: string) {}
+  /** The executable is resolved lazily so package import/construction is portable. */
+  private readonly configuredGitExecutable: string;
+  constructor(private readonly repositoryPath: string, options?: Readonly<{ gitExecutable: string }>) {
+    // A historical untyped second string argument selected a ref. Accessing a
+    // property on that value yields undefined, so old JavaScript callers still
+    // cannot redirect the canonical ledger ref. Explicit injection is named.
+    this.configuredGitExecutable = options?.gitExecutable ?? DEFAULT_NODE_GIT_EXECUTABLE;
+  }
 
   async snapshot(paths: readonly string[]): Promise<LedgerSnapshot> {
     if (paths.some((path) => !validLedgerPath(path))) throw new LedgerError("ledger-invalid-path", "Ledger record paths must be relative, normalized paths.");
@@ -128,7 +133,7 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
 
   private async run(args: string[], env?: NodeJS.ProcessEnv): Promise<{ code: number; stdout: string; stderr: string }> {
     try {
-      const { stdout, stderr } = await execFileAsync(gitExecutable, ["-C", this.repositoryPath, ...args], {
+      const { stdout, stderr } = await execFileAsync(this.gitExecutable(), ["-C", this.repositoryPath, ...args], {
         encoding: "utf8", env: gitEnvironment(env),
       });
       return { code: 0, stdout, stderr };
@@ -145,7 +150,7 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
   }
   private async gitInput(args: string[], input: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const child = spawn(gitExecutable, ["-C", this.repositoryPath, ...args], { env: gitEnvironment() });
+      const child = spawn(this.gitExecutable(), ["-C", this.repositoryPath, ...args], { env: gitEnvironment() });
       let stdout = ""; let stderr = "";
       child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
       child.stdout.on("data", (chunk: string) => { stdout += chunk; }); child.stderr.on("data", (chunk: string) => { stderr += chunk; });
@@ -153,6 +158,12 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
       child.stdin.end(input);
     });
   }
+  private gitExecutable(): string { return canonicalGitExecutable(this.configuredGitExecutable); }
+}
+
+/** Creates an isolated ledger store with an explicitly selected absolute Git executable. */
+export function createGitLedgerStore(repositoryPath: string, executable = DEFAULT_NODE_GIT_EXECUTABLE): GitLedgerStore {
+  return new GitLedgerStore(repositoryPath, { gitExecutable: executable });
 }
 
 /** Git repository selection must come only from the explicit -C argument. */
