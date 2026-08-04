@@ -31,7 +31,6 @@ export interface WorkspaceGit {
   productHead(repositoryPath: string): Promise<string>;
   /** True only when this invocation successfully created the linked worktree. */
   ensureWorktree(repositoryPath: string, branch: string, path: string, intent: WorktreeEnsureIntent): Promise<boolean>;
-  removeWorktree(repositoryPath: string, path: string): Promise<void>;
 }
 export type WorkspaceGitIdentity = Readonly<{ commonDirectory: string; branch: string }>;
 export type InitialDeliveryLedgerRecord = Readonly<{
@@ -150,9 +149,8 @@ export class WorkspaceService {
       throw new WorkspaceError("workspace-identity-mismatch", "The requested worktree path exists but is not this delivery’s Git worktree.");
     }
     if (!exists) {
-      let created: boolean;
       try {
-        created = await this.git.ensureWorktree(request.repositoryPath, request.branch, request.worktreePath, intent);
+        await this.git.ensureWorktree(request.repositoryPath, request.branch, request.worktreePath, intent);
       } catch (error: unknown) {
         // A create-mode failure with the branch now present and no worktree at
         // our path is the external same-SHA race. Do not remove anything: Git
@@ -167,13 +165,11 @@ export class WorkspaceService {
         throw new WorkspaceError("workspace-identity-mismatch", "Git did not create the requested delivery worktree identity.");
       }
       // A successful create must still point at the durable start object. If
-      // it changed afterwards, remove only the worktree this call created;
-      // never remove the branch itself.
+      // it changed afterwards, retain the worktree for manual inspection: a
+      // path-based removal cannot atomically bind this identity check to the
+      // later deletion, so the path could have been swapped by an outsider.
       if (intent.mode === "create" && await this.git.branchHead(request.repositoryPath, request.branch) !== intent.startSha) {
-        // The adapter can prove creation only when its worktree-add command
-        // succeeded. Never remove a path it cannot attribute to this call.
-        if (created) await this.git.removeWorktree(request.repositoryPath, request.worktreePath);
-        throw new WorkspaceError("workspace-conflict", "The canonical feature branch changed during worktree creation; refusing to adopt it.");
+        throw new WorkspaceError("workspace-conflict", "The canonical feature branch changed during worktree creation; inspect and remove the worktree manually before retrying.");
       }
     }
   }
@@ -243,7 +239,6 @@ export function createNodeWorkspaceGit(executable = DEFAULT_NODE_GIT_EXECUTABLE)
       : ["worktree", "add", "-b", branch, path, intent.startSha]);
     return true;
   },
-  async removeWorktree(repositoryPath, path) { await gitRequired(repositoryPath, ["worktree", "remove", path]); },
   };
   return workspaceGit;
 }

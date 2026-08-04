@@ -60,25 +60,27 @@ before creating the linked worktree and writes the registry last. A registry
 entry without that record is rejected rather than repaired. The registry write
 is also gated on a post-creation check that the canonical feature branch still
 points at that recorded product SHA. If a concurrent creator supplied a
-different branch during `worktree add`, Shipyard removes only the linked
-worktree it just created and leaves the foreign branch untouched. When
+different branch during `worktree add`, Shipyard fails closed and leaves the
+created path and foreign branch for manual inspection: an identity check before
+a later path-based removal cannot prove the path was not swapped. When
 recovering before registry creation, an existing branch is accepted only if
-its head is the recorded starting SHA; a newly-created branch is explicitly
-created at that SHA. `GitLedgerStore` always writes
+the expected linked worktree proves its delivery identity and its head is the
+recorded starting SHA; a newly-created branch is explicitly created at that
+SHA. `GitLedgerStore` always writes
 `refs/heads/shipyard-ledger`; its constructor accepts no configurable ledger
 ref. Its subprocesses use a canonical absolute Git executable and never
 resolve a bare `git` from `PATH`.
 
 ### Final cleanup handoff
 
-Workspace cleanup never removes a worktree that is still present. A prior
-identity or cleanliness check cannot be atomically bound to Git's later
-path-based removal, so a path swap could otherwise delete a foreign
-replacement. Cleanup therefore fails with `workspace-manual-cleanup` and
-leaves the registry intact whenever the registered path exists. An operator
-must verify ownership and remove the worktree manually; a subsequent cleanup
-call removes the now-absent registry entry. The durable ledger record remains
-unchanged in either case.
+Workspace logic never automatically removes a worktree path. A prior identity
+or cleanliness check cannot be atomically bound to a later path-based removal,
+so a path swap could otherwise delete a foreign replacement. Cleanup therefore
+fails with `workspace-manual-cleanup` and leaves the registry intact whenever
+the registered path exists; likewise, a post-creation branch change is a
+conflict that preserves the path. An operator must verify ownership and remove
+the worktree manually; a subsequent cleanup call removes the now-absent
+registry entry. The durable ledger record remains unchanged in either case.
 
 ### Ledger/product ancestry invariant
 

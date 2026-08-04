@@ -155,7 +155,6 @@ test("does not delete a foreign replacement during cleanup's adversarial path sw
     async worktreeIdentity() { assert.fail("cleanup must not rely on a non-atomic identity recheck"); },
     async branchExists() { return false; }, async branchHead() { return undefined; }, async productHead() { return "a".repeat(40); },
     async ensureWorktree() { return false; },
-    async removeWorktree() { foreignReplacementExists = false; assert.fail("cleanup must never delete a present path"); },
   };
   const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
 
@@ -274,7 +273,7 @@ test("retry after a same-SHA branch race fails closed without a registry entry",
 test("create intent rejects a same-SHA foreign branch race without registry adoption or cleanup", async () => {
   const startSha = "a".repeat(40); const foreignSha = startSha;
   const request = { repositoryPath: "/repository", commonDirectory: "/repository/.git", deliveryId: "d-1", branch: "shipyard/d-1", worktreePath: "/worktrees/d-1", initialLedgerPath: "deliveries/d-1.json", initialLedgerContents: JSON.stringify({ deliveryId: "d-1" }) };
-  let registryWrites = 0; let worktreeExists = false; let branchExists = false; let removals = 0;
+  let registryWrites = 0; let worktreeExists = false; let branchExists = false;
   const registry = { async read() { return undefined; }, async write() { registryWrites += 1; } };
   const records: Record<string, string> = {};
   const ledger = {
@@ -291,7 +290,6 @@ test("create intent rejects a same-SHA foreign branch race without registry adop
       branchExists = true;
       throw new Error("external branch won create race");
     },
-    async removeWorktree() { removals += 1; worktreeExists = false; },
   };
   const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
 
@@ -299,7 +297,39 @@ test("create intent rejects a same-SHA foreign branch race without registry adop
   assert.equal(registryWrites, 0);
   assert.equal(worktreeExists, false);
   assert.equal(await git.branchHead(), foreignSha);
-  assert.equal(removals, 0);
+});
+
+test("does not remove a swapped path when the branch changes after created-worktree identity verification", async () => {
+  const startSha = "a".repeat(40); const changedSha = "b".repeat(40);
+  const request = { repositoryPath: "/repository", commonDirectory: "/repository/.git", deliveryId: "d-1", branch: "shipyard/d-1", worktreePath: "/worktrees/d-1", initialLedgerPath: "deliveries/d-1.json", initialLedgerContents: JSON.stringify({ deliveryId: "d-1" }) };
+  let registryWrites = 0; let createdPathExists = false; let foreignReplacementExists = false; let removalAttempts = 0;
+  const records: Record<string, string> = {};
+  const registry = { async read() { return undefined; }, async write() { registryWrites += 1; } };
+  const ledger = {
+    async snapshot(paths: readonly string[]) { return { head: records[request.initialLedgerPath] ? "ledger" : undefined, records: Object.fromEntries(paths.flatMap((path) => records[path] === undefined ? [] : [[path, records[path]]])) }; },
+    async transact(transaction: { writes: readonly { path: string; contents: string }[] }) { for (const write of transaction.writes) records[write.path] = write.contents; return "ledger"; },
+  };
+  const git = {
+    async commonDirectory() { return request.commonDirectory; },
+    async worktreeExists() { return createdPathExists || foreignReplacementExists; },
+    async worktreeIdentity() { return createdPathExists ? { commonDirectory: request.commonDirectory, branch: request.branch } : undefined; },
+    async branchExists() { return createdPathExists; }, async productHead() { return startSha; },
+    async branchHead() {
+      // The path is swapped after identity verification but before the old
+      // implementation would have issued its path-based removal.
+      createdPathExists = false; foreignReplacementExists = true;
+      return changedSha;
+    },
+    async ensureWorktree() { createdPathExists = true; return true; },
+    async removeWorktree() { removalAttempts += 1; foreignReplacementExists = false; },
+  };
+  const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
+
+  await assert.rejects(service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
+  assert.equal(foreignReplacementExists, true);
+  assert.equal(removalAttempts, 0);
+  assert.equal(registryWrites, 0);
+  assert.ok(records[request.initialLedgerPath]);
 });
 
 test("real Git create intent preserves a same-SHA foreign branch created after preflight", async () => {
