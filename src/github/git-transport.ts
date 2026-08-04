@@ -1,4 +1,4 @@
-import { GitTransportCommand, GitTransportCommandRunner, GitTransportCommandResult, nodeGitTransportCommandRunner } from "../adapters/git-transport.js";
+import { DEFAULT_NODE_GIT_EXECUTABLE, GitTransportCommand, GitTransportCommandRunner, GitTransportCommandResult, nodeGitTransportCommandRunner } from "../adapters/git-transport.js";
 
 /** Separate from API credentials: this value may be used only in one Git child environment. */
 export type GitTransportCredential = { readonly token: string };
@@ -34,7 +34,7 @@ function commandFor(repositoryPath: string, args: readonly string[], credential:
   }
   assertSafeNetworkCommand(args);
   return {
-    executable: "git",
+    executable: DEFAULT_NODE_GIT_EXECUTABLE,
     // -c has command scope, so a global/system/local helper cannot win.
     argv: ["-C", repositoryPath, "-c", "credential.helper=", ...args],
     env: {

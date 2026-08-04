@@ -39,6 +39,9 @@ async function fixture() {
 }
 
 async function dispose(value: Fixture): Promise<void> { await rm(value.root, { recursive: true, force: true }); }
+async function initialRecord(value: Fixture, request: ReturnType<Fixture["request"]>) {
+  return JSON.parse((await value.ledger.snapshot([request.initialLedgerPath])).records[request.initialLedgerPath]!);
+}
 
 test("creates, resumes after interruption, and recreates a missing linked Git worktree without rewriting its ledger record", async () => {
   const value = await fixture();
@@ -93,10 +96,10 @@ test("fails closed for a dirty worktree, then removes only rebuildable state whi
     await rm(join(request.worktreePath, "uncommitted.txt"));
     await value.service.cleanup(value.repository, "d-1");
     assert.equal((await value.registry.read())?.workspaces.length, 0);
-    assert.equal((await value.ledger.snapshot([request.initialLedgerPath])).records[request.initialLedgerPath], request.initialLedgerContents);
+    assert.equal((await initialRecord(value, request)).payload, request.initialLedgerContents);
     const ledgerHead = (await value.ledger.snapshot([])).head!;
     await git(value.repository, ["branch", "-D", request.branch]);
-    assert.equal((await value.ledger.read(ledgerHead, [request.initialLedgerPath]))[request.initialLedgerPath], request.initialLedgerContents);
+    assert.equal(JSON.parse((await value.ledger.read(ledgerHead, [request.initialLedgerPath]))[request.initialLedgerPath]!).payload, request.initialLedgerContents);
   } finally { await dispose(value); }
 });
 
@@ -124,7 +127,7 @@ test("resumes deterministically after faults following each durable creation bou
 
     const afterWorktree = value.request("d-worktree");
     let failWorktree = true;
-    const gitFault = { ...nodeWorkspaceGit, async ensureWorktree(repositoryPath: string, branch: string, path: string) { await nodeWorkspaceGit.ensureWorktree(repositoryPath, branch, path); if (failWorktree) { failWorktree = false; throw new Error("after-worktree"); } } };
+    const gitFault = { ...nodeWorkspaceGit, async ensureWorktree(repositoryPath: string, branch: string, path: string, startSha: string) { await nodeWorkspaceGit.ensureWorktree(repositoryPath, branch, path, startSha); if (failWorktree) { failWorktree = false; throw new Error("after-worktree"); } } };
     await assert.rejects(new WorkspaceService(value.registry, value.ledger, gitFault, new MutationLockService(nodeFilesystem, nodeProcess)).createOrResume(afterWorktree), /after-worktree/);
     assert.equal(await nodeWorkspaceGit.worktreeExists(afterWorktree.worktreePath), true);
     await value.service.createOrResume(afterWorktree);
@@ -136,6 +139,36 @@ test("resumes deterministically after faults following each durable creation bou
     assert.equal(await nodeWorkspaceGit.worktreeExists(beforeRegistry.worktreePath), true);
     await value.service.createOrResume(beforeRegistry);
     assert.deepEqual((await value.registry.read())?.workspaces.map((workspace) => workspace.deliveryId).sort(), ["d-ledger", "d-registry", "d-worktree"]);
+  } finally { await dispose(value); }
+});
+
+test("rejects a registry entry whose initial ledger record is missing without recreating it", async () => {
+  const value = await fixture();
+  try {
+    const request = value.request("d-1");
+    await value.registry.write({ schemaVersion: 1, workspaces: [{ schemaVersion: 1, deliveryId: request.deliveryId, commonDirectory: value.commonDirectory, branch: request.branch, worktreePath: request.worktreePath }] });
+    await assert.rejects(value.service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-ledger-conflict");
+    assert.equal((await value.ledger.snapshot([request.initialLedgerPath])).head, undefined);
+    assert.equal(await nodeWorkspaceGit.worktreeExists(request.worktreePath), false);
+  } finally { await dispose(value); }
+});
+
+test("does not adopt a foreign branch created after the durable initial record", async () => {
+  const value = await fixture();
+  try {
+    const request = value.request("d-1");
+    let failAfterLedger = true;
+    const ledgerFault = { snapshot: value.ledger.snapshot.bind(value.ledger), async transact(transaction: Parameters<GitLedgerStore["transact"]>[0]) { const result = await value.ledger.transact(transaction); if (failAfterLedger) { failAfterLedger = false; throw new Error("after-ledger"); } return result; } };
+    await assert.rejects(new WorkspaceService(value.registry, ledgerFault, nodeWorkspaceGit, new MutationLockService(nodeFilesystem, nodeProcess)).createOrResume(request), /after-ledger/);
+    const provenance = await initialRecord(value, request);
+    assert.equal(provenance.deliveryId, request.deliveryId);
+    assert.equal(provenance.commonDirectory, value.commonDirectory);
+    assert.equal(provenance.branch, request.branch);
+    assert.equal(provenance.payload, request.initialLedgerContents);
+    await writeFile(join(value.repository, "foreign.txt"), "foreign", "utf8"); await git(value.repository, ["add", "foreign.txt"]); await git(value.repository, ["commit", "-m", "foreign"]);
+    await git(value.repository, ["branch", request.branch]);
+    await assert.rejects(value.service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
+    assert.equal(await nodeWorkspaceGit.worktreeExists(request.worktreePath), false);
   } finally { await dispose(value); }
 });
 

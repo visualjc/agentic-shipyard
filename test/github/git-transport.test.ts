@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { GitTransportService } from "../../src/github/git-transport.js";
-import { GitTransportCommand, GitTransportCommandRunner, nodeGitTransportCommandRunner } from "../../src/adapters/git-transport.js";
+import { createNodeGitTransportCommandRunner, GitTransportCommand, GitTransportCommandRunner, nodeGitTransportCommandRunner } from "../../src/adapters/git-transport.js";
 
 class RecordingRunner implements GitTransportCommandRunner {
   readonly commands: GitTransportCommand[] = [];
@@ -38,7 +38,7 @@ test("the command contract does not invoke or mutate global gh state", async () 
   const runner = new RecordingRunner();
   const transport = new GitTransportService(runner);
   await transport.run("/workspace/repository", ["ls-remote", "origin"], { token: "token" });
-  assert.deepEqual(runner.commands.map((command) => command.executable), ["git"]);
+  assert.deepEqual(runner.commands.map((command) => command.executable), ["/usr/bin/git"]);
 });
 
 test("transport refuses a token-bearing remote before the runner can observe it", async () => {
@@ -66,9 +66,11 @@ test("transport rejects option, config, helper, and exfiltration injection befor
   assert.equal(runner.commands.length, 0);
 });
 
-test("production Git runner removes inherited Git and GitHub credential environment variables", async () => {
+test("production Git runner is PATH-independent and an explicitly injected executable receives only sanitized environment", async () => {
   const directory = await mkdtemp(join(tmpdir(), "shipyard-git-env-"));
-  const executable = join(directory, "git");
+  const executable = join(directory, "trusted-git");
+  const fakeGit = join(directory, "git");
+  const fakeCapture = join(directory, "fake-capture");
   const originalPath = process.env.PATH;
   const inherited = {
     GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
@@ -79,20 +81,30 @@ test("production Git runner removes inherited Git and GitHub credential environm
   try {
     await writeFile(executable, "#!/bin/sh\nprintenv\n", { mode: 0o700 });
     await chmod(executable, 0o700);
+    await writeFile(fakeGit, `#!/bin/sh\nprintf '%s' \"$GIT_CONFIG_VALUE_0\" > '${fakeCapture}'\n`, { mode: 0o700 });
+    await chmod(fakeGit, 0o700);
     process.env.PATH = `${directory}:${originalPath ?? ""}`;
     process.env.GIT_CONFIG_GLOBAL = "inherited-git-config";
     process.env.GIT_ASKPASS = "inherited-askpass";
     process.env.GITHUB_TOKEN = "inherited-github-token";
     process.env.GH_TOKEN = "inherited-gh-token";
 
-    const result = await nodeGitTransportCommandRunner.run({
-      executable: "git",
-      argv: [],
-      env: { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "credential.helper", GIT_CONFIG_VALUE_0: "", GIT_TERMINAL_PROMPT: "0" },
-    });
+    const command = {
+      executable: "/usr/bin/git",
+      argv: ["--version"],
+      env: { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "credential.helper", GIT_CONFIG_VALUE_0: "AUTHORIZATION: bearer ephemeral-token", GIT_TERMINAL_PROMPT: "0" },
+    } as const;
+    const result = await nodeGitTransportCommandRunner.run(command);
 
     assert.equal(result.exitCode, 0);
-    assert.match(result.stdout, /GIT_CONFIG_COUNT=1/);
+    assert.equal(result.stdout.includes("ephemeral-token"), false, "the default runner must not execute PATH's fake git");
+    await assert.rejects(async () => await import("node:fs/promises").then(fs => fs.readFile(fakeCapture, "utf8")));
+
+    const trustedRunner = createNodeGitTransportCommandRunner(executable);
+    const trustedResult = await trustedRunner.run(command);
+    assert.equal(trustedResult.exitCode, 0);
+    assert.match(trustedResult.stdout, /GIT_CONFIG_COUNT=1/);
+    assert.match(trustedResult.stdout, /AUTHORIZATION: bearer ephemeral-token/);
     assert.equal(result.stdout.includes("inherited-git-config"), false);
     assert.equal(result.stdout.includes("inherited-askpass"), false);
     assert.equal(result.stdout.includes("inherited-github-token"), false);
@@ -106,4 +118,9 @@ test("production Git runner removes inherited Git and GitHub credential environm
     }
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("configured Git executable must be an absolute existing regular file", () => {
+  assert.throws(() => createNodeGitTransportCommandRunner("git"), /absolute path/i);
+  assert.throws(() => createNodeGitTransportCommandRunner("/definitely/not/git"), /existing regular file/i);
 });

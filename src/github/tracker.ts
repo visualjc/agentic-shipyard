@@ -51,7 +51,16 @@ export type DevelopmentRecordsCheckpoint = {
   pullRequest: DevelopmentPullRequestCheckpoint;
 };
 
-type ProviderRecord = { id?: unknown; node_id?: unknown; number?: unknown; html_url?: unknown; body?: unknown; pull_request?: unknown; head?: { sha?: unknown } };
+type ProviderRecord = {
+  id?: unknown;
+  node_id?: unknown;
+  number?: unknown;
+  html_url?: unknown;
+  body?: unknown;
+  pull_request?: unknown;
+  head?: { sha?: unknown; ref?: unknown };
+  base?: { ref?: unknown };
+};
 type LocatedRecord = { state: "discovered" | "created"; record: ProviderRecord };
 const MAX_DISCOVERY_PAGES = 100;
 
@@ -78,14 +87,14 @@ export async function trackDevelopmentRecords(
       discover(session, `${basePath}/issues`, marker, request.resume?.issueId, "issue", isIssueRecord),
       discover(session, `${basePath}/pulls`, marker, request.resume?.pullRequestId, "pull request", isProviderRecord),
     ]);
-    if (foundPullRequest) assertHeadSha(foundPullRequest, request.pullRequest.expectedHeadSha);
+    if (foundPullRequest) assertPullRequestMatches(foundPullRequest, request.pullRequest);
     const issue = foundIssue
       ? { state: "discovered" as const, record: foundIssue }
       : await createIssue(session, `${basePath}/issues`, marker, request.issue);
     const pullRequest = foundPullRequest
       ? { state: "discovered" as const, record: foundPullRequest }
       : await createPullRequest(session, `${basePath}/pulls`, marker, request.pullRequest);
-    assertHeadSha(pullRequest.record, request.pullRequest.expectedHeadSha);
+    assertPullRequestMatches(pullRequest.record, request.pullRequest);
 
     return {
       marker,
@@ -169,9 +178,15 @@ function providerId(record: ProviderRecord): string | undefined {
   return undefined;
 }
 
-function assertHeadSha(record: ProviderRecord, expected: string): void {
-  if (typeof record.head?.sha !== "string" || record.head.sha !== expected) {
+function assertPullRequestMatches(record: ProviderRecord, expected: DevelopmentPullRequestRequest): void {
+  if (typeof record.head?.sha !== "string" || record.head.sha !== expected.expectedHeadSha) {
     throw new GitHubTrackerError("head-sha-mismatch", "The development pull request head does not match the requested expected SHA.");
+  }
+  if (typeof record.head?.ref !== "string" || record.head.ref !== expected.head) {
+    throw new GitHubTrackerError("head-ref-mismatch", "The development pull request head ref does not match the requested head ref.");
+  }
+  if (typeof record.base?.ref !== "string" || record.base.ref !== expected.base) {
+    throw new GitHubTrackerError("base-ref-mismatch", "The development pull request base ref does not match the requested base ref.");
   }
 }
 

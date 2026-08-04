@@ -39,7 +39,7 @@ export { GitLedgerStore } from "./adapters/ledger-git.js";
 export { WorkspaceError } from "./workspace/errors.js";
 export type { WorkspaceFailureCode } from "./workspace/errors.js";
 export { WorkspaceService, nodeWorkspaceGit } from "./workspace/service.js";
-export type { CreateOrResumeDelivery, WorkspaceGit, WorkspaceGitIdentity } from "./workspace/service.js";
+export type { CreateOrResumeDelivery, InitialDeliveryLedgerRecord, WorkspaceGit, WorkspaceGitIdentity } from "./workspace/service.js";
 
 // Role-limited, exact-SHA worker context.
 export { ContextError } from "./context/errors.js";
@@ -48,7 +48,7 @@ export { allowedRecordPaths, createEnvelope, validateContextEnvelope } from "./c
 export { ContextReader } from "./context/reader.js";
 export type { LoadedContext } from "./context/reader.js";
 export { CONTEXT_ROLES } from "./context/types.js";
-export type { ContextAdapterRequest, ContextEnvelope, ContextEnvelopeInput, ContextRole, PinnedLedgerReader, ProductShaReader } from "./context/types.js";
+export type { ContextAdapterRequest, ContextDispatchExpectation, ContextEnvelope, ContextEnvelopeInput, ContextRole, PinnedLedgerReader, ProductShaReader } from "./context/types.js";
 
 // Command-scoped GitHub API and Git-transport boundaries.
 export { GitHubAuthorityError, redactGitHubCredential } from "./github/errors.js";
@@ -64,5 +64,5 @@ export { githubTrackerStatusContributor } from "./github/status.js";
 export type { GitHubTrackerStatus } from "./github/status.js";
 export { GitTransportError, GitTransportService, redactGitTransportDiagnostic } from "./github/git-transport.js";
 export type { GitTransportCredential, GitTransportResult } from "./github/git-transport.js";
-export { nodeGitTransportCommandRunner } from "./adapters/git-transport.js";
+export { createNodeGitTransportCommandRunner, DEFAULT_NODE_GIT_EXECUTABLE, nodeGitTransportCommandRunner } from "./adapters/git-transport.js";
 export type { GitTransportCommand, GitTransportCommandResult, GitTransportCommandRunner } from "./adapters/git-transport.js";

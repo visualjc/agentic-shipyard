@@ -41,6 +41,18 @@ test("stores durable records on an orphan ledger ref outside product ancestry an
   } finally { await rm(path, { recursive: true, force: true }); }
 });
 
+test("always writes the canonical ledger ref even when JavaScript callers pass a second constructor argument", async () => {
+  const path = await repository();
+  try {
+    const productHead = await git(path, ["rev-parse", "main"]);
+    const LedgerWithLegacySignature = GitLedgerStore as unknown as new (repositoryPath: string, ref: string) => GitLedgerStore;
+    const ledger = new LedgerWithLegacySignature(path, "refs/heads/main");
+    await ledger.transact({ expectedHead: undefined, writes: [{ path: "deliveries/d-1.json", contents: "initial" }] });
+    assert.equal(await git(path, ["rev-parse", "main"]), productHead);
+    assert.ok(await git(path, ["rev-parse", GitLedgerStore.ref]));
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
 test("preserves record bytes, atomically rejects a concurrent stale writer, and succeeds after reread", async () => {
   const path = await repository();
   try {
@@ -102,7 +114,11 @@ test("reads exact pinned ledger commits for ContextReader and fails closed for u
       repository: { owner: "acme", name: "widget", remote: { name: "origin", url: "https://example.test/widget.git" }, defaultBranch: "main" },
       productBranch: "main", productSha: await git(path, ["rev-parse", "HEAD"]), ledgerRef: GitLedgerStore.ref, ledgerSha: first,
     });
-    const loaded = await new ContextReader({ currentProductSha: async () => git(path, ["rev-parse", "HEAD"]) }, ledger).load(envelope);
+    const loaded = await new ContextReader({
+      profile: envelope.profile, deliveryId: envelope.deliveryId, host: envelope.host, role: envelope.role,
+      envelopePath: envelope.adapter.envelopePath, repoRoot: envelope.adapter.repoRoot, productBranch: envelope.productBranch,
+      productSha: envelope.productSha, ledgerRef: envelope.ledgerRef, ledgerSha: envelope.ledgerSha,
+    }, { currentProductSha: async () => git(path, ["rev-parse", "HEAD"]) }, ledger).load(envelope);
     assert.equal(loaded.records["deliveries/d-1/contract.md"], "first");
     await assert.rejects(ledger.read("a".repeat(40), ["deliveries/d-1/contract.md"]), (error: unknown) => error instanceof LedgerError && error.code === "ledger-unavailable");
   } finally { await rm(path, { recursive: true, force: true }); }

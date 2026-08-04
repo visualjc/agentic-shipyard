@@ -6,6 +6,19 @@ export type ContextRole = (typeof CONTEXT_ROLES)[number];
 
 /** The only host-specific handoff data. Keep this shape independent of any host SDK. */
 export type ContextAdapterRequest = Readonly<{ host: string; role: ContextRole; envelopePath: string; repoRoot: string }>;
+/** Trusted dispatch capability, supplied by the host rather than the serialized envelope. */
+export type ContextDispatchExpectation = Readonly<{
+  profile: string;
+  deliveryId: string;
+  host: string;
+  role: ContextRole;
+  envelopePath: string;
+  repoRoot: string;
+  productBranch: string;
+  productSha: string;
+  ledgerRef: string;
+  ledgerSha: string;
+}>;
 
 /** A self-contained, pinned, role-limited ledger context. */
 export type ContextEnvelope = Readonly<{

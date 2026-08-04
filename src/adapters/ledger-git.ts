@@ -14,11 +14,11 @@ const zeroOid = "0".repeat(40);
 /** Git object-database ledger that never checks its orphan ref out in a product worktree. */
 export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
   static readonly ref = "refs/heads/shipyard-ledger";
-  constructor(private readonly repositoryPath: string, private readonly ledgerRef = GitLedgerStore.ref) {}
+  constructor(private readonly repositoryPath: string) {}
 
   async snapshot(paths: readonly string[]): Promise<LedgerSnapshot> {
     if (paths.some((path) => !validLedgerPath(path))) throw new LedgerError("ledger-invalid-path", "Ledger record paths must be relative, normalized paths.");
-    const head = await this.optionalRef(this.ledgerRef);
+    const head = await this.optionalRef(GitLedgerStore.ref);
     const records: Record<string, string> = {};
     if (head) for (const path of paths) {
       const value = await this.optionalRecord(head, path);
@@ -34,7 +34,7 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
     }
     const resolved = await this.optionalRef(`${ledgerSha}^{commit}`);
     if (!resolved) throw new LedgerError("ledger-unavailable", "The pinned ledger commit is unavailable.");
-    const head = await this.optionalRef(this.ledgerRef);
+    const head = await this.optionalRef(GitLedgerStore.ref);
     if (!head || !(await this.isAncestor(resolved, head))) {
       throw new LedgerError("ledger-unavailable", "The pinned ledger commit is not reachable from the configured ledger ref.");
     }
@@ -110,7 +110,7 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
   }
 
   private async updateRefCas(commit: string, expectedHead: string | undefined): Promise<void> {
-    const result = await this.run(["update-ref", this.ledgerRef, commit, expectedHead ?? zeroOid]);
+    const result = await this.run(["update-ref", GitLedgerStore.ref, commit, expectedHead ?? zeroOid]);
     if (result.code === 0) return;
     if (staleRefUpdate(result.stderr)) throw new LedgerError("ledger-stale-head", "The ledger advanced; re-read its head before retrying.");
     throw unavailable(result.stderr);

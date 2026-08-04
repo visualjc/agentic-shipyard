@@ -13,6 +13,8 @@ export type GitHubTrackerErrorCode =
   | "ambiguous-record"
   | "resume-mismatch"
   | "head-sha-mismatch"
+  | "head-ref-mismatch"
+  | "base-ref-mismatch"
   | "pagination-limit";
 
 /** A fail-closed error for unsafe-to-repeat tracker states. */

@@ -22,10 +22,20 @@ export interface WorkspaceGit {
   worktreeIdentity(path: string): Promise<WorkspaceGitIdentity | undefined>;
   worktreeIsClean(path: string): Promise<boolean>;
   branchExists(repositoryPath: string, branch: string): Promise<boolean>;
-  ensureWorktree(repositoryPath: string, branch: string, path: string): Promise<void>;
+  branchHead(repositoryPath: string, branch: string): Promise<string | undefined>;
+  productHead(repositoryPath: string): Promise<string>;
+  ensureWorktree(repositoryPath: string, branch: string, path: string, startSha: string): Promise<void>;
   removeWorktree(repositoryPath: string, path: string): Promise<void>;
 }
 export type WorkspaceGitIdentity = Readonly<{ commonDirectory: string; branch: string }>;
+export type InitialDeliveryLedgerRecord = Readonly<{
+  schemaVersion: 1;
+  deliveryId: string;
+  commonDirectory: string;
+  branch: string;
+  startProductSha: string;
+  payload: string;
+}>;
 
 /** Coordinates rebuildable registration and worktree state with a durable, isolated ledger record. */
 export class WorkspaceService {
@@ -53,19 +63,34 @@ export class WorkspaceService {
 
       const snapshot = await this.ledger.snapshot([request.initialLedgerPath]);
       const existing = snapshot.records[request.initialLedgerPath];
-      // An existing branch is resumable only when durable or local provenance
-      // identifies it as this exact delivery. Do this before either mutation.
-      if (await this.git.branchExists(request.repositoryPath, request.branch) && matches.length === 0 && existing !== request.initialLedgerContents) {
-        throw new WorkspaceError("workspace-conflict", "The canonical feature branch already exists without matching delivery provenance.");
+      // Registry is written last. A matching registry entry without its first
+      // durable record therefore cannot be a recoverable interruption.
+      if (matches.length === 1 && existing === undefined) throw new WorkspaceError("workspace-ledger-conflict", "The registry entry has no durable initial delivery record.");
+      const branchExists = await this.git.branchExists(request.repositoryPath, request.branch);
+      if (existing === undefined && branchExists) {
+        throw new WorkspaceError("workspace-conflict", "The canonical feature branch already exists without durable delivery provenance.");
+      }
+      const startSha = await this.git.productHead(request.repositoryPath);
+      const provenance = existing === undefined
+        ? initialDeliveryRecord(request, actualCommonDirectory, startSha)
+        : parseInitialDeliveryRecord(existing);
+      if (!provenance || !sameProvenance(provenance, request, actualCommonDirectory)) {
+        throw new WorkspaceError("workspace-ledger-conflict", "The durable initial ledger record conflicts with this delivery.");
+      }
+      // Without a registry entry, a branch/worktree can only be adopted if it
+      // still points at the exact product object recorded before ledger write.
+      if (matches.length === 0 && branchExists) {
+        if (await this.git.branchHead(request.repositoryPath, request.branch) !== provenance.startProductSha) {
+          throw new WorkspaceError("workspace-conflict", "The canonical feature branch does not match durable delivery provenance.");
+        }
       }
       try {
-        if (existing === undefined) await this.ledger.transact({ expectedHead: snapshot.head, writes: [{ path: request.initialLedgerPath, contents: request.initialLedgerContents }], message: `initialize ${request.deliveryId}` });
-        else if (existing !== request.initialLedgerContents) throw new WorkspaceError("workspace-ledger-conflict", "The durable initial ledger record conflicts with this delivery.");
+        if (existing === undefined) await this.ledger.transact({ expectedHead: snapshot.head, writes: [{ path: request.initialLedgerPath, contents: JSON.stringify(provenance) }], message: `initialize ${request.deliveryId}` });
       } catch (error: unknown) {
         if (error instanceof LedgerError && error.code === "ledger-stale-head") throw new WorkspaceError("workspace-ledger-conflict", "Ledger advanced during creation; re-read and resume explicitly.");
         throw error;
       }
-      await this.ensureExpectedWorktree(request, actualCommonDirectory);
+      await this.ensureExpectedWorktree(request, actualCommonDirectory, provenance.startProductSha);
       if (matches.length === 0) {
         try { await this.registry.write(newDeliveryRegistryDocument([...(document?.workspaces ?? []), workspace])); }
         catch (error: unknown) { if (error instanceof DeliveryError) throw new WorkspaceError("workspace-registry-invalid", error.message); throw error; }
@@ -92,14 +117,14 @@ export class WorkspaceService {
     });
   }
 
-  private async ensureExpectedWorktree(request: CreateOrResumeDelivery, commonDirectory: string): Promise<void> {
+  private async ensureExpectedWorktree(request: CreateOrResumeDelivery, commonDirectory: string, startSha: string): Promise<void> {
     const exists = await this.git.worktreeExists(request.worktreePath);
     let identity = exists ? await this.git.worktreeIdentity(request.worktreePath) : undefined;
     if (exists && (!identity || identity.commonDirectory !== commonDirectory || identity.branch !== request.branch)) {
       throw new WorkspaceError("workspace-identity-mismatch", "The requested worktree path exists but is not this delivery’s Git worktree.");
     }
     if (!exists) {
-      await this.git.ensureWorktree(request.repositoryPath, request.branch, request.worktreePath);
+      await this.git.ensureWorktree(request.repositoryPath, request.branch, request.worktreePath, startSha);
       identity = await this.git.worktreeIdentity(request.worktreePath);
       if (!identity || identity.commonDirectory !== commonDirectory || identity.branch !== request.branch) {
         throw new WorkspaceError("workspace-identity-mismatch", "Git did not create the requested delivery worktree identity.");
@@ -149,15 +174,34 @@ export const nodeWorkspaceGit: WorkspaceGit = {
   },
   async worktreeIsClean(path) { return (await gitRequired(path, ["status", "--porcelain=v1"])) === ""; },
   async branchExists(repositoryPath, branch) { return (await git(repositoryPath, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`])) !== undefined; },
-  async ensureWorktree(repositoryPath, branch, path) {
+  async branchHead(repositoryPath, branch) { return git(repositoryPath, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]); },
+  async productHead(repositoryPath) { return gitRequired(repositoryPath, ["rev-parse", "--verify", "HEAD"]); },
+  async ensureWorktree(repositoryPath, branch, path, startSha) {
     const exists = await nodeWorkspaceGit.branchExists(repositoryPath, branch);
-    await gitRequired(repositoryPath, exists ? ["worktree", "add", path, branch] : ["worktree", "add", "-b", branch, path]);
+    await gitRequired(repositoryPath, exists ? ["worktree", "add", path, branch] : ["worktree", "add", "-b", branch, path, startSha]);
   },
   async removeWorktree(repositoryPath, path) { await gitRequired(repositoryPath, ["worktree", "remove", path]); },
 };
 async function git(repositoryPath: string, args: string[]): Promise<string | undefined> {
   try { const { stdout } = await execFileAsync("git", ["-C", repositoryPath, ...args], { encoding: "utf8", env: workspaceGitEnvironment() }); return stdout.trim(); }
   catch (error: unknown) { const code = (error as { code?: number }).code; if (code === 1) return undefined; throw error; }
+}
+
+function initialDeliveryRecord(request: CreateOrResumeDelivery, commonDirectory: string, startProductSha: string): InitialDeliveryLedgerRecord {
+  return { schemaVersion: 1, deliveryId: request.deliveryId, commonDirectory, branch: request.branch, startProductSha, payload: request.initialLedgerContents };
+}
+function parseInitialDeliveryRecord(contents: string): InitialDeliveryLedgerRecord | undefined {
+  try {
+    const value: unknown = JSON.parse(contents);
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const record = value as Record<string, unknown>;
+    if (Object.keys(record).length !== 6 || record.schemaVersion !== 1 || !["deliveryId", "commonDirectory", "branch", "startProductSha", "payload"].every((key) => typeof record[key] === "string") || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(record.startProductSha as string)) return undefined;
+    const result = record as unknown as InitialDeliveryLedgerRecord;
+    return JSON.stringify(result) === contents ? result : undefined;
+  } catch { return undefined; }
+}
+function sameProvenance(record: InitialDeliveryLedgerRecord, request: CreateOrResumeDelivery, commonDirectory: string): boolean {
+  return record.deliveryId === request.deliveryId && record.commonDirectory === commonDirectory && record.branch === request.branch && record.payload === request.initialLedgerContents;
 }
 function workspaceGitEnvironment(): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = { ...process.env };

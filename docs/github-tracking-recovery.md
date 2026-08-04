@@ -16,7 +16,9 @@ to repeat and requires manual review.
 The tracker identifies its records only by its exact marker on a standalone
 body line. It excludes pull requests from GitHub's `/issues` listing and stores
 GitHub's stable provider node ID when available, so a resumed run cannot mistake
-a marked pull request or a marker-like body substring for its issue.
+a marked pull request or a marker-like body substring for its issue. Before
+accepting either a discovered or newly-created pull request, it also verifies
+the exact head SHA, head ref, and base ref requested for the delivery.
 
 For authorization failures, verify credential scope and the configured actor
 outside Shipyard, then retry with a newly resolved ephemeral credential. For

@@ -15,6 +15,11 @@ starts Git, so those variables cannot supplement this credential boundary. The
 environment is not persisted and Shipyard does not run `gh auth`, `gh auth
 switch`, or any other command that changes the global GitHub CLI account.
 
+The Node runner invokes a canonical absolute Git executable (`/usr/bin/git` by
+default), never a bare `git` looked up through `PATH`. Deployments and tests
+that use another executable must provide its existing absolute path to the
+runner factory; relative paths and command names are rejected.
+
 Do not paste a token into a remote URL, CLI argument, configuration file, or
 bug report. If Git output includes an authorization header or URL user-info,
 Shipyard redacts it before returning an error; operators should still revoke a

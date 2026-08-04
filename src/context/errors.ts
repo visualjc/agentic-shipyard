@@ -2,6 +2,7 @@ export type ContextFailureCode =
   | "context-invalid-envelope"
   | "context-repository-mismatch"
   | "context-records-not-allowed"
+  | "context-dispatch-mismatch"
   | "context-stale-product"
   | "context-ledger-record-missing";
 
