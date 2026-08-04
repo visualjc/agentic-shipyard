@@ -1,9 +1,9 @@
+import { stableDeliveryId } from "../delivery/registry.js";
+
 /** A durable, exact-match marker for one Shipyard development record pair. */
 export function stableShipyardMarker(deliveryId: string): string {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(deliveryId)) {
-    throw new GitHubTrackerError("invalid-delivery-id", "A delivery ID must be a stable, safe identifier.");
-  }
-  return `<!-- shipyard:development-record:v1:${deliveryId} -->`;
+  try { return `<!-- shipyard:development-record:v1:${stableDeliveryId(deliveryId)} -->`; }
+  catch { throw new GitHubTrackerError("invalid-delivery-id", "A delivery ID must be a stable, safe identifier."); }
 }
 
 export type GitHubTrackerErrorCode =

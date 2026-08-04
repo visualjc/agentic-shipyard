@@ -6,6 +6,7 @@ import type { DevelopmentTrackingAuthority } from "./tracking-authority.js";
 import { DevelopmentRecordGuard } from "./tracking-guard.js";
 import type { BoundProfileAuthority } from "../profile/bound-authority.js";
 import type { RepositoryRef, Topology } from "../contracts/types.js";
+import { stableDeliveryId } from "../delivery/registry.js";
 
 export type DevelopmentIssueRequest = { title: string; body: string };
 export type DevelopmentPullRequestRequest = {
@@ -117,8 +118,7 @@ function validateDevelopmentRecordRequest(value: unknown): DevelopmentRecordRequ
   try {
     const root = snapshotObject(value);
     requireExactKeys(root, ["deliveryId", "issue", "pullRequest", "resume"], ["resume"]);
-    const deliveryId = root.get("deliveryId");
-    if (typeof deliveryId !== "string") throw new Error();
+    const deliveryId = stableDeliveryId(root.get("deliveryId"));
     const issue = validateDevelopmentRecordInput(root.get("issue"));
     const pullRequest = validateDevelopmentRecordInput(root.get("pullRequest"));
     let resume: DevelopmentRecordResume | undefined;
@@ -166,7 +166,7 @@ function requireExactKeys(value: ReadonlyMap<string, unknown>, allowed: readonly
   if (!required.every(key => value.has(key)) || [...value.keys()].some(key => !allowed.includes(key))) throw new Error();
 }
 function meaningfulString(value: unknown): value is string { return typeof value === "string" && value.trim() !== ""; }
-function invalidRequest(): GitHubTrackerError { return new GitHubTrackerError("invalid-request", "Tracker request must contain exact non-empty issue, pull request, and canonical resume fields."); }
+function invalidRequest(): GitHubTrackerError { return new GitHubTrackerError("invalid-request", "Tracker request must contain an exact canonical delivery ID and non-empty issue, pull request, and resume fields."); }
 
 async function createIssue(session: GitHubTrackerSession, path: string, marker: string, input: DevelopmentIssueRequest): Promise<LocatedRecord> {
   const record = await session.request<ProviderRecord>({ method: "POST", path, body: { title: input.title, body: withMarker(input.body, marker) } });

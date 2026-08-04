@@ -70,6 +70,11 @@ test("verifies the actor first and creates the staged-pair issue and PR only in 
 
 test("rejects malformed public request fields before authority or provider access", async () => {
   const malformed = [
+    { ...request, deliveryId: "Delivery-42" },
+    { ...request, deliveryId: "a".repeat(65) },
+    { ...request, deliveryId: "delivery..42" },
+    { ...request, deliveryId: " delivery-42" },
+    { ...request, deliveryId: "delivery 42" },
     { ...request, issue: { ...request.issue, body: {} } },
     { ...request, issue: { ...request.issue, title: 1 } },
     { ...request, issue: { ...request.issue, body: "   " } },
@@ -83,13 +88,25 @@ test("rejects malformed public request fields before authority or provider acces
   ];
   for (const input of malformed) {
     const api = new RecordingApi(() => assert.fail("invalid input must not reach the provider"));
-    let authorityCalls = 0;
+    let guardCalls = 0; let authorityCalls = 0;
     const authority = api.authority();
+    authority.guard = {
+      async run() { guardCalls += 1; throw new Error("must not enter guard"); },
+      async revalidate() { guardCalls += 1; throw new Error("must not revalidate guard"); },
+    } as unknown as DevelopmentRecordGuard;
     authority.trackingAuthority = { resolve: async () => { authorityCalls += 1; throw new Error("must not resolve authority"); } };
     await assert.rejects(trackDevelopmentRecords(authority, input as never), (error: unknown) => error instanceof GitHubTrackerError && error.code === "invalid-request" && !error.message.includes("[object Object]"));
+    assert.equal(guardCalls, 0);
     assert.equal(authorityCalls, 0);
     assert.equal(api.calls.length, 0);
     assert.equal(api.writes.length, 0);
+  }
+});
+
+test("stable markers accept only canonical workspace delivery IDs", () => {
+  assert.equal(stableShipyardMarker(request.deliveryId), "<!-- shipyard:development-record:v1:delivery-42 -->");
+  for (const deliveryId of ["Delivery-42", "a".repeat(65), "delivery..42", " delivery-42", "delivery 42"]) {
+    assert.throws(() => stableShipyardMarker(deliveryId), (error: unknown) => error instanceof GitHubTrackerError && error.code === "invalid-delivery-id");
   }
 });
 
