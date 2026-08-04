@@ -26,7 +26,6 @@ export interface WorkspaceGit {
   commonDirectory(repositoryPath: string): Promise<string>;
   worktreeExists(path: string): Promise<boolean>;
   worktreeIdentity(path: string): Promise<WorkspaceGitIdentity | undefined>;
-  worktreeIsClean(path: string): Promise<boolean>;
   branchExists(repositoryPath: string, branch: string): Promise<boolean>;
   branchHead(repositoryPath: string, branch: string): Promise<string | undefined>;
   productHead(repositoryPath: string): Promise<string>;
@@ -124,7 +123,12 @@ export class WorkspaceService {
     });
   }
 
-  /** Removes only machine-local/rebuildable state. Ledger history is intentionally untouched. */
+  /**
+   * Removes registry state only after the registered worktree is absent.
+   * Git's path-based worktree removal cannot atomically bind a prior identity
+   * check to the removal, so a present path always requires manual handoff.
+   * Ledger history is intentionally untouched.
+   */
   async cleanup(repositoryPath: string, deliveryId: string): Promise<void> {
     const actualCommonDirectory = await this.git.commonDirectory(repositoryPath);
     await this.withLock(actualCommonDirectory, async () => {
@@ -133,10 +137,7 @@ export class WorkspaceService {
       if (!document || !workspace) return;
       if (workspace.commonDirectory !== actualCommonDirectory) throw new WorkspaceError("workspace-identity-mismatch", "The registered workspace belongs to another Git common directory.");
       if (await this.git.worktreeExists(workspace.worktreePath)) {
-        const identity = await this.git.worktreeIdentity(workspace.worktreePath);
-        if (!identity || !sameIdentity(identity, workspace)) throw new WorkspaceError("workspace-identity-mismatch", "Refusing to clean a path that is not the registered linked worktree.");
-        if (!await this.git.worktreeIsClean(workspace.worktreePath)) throw new WorkspaceError("workspace-dirty", "Refusing to remove a dirty linked worktree; hand off or clean it explicitly first.");
-        await this.git.removeWorktree(repositoryPath, workspace.worktreePath);
+        throw new WorkspaceError("workspace-manual-cleanup", "The registered worktree path still exists. Remove it manually after verifying its ownership, then rerun cleanup to remove only the registry state.");
       }
       await this.registry.write(newDeliveryRegistryDocument(document.workspaces.filter((candidate) => candidate.deliveryId !== deliveryId)));
     });
@@ -233,7 +234,6 @@ export function createNodeWorkspaceGit(executable = DEFAULT_NODE_GIT_EXECUTABLE)
       return branch === undefined ? undefined : { commonDirectory, branch };
     } catch { return undefined; }
   },
-  async worktreeIsClean(path) { return (await gitRequired(path, ["status", "--porcelain=v1"])) === ""; },
   async branchExists(repositoryPath, branch) { return (await git(repositoryPath, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`])) !== undefined; },
   async branchHead(repositoryPath, branch) { return git(repositoryPath, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]); },
   async productHead(repositoryPath) { return gitRequired(repositoryPath, ["rev-parse", "--verify", "HEAD"]); },

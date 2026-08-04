@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -65,6 +66,55 @@ test("node Git adapter gives a linked worktree the main clone common-directory i
     await run("git", ["-C", main, "worktree", "add", "-b", "feature", linked]);
     assert.equal(await nodeGit.commonDirectory(main), await nodeGit.commonDirectory(linked));
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("node Git adapter isolates binding authority from inherited Git state and PATH", async () => {
+  const root = await mkdtemp(join(tmpdir(), "shipyard-binding-authority-"));
+  const repository = join(root, "repository");
+  const redirected = join(root, "redirected");
+  const hostileBin = join(root, "hostile-bin");
+  const pathGitWasRun = join(root, "path-git-was-run");
+  const inheritedKeys = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "DEVELOPER_DIR", "SDKROOT", "TOOLCHAINS", "PATH"] as const;
+  const inherited = Object.fromEntries(inheritedKeys.map((key) => [key, process.env[key]]));
+  try {
+    for (const path of [repository, redirected]) {
+      await run("git", ["init", path]);
+      await run("git", ["-C", path, "remote", "add", "origin", topology.development.remote.url]);
+      await run("git", ["-C", path, "remote", "add", "destination", topology.destination.remote.url]);
+    }
+    await mkdir(hostileBin);
+    await writeFile(join(hostileBin, "git"), `#!/bin/sh\ntouch '${pathGitWasRun}'\nexit 99\n`, { mode: 0o700 });
+    process.env.GIT_DIR = join(redirected, ".git");
+    process.env.GIT_WORK_TREE = redirected;
+    process.env.GIT_INDEX_FILE = join(redirected, "index");
+    process.env.GIT_OBJECT_DIRECTORY = join(redirected, ".git", "objects");
+    process.env.GIT_CONFIG_GLOBAL = join(root, "hostile-global-config");
+    process.env.GIT_CONFIG_SYSTEM = join(root, "hostile-system-config");
+    process.env.GIT_CONFIG_NOSYSTEM = "0";
+    process.env.GIT_CONFIG_COUNT = "1";
+    process.env.GIT_CONFIG_KEY_0 = "remote.origin.url";
+    process.env.GIT_CONFIG_VALUE_0 = "https://example.test/redirected.git";
+    process.env.DEVELOPER_DIR = join(root, "hostile-developer-tools");
+    process.env.SDKROOT = join(root, "hostile-sdk");
+    process.env.TOOLCHAINS = "hostile";
+    process.env.PATH = hostileBin;
+
+    const store = new MemoryBindingStore();
+    const service = new BindingService(store, nodeGit);
+    await service.bind(repository, { profileName: "test", topology, profileFingerprint: "0".repeat(64), boundAt: "2026-08-04T00:00:00.000Z" });
+    const resolved = await service.resolve(repository);
+
+    assert.equal(resolved.commonDirectory, await realpath(join(repository, ".git")));
+    assert.notEqual(resolved.commonDirectory, await realpath(join(redirected, ".git")));
+    assert.equal(await nodeGit.remoteUrl(repository, "origin"), topology.development.remote.url);
+    assert.equal(existsSync(pathGitWasRun), false, "PATH-selected Git must never execute");
+  } finally {
+    for (const key of inheritedKeys) {
+      const value = inherited[key];
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("binding store deep-validates hostile persisted documents", async () => {

@@ -120,21 +120,62 @@ test("serializes concurrent creators, preserves both registry entries after retr
   } finally { await dispose(value); }
 });
 
-test("fails closed for a dirty worktree, then removes only rebuildable state while retaining its ledger history", async () => {
+test("hands off a present registered worktree for manual cleanup, then removes absent-worktree registry state while retaining ledger history", async () => {
   const value = await fixture();
   try {
     const request = value.request("d-1");
     await value.service.createOrResume(request);
     await writeFile(join(request.worktreePath, "uncommitted.txt"), "do not delete", "utf8");
-    await assert.rejects(value.service.cleanup(value.repository, "d-1"), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-dirty");
+    await assert.rejects(value.service.cleanup(value.repository, "d-1"), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-manual-cleanup");
     assert.equal((await value.registry.read())?.workspaces.length, 1);
-    await rm(join(request.worktreePath, "uncommitted.txt"));
+    await git(value.repository, ["worktree", "remove", "--force", request.worktreePath]);
     await value.service.cleanup(value.repository, "d-1");
     assert.equal((await value.registry.read())?.workspaces.length, 0);
     assert.equal((await initialRecord(value, request)).payload, request.initialLedgerContents);
     const ledgerHead = (await value.ledger.snapshot([])).head!;
     await git(value.repository, ["branch", "-D", request.branch]);
     assert.equal(JSON.parse((await value.ledger.read(ledgerHead, [request.initialLedgerPath]))[request.initialLedgerPath]!).payload, request.initialLedgerContents);
+  } finally { await dispose(value); }
+});
+
+test("does not delete a foreign replacement during cleanup's adversarial path swap", async () => {
+  const request = { repositoryPath: "/repository", commonDirectory: "/repository/.git", deliveryId: "d-1", branch: "shipyard/d-1", worktreePath: "/worktrees/d-1", initialLedgerPath: "deliveries/d-1.json", initialLedgerContents: JSON.stringify({ deliveryId: "d-1" }) };
+  let registryWrites = 0;
+  let foreignReplacementExists = true;
+  const registry = {
+    async read() { return { schemaVersion: 1 as const, workspaces: [{ schemaVersion: 1 as const, deliveryId: request.deliveryId, commonDirectory: request.commonDirectory, branch: request.branch, worktreePath: request.worktreePath }] }; },
+    async write() { registryWrites += 1; },
+  };
+  const ledger = { async snapshot() { return { head: undefined, records: {} }; }, async transact() { return "ledger"; } };
+  const git = {
+    async commonDirectory() { return request.commonDirectory; },
+    // The original linked worktree was replaced between an unsafe hypothetical
+    // identity check and path removal. Cleanup must not inspect or remove it.
+    async worktreeExists() { return foreignReplacementExists; },
+    async worktreeIdentity() { assert.fail("cleanup must not rely on a non-atomic identity recheck"); },
+    async branchExists() { return false; }, async branchHead() { return undefined; }, async productHead() { return "a".repeat(40); },
+    async ensureWorktree() { return false; },
+    async removeWorktree() { foreignReplacementExists = false; assert.fail("cleanup must never delete a present path"); },
+  };
+  const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
+
+  await assert.rejects(service.cleanup(request.repositoryPath, request.deliveryId), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-manual-cleanup");
+  assert.equal(foreignReplacementExists, true);
+  assert.equal(registryWrites, 0);
+});
+
+test("cleanup removes registry state when its registered worktree is already absent", async () => {
+  const value = await fixture();
+  try {
+    const request = value.request("d-1");
+    await value.service.createOrResume(request);
+    const ledgerBefore = await value.ledger.snapshot([request.initialLedgerPath]);
+    await git(value.repository, ["worktree", "remove", request.worktreePath]);
+
+    await value.service.cleanup(value.repository, request.deliveryId);
+
+    assert.equal((await value.registry.read())?.workspaces.length, 0);
+    assert.deepEqual(await value.ledger.snapshot([request.initialLedgerPath]), ledgerBefore);
   } finally { await dispose(value); }
 });
 
@@ -243,7 +284,7 @@ test("create intent rejects a same-SHA foreign branch race without registry adop
   const git = {
     async commonDirectory() { return request.commonDirectory; }, async worktreeExists() { return worktreeExists; },
     async worktreeIdentity() { return worktreeExists ? { commonDirectory: request.commonDirectory, branch: request.branch } : undefined; },
-    async worktreeIsClean() { return true; }, async branchExists() { return branchExists; },
+    async branchExists() { return branchExists; },
     async branchHead() { return branchExists ? foreignSha : undefined; }, async productHead() { return startSha; },
     async ensureWorktree(_repositoryPath: string, _branch: string, _path: string, intent: WorktreeEnsureIntent) {
       assert.deepEqual(intent, { mode: "create", startSha });

@@ -69,6 +69,17 @@ created at that SHA. `GitLedgerStore` always writes
 ref. Its subprocesses use a canonical absolute Git executable and never
 resolve a bare `git` from `PATH`.
 
+### Final cleanup handoff
+
+Workspace cleanup never removes a worktree that is still present. A prior
+identity or cleanliness check cannot be atomically bound to Git's later
+path-based removal, so a path swap could otherwise delete a foreign
+replacement. Cleanup therefore fails with `workspace-manual-cleanup` and
+leaves the registry intact whenever the registered path exists. An operator
+must verify ownership and remove the worktree manually; a subsequent cleanup
+call removes the now-absent registry entry. The durable ledger record remains
+unchanged in either case.
+
 ### Ledger/product ancestry invariant
 
 An existing canonical ledger ref is never trusted merely because it has the
