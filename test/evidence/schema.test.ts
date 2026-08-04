@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canonicalJson, validateAcceptanceEvidence } from "../../src/evidence/schema.js";
+import { canonicalJson, validateAcceptanceEvidence, validateReviewRequest } from "../../src/evidence/schema.js";
 import { EvidenceError } from "../../src/evidence/errors.js";
 test("canonical JSON sorts object keys and rejects unknown evidence fields",()=>{assert.equal(canonicalJson({z:1,a:{y:2,b:3}}),'{"a":{"b":3,"y":2},"z":1}');assert.throws(()=>validateAcceptanceEvidence({schemaVersion:1,issueId:"6",productSha:"a".repeat(40),items:[],unexpected:true}),EvidenceError);});
 test("hostile getters, proxies, sparse arrays, cycles, and non-JSON values fail closed",()=>{let touched=0;const getter=Object.defineProperty({},"x",{enumerable:true,get(){touched++;return 1;}});const proxy=new Proxy({},{ownKeys(){throw new Error("secret");}});const sparse=new Array(2);const cycle:any={};cycle.self=cycle;for(const value of [getter,proxy,sparse,cycle,undefined,NaN,Infinity])assert.throws(()=>canonicalJson(value),EvidenceError);assert.equal(touched,0);});
 test("only exact SHA-1 or SHA-256 object IDs are accepted",()=>{for(const length of [41,63])assert.throws(()=>validateAcceptanceEvidence({schemaVersion:1,issueId:"6",productSha:"a".repeat(length),items:[]}),EvidenceError);});
+test("review requests require nonempty intent and evidence references",()=>{const request={schemaVersion:1,issueId:"6",productSha:"a".repeat(40),reviewId:"r",reviewerEnvelopePath:"reviewer.json",intentRefs:["intent.md"],evidenceRefs:["acceptance.json"]};assert.throws(()=>validateReviewRequest({...request,intentRefs:[]}),EvidenceError);assert.throws(()=>validateReviewRequest({...request,evidenceRefs:[]}),EvidenceError);});

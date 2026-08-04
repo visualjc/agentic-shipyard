@@ -78,10 +78,10 @@ export { evaluateFreshness } from "./evidence/freshness.js";
 export { issueManifest } from "./evidence/issue-manifest.js";
 export { EvidenceError } from "./evidence/errors.js";
 export type { AcceptanceEvidence, AcceptanceItem, EvidenceDecision, EvidenceManifest, EvidenceState, FindingResolution, ReviewFinding, ReviewRequest, ReviewResult } from "./evidence/types.js";
-export { TrustedReviewDispatcher } from "./review/dispatch.js";
+export { createTrustedCodexReviewOperation } from "./review/factory.js";
+export type { TrustedCodexReviewConfig, TrustedCodexReviewOperation, TrustedCodexReviewOperationDependencies } from "./review/factory.js";
 export { ReviewError } from "./review/errors.js";
-export type { EphemeralProcessRunner, IndependentReviewAdapter, ProcessRun, ReviewDispatch, ReviewDispatchResult, ReviewProcessAttestation } from "./review/types.js";
-export { acceptanceDecision, AcceptanceReviewService, evaluatePinnedEvidenceGate, resolvePinnedEvidenceRefs } from "./acceptance/service.js";
+export { evaluatePinnedEvidenceGate, resolvePinnedEvidenceRefs } from "./acceptance/service.js";
 export { evidencePath, persistEvidence } from "./acceptance/ledger.js";
 export { acceptanceStatusContributor } from "./acceptance/status.js";
 
