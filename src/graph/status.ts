@@ -10,8 +10,9 @@ export function graphStatusContributor(input: { enabled: boolean; adapter?: stri
   catch { snapshot = { enabled: false, decision: graphDecision("invalid", "Graph status input is invalid.") }; }
   return (current) => {
     const graph = Object.freeze({ enabled: snapshot.enabled, adapter: snapshot.adapter, receipt: snapshot.receipt, state: snapshot.decision.state, reason: snapshot.decision.reason, nextAction: snapshot.decision.fallbackAction });
-    // A graph accelerator cannot override a delivery/provider/review blocker.
-    const restrictiveAction = current.blockers.length > 0 || current.nextSafeAction === "inspect-source-directly" || snapshot.decision.state === "fresh" ? current.nextSafeAction : snapshot.decision.fallbackAction;
-    return { graphFreshness: snapshot.decision.state, graph, nextSafeAction: restrictiveAction };
+    const requiresFallback = snapshot.enabled && snapshot.decision.state !== "disabled" && snapshot.decision.state !== "fresh";
+    // A disabled graph is observational only. An enabled conservative fallback
+    // remains subordinate to any action already established by a blocker.
+    return { graphFreshness: snapshot.decision.state, graph, ...(requiresFallback && current.blockers.length === 0 && current.nextSafeAction !== snapshot.decision.fallbackAction ? { nextSafeAction: snapshot.decision.fallbackAction } : {}) };
   };
 }

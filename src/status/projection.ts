@@ -2,6 +2,7 @@ import type { DeliveryPhase } from "../contracts/types.js";
 import type { GraphDecision, GraphState } from "../graph/types.js";
 
 export type StatusBlocker = { code: string; message: string };
+export type SyncFreshness = "fresh" | "stale" | "unavailable";
 export type StatusProjection = Readonly<{
   phase: DeliveryPhase;
   productSha?: string;
@@ -12,6 +13,7 @@ export type StatusProjection = Readonly<{
   acceptanceFresh?: boolean;
   providerRefs?: Readonly<Record<string, string>>;
   locks?: Readonly<Record<string, "free" | "held" | "stale">>;
+  syncFreshness?: SyncFreshness;
   graphFreshness?: GraphState;
   graph?: Readonly<{ enabled: boolean; adapter?: string; receipt?: string; state: GraphState; reason: string; nextAction: "inspect-source-directly" }>;
   blockers: readonly StatusBlocker[];
@@ -28,6 +30,10 @@ export function createStatusProjection(input: Pick<StatusProjection, "phase" | "
 export function composeStatus(base: StatusProjection, contributors: readonly StatusContributor[]): StatusProjection {
   return contributors.reduce<StatusProjection>((current, contribute) => {
     const next = contribute(current);
-    return Object.freeze({ ...current, ...next, blockers: Object.freeze([...current.blockers, ...(next.blockers ?? [])]) });
+    const requestedAction = typeof next.nextSafeAction === "string" && next.nextSafeAction ? next.nextSafeAction : undefined;
+    // The first blocker establishes action precedence; later contributors may
+    // add evidence without erasing the action needed to resolve that blocker.
+    const nextSafeAction = current.blockers.length > 0 || !requestedAction ? current.nextSafeAction : requestedAction;
+    return Object.freeze({ ...current, ...next, blockers: Object.freeze([...current.blockers, ...(next.blockers ?? [])]), nextSafeAction });
   }, base);
 }

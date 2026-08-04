@@ -3,7 +3,7 @@ export type { Binding, ContractVersion, DeliveryPhase, GitHubActor, GraphProfile
 export { ContractValidationError, validateBinding, validateLifecycleState, validateOperation, validatePathPolicy, validateProfile, validateRemoteExpectation } from "./contracts/validate.js";
 export type { ContractErrorCode } from "./contracts/errors.js";
 export { composeStatus, createStatusProjection } from "./status/projection.js";
-export type { StatusBlocker, StatusContributor, StatusProjection } from "./status/projection.js";
+export type { StatusBlocker, StatusContributor, StatusProjection, SyncFreshness } from "./status/projection.js";
 export { graphStatusContributor } from "./graph/status.js";
 export { createGitGraphSourceReader, graphFingerprint, snapshotGraphSource } from "./graph/fingerprint.js";
 export { graphCacheIdentity, graphDecision, graphLockPath, evaluateGraphFreshness, evaluateGraphLock, validateGraphDescriptor } from "./graph/freshness.js";

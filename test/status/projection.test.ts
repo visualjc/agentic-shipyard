@@ -16,7 +16,18 @@ test("status contributors add fields and blockers without replacing earlier bloc
 
 test("contributors consume the projection contract rather than implementation state", () => {
   const base: StatusProjection = createStatusProjection({ phase: "ready", nextSafeAction: "shipyard" });
-  const result = composeStatus(base, [(current) => current.phase === "ready" ? { graphFreshness: "unavailable" } : {}]);
+  const result = composeStatus(base, [(current) => current.phase === "ready" ? { syncFreshness: "stale", graphFreshness: "unavailable" } : {}]);
+  assert.equal(result.syncFreshness, "stale");
   assert.equal(result.graphFreshness, "unavailable");
   assert.equal(Object.isFrozen(result), true);
+});
+
+test("later blockers accumulate without replacing the first blocker action", () => {
+  const base = createStatusProjection({ phase: "blocked", nextSafeAction: "shipyard-status" });
+  const result = composeStatus(base, [
+    () => ({ blockers: [{ code: "sync-dirty", message: "Clean the worktree." }], nextSafeAction: "Clean it explicitly." }),
+    () => ({ blockers: [{ code: "graph-blocked", message: "Inspect graph state." }], nextSafeAction: "inspect-source-directly" }),
+  ]);
+  assert.deepEqual(result.blockers.map(blocker => blocker.code), ["sync-dirty", "graph-blocked"]);
+  assert.equal(result.nextSafeAction, "Clean it explicitly.");
 });

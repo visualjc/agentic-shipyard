@@ -24,6 +24,9 @@ test("setup validates existing remotes, requires rebind, and status/help are rea
     const status = await run(["--home", fixture.home], "status", fixture.main);
     assert.equal(status.code, 0);
     assert.match(status.output, /"phase": "ready"/);
+    assert.match(status.output, /"syncFreshness":/);
+    assert.match(status.output, /"graphFreshness": "disabled"/);
+    assert.doesNotMatch(status.output, /"nextSafeAction": "inspect-source-directly"/);
     assert.equal(await readFile(bindingPath, "utf8"), before, "status must not write binding state");
     const help = await run(["setup"], "help", fixture.main);
     assert.equal(help.code, 0);
