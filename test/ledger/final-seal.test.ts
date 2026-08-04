@@ -81,4 +81,3 @@ test("pure verification binds the external commit, its sole added seal, parent, 
   ];
   for (const value of cases) assert.throws(() => verifyFinalLedgerSeal(value as never), (error: unknown) => error instanceof LedgerError && error.code === "ledger-invalid-record");
 });
-

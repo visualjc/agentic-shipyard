@@ -57,4 +57,3 @@ test("refuses missing, duplicate, unsafe, cross-delivery, and self-referential s
     ]) await assert.rejects(sealDelivery(store, { deliveryId, productSha, recordPaths }), LedgerError);
   } finally { await rm(path, { recursive: true, force: true }); }
 });
-
