@@ -21,6 +21,4 @@ await writeFile(join(process.cwd(), ".fixture-observed.json"), JSON.stringify({
 }));
 if (process.env.FIXTURE_MODE === "timeout") await new Promise(() => {});
 if (process.env.FIXTURE_MODE === "fail") process.exit(7);
-await writeFile(outputPath,JSON.stringify({ reviewId: request.reviewId, productSha: request.productSha,
-  reviewer: "fixture", startedAt: "2026-08-04T00:00:00.000Z", finishedAt: "2026-08-04T00:00:00.000Z",
-  findings: [], successful: true }));
+await writeFile(outputPath,JSON.stringify({ findings: [], successful: true }));

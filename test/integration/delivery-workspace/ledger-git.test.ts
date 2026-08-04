@@ -169,6 +169,8 @@ test("preserves record bytes, atomically rejects a concurrent stale writer, and 
   } finally { await rm(path, { recursive: true, force: true }); }
 });
 
+test("current prefix inventory binds every record to its linear ledger ordinal",async()=>{const path=await repository();try{const ledger=new GitLedgerStore(path),first=await ledger.transact({expectedHead:undefined,writes:[{path:"deliveries/d/evidence/a.json",contents:"one"},{path:"deliveries/d/evidence/b.json",contents:"two"},{path:"deliveries/other/evidence/x.json",contents:"other"}]}),second=await ledger.transact({expectedHead:first,writes:[{path:"deliveries/d/evidence/a.json",contents:"updated",expectedContents:"one"}] }),inventory=await ledger.currentInventory("deliveries/d/evidence/");assert.equal(inventory.head,second);assert.deepEqual(inventory.entries,[{path:"deliveries/d/evidence/a.json",contents:"updated",ordinal:2},{path:"deliveries/d/evidence/b.json",contents:"two",ordinal:1}]);}finally{await rm(path,{recursive:true,force:true});}});
+
 test("ignores hostile inherited Git repository-control environment", async () => {
   const primary = await repository(); const redirected = await repository();
   const inherited = Object.fromEntries(["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "DEVELOPER_DIR", "SDKROOT", "TOOLCHAINS"].map((key) => [key, process.env[key]]));

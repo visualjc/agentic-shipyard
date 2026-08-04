@@ -2,23 +2,29 @@ import { ContextError } from "./errors.js";
 import { validateContextEnvelope } from "./envelope.js";
 import type { ContextAuthorityResolver, ContextDispatchExpectation, ContextEnvelope, PinnedLedgerReader, ProductShaReader } from "./types.js";
 import { sameTopology } from "../profile/policy.js";
+import { canonicalJson } from "../evidence/schema.js";
 
 export type LoadedContext = Readonly<{ envelope: ContextEnvelope; records: Readonly<Record<string, string>> }>;
+export type ContextAuthorityScope = Readonly<{ repoRoot:string; deliveryId:string; commonDirectory:string; actorLogin:string }>;
 
 /** Loads a role envelope only after proving the current product still matches its pin. */
 export class ContextReader {
   constructor(private readonly expectation: ContextDispatchExpectation, private readonly authority: ContextAuthorityResolver, private readonly products: ProductShaReader, private readonly ledger: PinnedLedgerReader) {}
+
+  /** Re-derives the repository/delivery scope from the trusted dispatch expectation and live binding. */
+  async authorityScope():Promise<ContextAuthorityScope>{
+    let active:Readonly<{profileName:string;profileFingerprint:string;commonDirectory:string;actorLogin:string;topology:ContextDispatchExpectation["topology"]}>;
+    try{active=JSON.parse(canonicalJson(await this.authority.resolve(this.expectation.repoRoot)));}catch{throw new ContextError("context-binding-mismatch","The active binding/profile authority is invalid.");}
+    if(!active||typeof active!=="object"||Object.keys(active).sort().join(",")!=="actorLogin,commonDirectory,profileFingerprint,profileName,topology"||typeof active.profileName!=="string"||typeof active.profileFingerprint!=="string"||typeof active.commonDirectory!=="string"||active.commonDirectory.trim()===""||typeof active.actorLogin!=="string"||active.actorLogin.trim()===""||active.profileName!==this.expectation.profile||active.profileFingerprint!==this.expectation.profileFingerprint||canonicalJson(active.topology)!==canonicalJson(this.expectation.topology))throw new ContextError("context-binding-mismatch","The active binding/profile authority no longer matches the trusted dispatch capability.");
+    return deepFreeze({repoRoot:this.expectation.repoRoot,deliveryId:this.expectation.deliveryId,commonDirectory:active.commonDirectory,actorLogin:active.actorLogin});
+  }
 
   async load(untrustedEnvelope: ContextEnvelope): Promise<LoadedContext> {
     const envelope = validateContextEnvelope(untrustedEnvelope);
     if (!matchesExpectation(envelope, this.expectation)) {
       throw new ContextError("context-dispatch-mismatch", "The serialized envelope does not match the trusted dispatch capability.");
     }
-    const active = await this.authority.resolve(this.expectation.repoRoot);
-    if (active.profileName !== this.expectation.profile || active.profileFingerprint !== this.expectation.profileFingerprint
-      || !sameTopology(active.topology, this.expectation.topology)) {
-      throw new ContextError("context-binding-mismatch", "The active binding/profile authority no longer matches the trusted dispatch capability.");
-    }
+    await this.authorityScope();
     const current = await this.products.currentProductSha(envelope.adapter.repoRoot);
     if (current !== envelope.productSha) {
       throw new ContextError("context-stale-product", "The product SHA changed; create a fresh context envelope before reading ledger records.");

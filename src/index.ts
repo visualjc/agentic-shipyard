@@ -55,7 +55,7 @@ export type { LedgerFailureCode } from "./ledger/errors.js";
 export { applyLedgerTransaction, validLedgerPath } from "./ledger/transaction.js";
 export { createFinalLedgerSeal, finalSealManifest, finalSealPath, sealDelivery, validateFinalLedgerSeal, verifyFinalLedgerSeal } from "./ledger/final-seal.js";
 export type { CreateFinalLedgerSeal, FinalLedgerSeal, FinalLedgerSealManifestEntry, FinalLedgerSealObservation, SealDeliveryRequest } from "./ledger/final-seal.js";
-export type { LedgerCommitChange, LedgerCommitInspection, LedgerSnapshot, LedgerStore, LedgerTransaction, LedgerWrite } from "./ledger/types.js";
+export type { LedgerCommitChange, LedgerCommitInspection, LedgerInventory, LedgerInventoryEntry, LedgerInventoryReader, LedgerSnapshot, LedgerStore, LedgerTransaction, LedgerWrite } from "./ledger/types.js";
 export { createGitLedgerStore, GitLedgerStore } from "./adapters/ledger-git.js";
 export { WorkspaceError } from "./workspace/errors.js";
 export type { WorkspaceFailureCode } from "./workspace/errors.js";
@@ -68,7 +68,7 @@ export { ContextError } from "./context/errors.js";
 export type { ContextFailureCode } from "./context/errors.js";
 export { allowedRecordPaths, createEnvelope, validateContextEnvelope } from "./context/envelope.js";
 export { ContextReader } from "./context/reader.js";
-export type { LoadedContext } from "./context/reader.js";
+export type { ContextAuthorityScope, LoadedContext } from "./context/reader.js";
 export { CONTEXT_ROLES } from "./context/types.js";
 export type { ContextAdapterRequest, ContextAuthorityResolver, ContextDispatchExpectation, ContextEnvelope, ContextEnvelopeInput, ContextRole, PinnedLedgerReader, ProductShaReader } from "./context/types.js";
 
@@ -81,8 +81,11 @@ export type { AcceptanceEvidence, AcceptanceItem, EvidenceDecision, EvidenceMani
 export { createTrustedCodexReviewOperation } from "./review/factory.js";
 export type { TrustedCodexReviewConfig, TrustedCodexReviewOperation, TrustedCodexReviewOperationDependencies } from "./review/factory.js";
 export { ReviewError } from "./review/errors.js";
-export { evaluatePinnedEvidenceGate, resolvePinnedEvidenceRefs } from "./acceptance/service.js";
-export { evidencePath, persistEvidence } from "./acceptance/ledger.js";
+export { createTrustedAcceptanceGate } from "./acceptance/gate.js";
+export type { EvidenceClock, TrustedAcceptanceGate, TrustedAcceptanceGateDependencies } from "./acceptance/gate.js";
+export { createTrustedFindingResolutionWriter } from "./acceptance/resolution.js";
+export type { FindingResolutionInput, TrustedFindingResolutionDependencies, TrustedFindingResolutionWriter } from "./acceptance/resolution.js";
+export { evidencePath } from "./acceptance/ledger.js";
 export { acceptanceStatusContributor } from "./acceptance/status.js";
 
 // Command-scoped GitHub API and Git-transport boundaries.

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { LedgerError } from "../ledger/errors.js";
 import { applyLedgerTransaction, validLedgerPath } from "../ledger/transaction.js";
-import type { GitObjectFormat, LedgerCommitChange, LedgerCommitInspection, LedgerSnapshot, LedgerStore, LedgerTransaction, ObjectFormatAuthority } from "../ledger/types.js";
+import type { GitObjectFormat, LedgerCommitChange, LedgerCommitInspection, LedgerInventory, LedgerInventoryReader, LedgerSnapshot, LedgerStore, LedgerTransaction, ObjectFormatAuthority } from "../ledger/types.js";
 import type { PinnedLedgerReader } from "../context/types.js";
 import { canonicalGitExecutable, DEFAULT_NODE_GIT_EXECUTABLE, sanitizedGitEnvironment } from "./git-transport.js";
 import { redactGitTransportDiagnostic } from "../github/git-transport.js";
@@ -19,7 +19,7 @@ const MAX_COMMAND_OUTPUT_BYTES = 1_048_576;
 const KILL_TEARDOWN_TIMEOUT_MS = 1_000;
 
 /** Git object-database ledger that never checks its orphan ref out in a product worktree. */
-export class GitLedgerStore implements LedgerStore, PinnedLedgerReader, ObjectFormatAuthority {
+export class GitLedgerStore implements LedgerStore, PinnedLedgerReader, LedgerInventoryReader, ObjectFormatAuthority {
   static readonly ref = "refs/heads/shipyard-ledger";
   /** The executable is resolved lazily so package import/construction is portable. */
   private readonly configuredGitExecutable: string;
@@ -46,6 +46,19 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader, ObjectFo
     }
     if (head) await this.assertIsolatedHistory(head, head);
     return { head, records };
+  }
+
+  /** Inventories one safe prefix at the current ledger head and derives order only from linear commit ancestry. */
+  async currentInventory(prefix:string):Promise<LedgerInventory>{
+    if(typeof prefix!=="string"||!prefix.endsWith("/")||!validLedgerPath(`${prefix}record`))throw new LedgerError("ledger-invalid-path","Ledger inventory requires a normalized relative prefix.");
+    const head=await this.optionalRef(GitLedgerStore.ref);if(!head)throw new LedgerError("ledger-unavailable","The configured ledger ref is unavailable.");
+    await this.assertIsolatedHistory(head,head);
+    const ancestry=await this.gitRequired(["rev-list","--first-parent","--reverse","--parents",head]),ordinals=new Map<string,number>();
+    for(const [index,line] of ancestry.split("\n").entries()){const fields=line.split(" ");if(fields.length>2||!fields[0])throw new LedgerError("ledger-invalid-record","Ledger history must be linear.");ordinals.set(fields[0],index+1);}
+    const rawPaths=await this.gitRequired(["ls-tree","-r","-z","--name-only",head,"--",prefix]),paths=rawPaths===""?[]:rawPaths.split("\0").filter(Boolean).sort();
+    const entries=[];for(const path of paths){if(!path.startsWith(prefix)||!validLedgerPath(path))throw new LedgerError("ledger-invalid-record","Ledger inventory returned an unsafe path.");const commit=await this.gitRequired(["log","-1","--format=%H",head,"--",path]),ordinal=ordinals.get(commit),contents=await this.optionalRecord(head,path);if(!ordinal||contents===undefined)throw new LedgerError("ledger-invalid-record","Ledger inventory could not bind a record to its ancestry.");entries.push(Object.freeze({path,contents,ordinal}));}
+    await this.assertIsolatedHistory(head,head);
+    return Object.freeze({head,entries:Object.freeze(entries)});
   }
 
   /** Reads only the exact, existing ledger commit named by a context envelope. */

@@ -1,0 +1,42 @@
+import type { ContextAuthorityScope, ContextReader } from "../context/reader.js";
+import type { PinnedLedgerReader, ProductShaReader } from "../context/types.js";
+import type { FilesystemAdapter } from "../adapters/filesystem.js";
+import type { LedgerStore } from "../ledger/types.js";
+import type { MutationLockService } from "../locking/mutation-lock.js";
+import type { FindingResolution } from "../evidence/types.js";
+import type { EvidenceClock } from "./gate.js";
+import { canonicalJson, validateFindingResolution, validateReviewResult } from "../evidence/schema.js";
+import { evidencePath } from "./ledger.js";
+import { isAbsolute, join } from "node:path";
+import { EvidenceError } from "../evidence/errors.js";
+
+export type FindingResolutionInput=Readonly<{reviewId:string;findingId:string;evidenceRefs:readonly string[]}>;
+export type TrustedFindingResolutionDependencies=Readonly<{context:ContextReader;products:ProductShaReader;ledger:LedgerStore & PinnedLedgerReader;mutationLocks:MutationLockService;filesystem:Pick<FilesystemAdapter,"realpath"|"isDirectory">;clock:EvidenceClock}>;
+export interface TrustedFindingResolutionWriter{record(input:FindingResolutionInput):Promise<FindingResolution>;}
+
+/** Writes resolution identity and time only from the active bound authority and trusted clock. */
+export function createTrustedFindingResolutionWriter(rawDependencies:TrustedFindingResolutionDependencies):TrustedFindingResolutionWriter{
+  const dependencies=construction(rawDependencies),context=dependencies.context as ContextReader,products=dependencies.products as ProductShaReader,ledger=dependencies.ledger as LedgerStore & PinnedLedgerReader,mutationLocks=dependencies.mutationLocks as MutationLockService,filesystem=dependencies.filesystem as Pick<FilesystemAdapter,"realpath"|"isDirectory">,clock=dependencies.clock as EvidenceClock;
+  return Object.freeze({async record(rawInput:FindingResolutionInput){
+    const input=resolutionInput(rawInput),initial=await canonicalScope(await context.authorityScope(),filesystem),acquired=await mutationLocks.acquire(join(initial.commonDirectory,"shipyard-review.lock"),initial.commonDirectory,`finding-resolution:${initial.deliveryId}:${input.findingId}`);
+    try{
+      const current=await canonicalScope(await context.authorityScope(),filesystem);if(!sameScope(initial,current)||input.evidenceRefs.some(ref=>!allowedEvidenceRef(current.deliveryId,ref)))invalid();const productSha=await products.currentProductSha(current.repoRoot),reviewPath=evidencePath(current.deliveryId,`review-result-${input.reviewId}.json`),path=evidencePath(current.deliveryId,`finding-resolution-${input.findingId}.json`),paths=[reviewPath,...input.evidenceRefs,path],snapshot=ledgerSnapshot(await ledger.snapshot(paths),paths);if(!snapshot.head||typeof snapshot.records[reviewPath]!=="string"||snapshot.records[path]!==undefined||input.evidenceRefs.some(ref=>typeof snapshot.records[ref]!=="string"))invalid();
+      let review;try{review=validateReviewResult(JSON.parse(snapshot.records[reviewPath]!));}catch{invalid();}if(review.reviewId!==input.reviewId||review.productSha!==productSha||review.reviewer!=="codex"||!review.findings.some(finding=>finding.id===input.findingId&&finding.disposition==="accepted"))invalid();
+      const resolvedAt=now(clock),document=validateResolution({schemaVersion:1,findingId:input.findingId,reviewId:input.reviewId,resolvedProductSha:productSha,resolver:current.actorLogin,resolvedAt,evidenceRefs:input.evidenceRefs}),contents=canonicalJson(document),sha=await ledger.transact({expectedHead:snapshot.head,writes:[{path,contents}],message:"shipyard finding resolution"}),pinned=ledgerRecords(await ledger.read(sha,[path]),[path]),finalScope=await canonicalScope(await context.authorityScope(),filesystem);if(pinned[path]!==contents||await products.currentProductSha(current.repoRoot)!==productSha||!sameScope(current,finalScope))invalid();return document;
+    }finally{await acquired.release();}
+  }});
+}
+
+function resolutionInput(value:unknown):FindingResolutionInput{let input:any;try{input=JSON.parse(canonicalJson(value));}catch{invalid();}if(!input||typeof input!=="object"||Object.keys(input).sort().join(",")!=="evidenceRefs,findingId,reviewId"||!safeId(input.reviewId)||!safeId(input.findingId)||!Array.isArray(input.evidenceRefs)||input.evidenceRefs.length===0||new Set(input.evidenceRefs).size!==input.evidenceRefs.length||input.evidenceRefs.some((ref:unknown)=>typeof ref!=="string"||!safePath(ref)))invalid();return Object.freeze({...input,evidenceRefs:Object.freeze([...input.evidenceRefs])});}
+async function canonicalScope(raw:ContextAuthorityScope,filesystem:Pick<FilesystemAdapter,"realpath"|"isDirectory">):Promise<ContextAuthorityScope>{try{const scope=JSON.parse(canonicalJson(raw));if(!scope||typeof scope!=="object"||Object.keys(scope).sort().join(",")!=="actorLogin,commonDirectory,deliveryId,repoRoot"||!isAbsolute(scope.repoRoot)||!safeId(scope.deliveryId)||!isAbsolute(scope.commonDirectory)||scope.commonDirectory==="/"||typeof scope.actorLogin!=="string"||scope.actorLogin.trim()===""||!await filesystem.isDirectory(scope.commonDirectory))throw new Error();const [repoRoot,commonDirectory]=await Promise.all([filesystem.realpath(scope.repoRoot),filesystem.realpath(scope.commonDirectory)]);if(repoRoot!==scope.repoRoot||commonDirectory!==scope.commonDirectory)throw new Error();return Object.freeze(scope);}catch{invalid();}}
+function ledgerSnapshot(raw:unknown,paths:readonly string[]):Readonly<{head?:string;records:Readonly<Record<string,string>>}>{let value:any;try{value=JSON.parse(canonicalJson(raw));}catch{invalid();}const keys=value&&typeof value==="object"?Object.keys(value).sort().join(","):"";if(!value||typeof value!=="object"||(keys!=="records"&&keys!=="head,records")||(value.head!==undefined&&!fullSha(value.head))||!value.records||typeof value.records!=="object"||Array.isArray(value.records)||Object.keys(value.records).some((key:string)=>!paths.includes(key))||Object.values(value.records).some(contents=>typeof contents!=="string"))invalid();return Object.freeze(value);}
+function ledgerRecords(raw:unknown,paths:readonly string[]):Readonly<Record<string,string>>{let value:any;try{value=JSON.parse(canonicalJson(raw));}catch{invalid();}if(!value||typeof value!=="object"||Array.isArray(value)||Object.keys(value).length!==paths.length||Object.keys(value).some(key=>!paths.includes(key))||Object.values(value).some(contents=>typeof contents!=="string"))invalid();return Object.freeze(value);}
+function validateResolution(value:unknown):FindingResolution{try{return validateFindingResolution(value);}catch{invalid();}}
+function construction(value:unknown):Record<string,unknown>{const allowed=["context","products","ledger","mutationLocks","filesystem","clock"];if(!value||typeof value!=="object"||Array.isArray(value)||Object.getPrototypeOf(value)!==Object.prototype)invalid();const out:Record<string,unknown>={};for(const key of Reflect.ownKeys(value)){if(typeof key!=="string"||!allowed.includes(key))invalid();const descriptor=Object.getOwnPropertyDescriptor(value,key);if(!descriptor||!descriptor.enumerable||!("value" in descriptor))invalid();out[key]=descriptor.value;}if(allowed.some(key=>!(key in out)))invalid();return out;}
+function now(clock:EvidenceClock):string{let date:Date;try{date=clock.now();}catch{invalid();}if(!(date instanceof Date)||!Number.isFinite(date.getTime()))invalid();return date.toISOString();}
+function sameScope(left:ContextAuthorityScope,right:ContextAuthorityScope):boolean{return left.repoRoot===right.repoRoot&&left.deliveryId===right.deliveryId&&left.commonDirectory===right.commonDirectory&&left.actorLogin===right.actorLogin;}
+function safeId(value:unknown):value is string{return typeof value==="string"&&/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(value);}
+function safePath(value:string):boolean{return value.length>0&&!value.startsWith("/")&&!value.includes("\\")&&!value.split("/").some(part=>part===""||part==="."||part==="..");}
+function allowedEvidenceRef(deliveryId:string,ref:string):boolean{return safePath(ref)&&(ref.startsWith("resolution/")||ref.startsWith("evidence/")||ref.startsWith("logs/")||ref.startsWith(`deliveries/${deliveryId}/`));}
+function fullSha(value:unknown):value is string{return typeof value==="string"&&(/^[a-f0-9]{40}$/.test(value)||/^[a-f0-9]{64}$/.test(value));}
+function invalid():never{throw new EvidenceError("evidence-invalid","Trusted finding resolution is invalid.");}
