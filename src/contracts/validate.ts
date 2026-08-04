@@ -20,14 +20,25 @@ const version = (value: RecordValue, path: string, code: "invalid-profile" | "in
 };
 function repository(value: unknown, path: string, code: "invalid-profile" | "invalid-binding"): RepositoryRef {
   if (!isRecord(value)) invalid(code, path, "must be an object");
-  exactKeys(value, ["owner", "name", "remoteUrl", "defaultBranch"], path, code);
-  return { owner: nonEmpty(value.owner, `${path}.owner`, code), name: nonEmpty(value.name, `${path}.name`, code), remoteUrl: nonEmpty(value.remoteUrl, `${path}.remoteUrl`, code), defaultBranch: nonEmpty(value.defaultBranch, `${path}.defaultBranch`, code) };
+  exactKeys(value, ["owner", "name", "remote", "defaultBranch"], path, code);
+  return { owner: nonEmpty(value.owner, `${path}.owner`, code), name: nonEmpty(value.name, `${path}.name`, code), remote: validateRemoteExpectation(value.remote, `${path}.remote`, code), defaultBranch: nonEmpty(value.defaultBranch, `${path}.defaultBranch`, code) };
+}
+/** Validates the complete remote identity required before any setup mutation. */
+export function validateRemoteExpectation(value: unknown, path = "$", code: "invalid-profile" | "invalid-binding" = "invalid-profile"): RepositoryRef["remote"] {
+  if (!isRecord(value)) invalid(code, path, "must be an object");
+  exactKeys(value, ["name", "url"], path, code);
+  return { name: nonEmpty(value.name, `${path}.name`, code), url: nonEmpty(value.url, `${path}.url`, code) };
 }
 function topology(value: unknown, path: string, code: "invalid-profile" | "invalid-binding"): Topology {
   if (!isRecord(value)) invalid(code, path, "must be an object");
   if (value.kind === "staged-pair") {
     exactKeys(value, ["kind", "development", "destination"], path, code);
-    return { kind: "staged-pair", development: repository(value.development, `${path}.development`, code), destination: repository(value.destination, `${path}.destination`, code) };
+    const development = repository(value.development, `${path}.development`, code);
+    const destination = repository(value.destination, `${path}.destination`, code);
+    if (development.remote.name === destination.remote.name || development.remote.url === destination.remote.url) {
+      invalid(code, path, "staged-pair development and destination remotes must be distinct");
+    }
+    return { kind: "staged-pair", development, destination };
   }
   if (value.kind === "single-repository") {
     exactKeys(value, ["kind", "repository"], path, code);

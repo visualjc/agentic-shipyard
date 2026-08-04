@@ -3,7 +3,9 @@ export const CONTRACT_VERSION = 1 as const;
 export type ContractVersion = typeof CONTRACT_VERSION;
 
 export type GitHubActor = { login: string };
-export type RepositoryRef = { owner: string; name: string; remoteUrl: string; defaultBranch: string };
+/** A named remote is part of repository identity; URL-only matching is unsafe. */
+export type RemoteExpectation = { name: string; url: string };
+export type RepositoryRef = { owner: string; name: string; remote: RemoteExpectation; defaultBranch: string };
 
 export type StagedPairTopology = {
   kind: "staged-pair";

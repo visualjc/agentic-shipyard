@@ -12,7 +12,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test dist/test/contracts/*.test.js dist/test/status/*.test.js"
+    "test": "npm run build && node --test $(find dist/test -type f -name '*.test.js' | sort)"
   },
   "devDependencies": {
     "@types/node": "22.10.2",
