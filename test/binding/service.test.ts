@@ -8,8 +8,9 @@ import test from "node:test";
 import { nodeGit } from "../../src/adapters/git.js";
 import { BindingError } from "../../src/binding/errors.js";
 import { BindingService, newBindingDocument, validateTopology } from "../../src/binding/service.js";
+import { JsonBindingStore } from "../../src/binding/store.js";
 import { RepositoryBinding, RepositoryTopology } from "../../src/binding/types.js";
-import { FakeGit, MemoryBindingStore } from "../helpers/fakes.js";
+import { FakeGit, MemoryBindingStore, MemoryFilesystem } from "../helpers/fakes.js";
 
 const execFile = promisify(execFileCallback);
 const topology: RepositoryTopology = { kind: "staged-pair", development: { name: "origin", url: "https://example.test/development.git" }, destination: { name: "destination", url: "https://example.test/destination.git" } };
@@ -64,6 +65,32 @@ test("node Git adapter gives a linked worktree the main clone common-directory i
     await run("git", ["-C", main, "worktree", "add", "-b", "feature", linked]);
     assert.equal(await nodeGit.commonDirectory(main), await nodeGit.commonDirectory(linked));
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("binding store deep-validates hostile persisted documents", async () => {
+  const valid = binding();
+  const hostile = [
+    { version: 1, bindings: [{ ...valid, profile: "" }] },
+    { version: 1, bindings: [{ ...valid, createdAt: "not-a-date" }] },
+    { version: 1, bindings: [{ ...valid, surprise: true }] },
+    { version: 1, bindings: [{ ...valid, topology: { ...valid.topology, surprise: true } }] },
+    { version: 1, bindings: [{ ...valid, topology: { kind: "staged-pair", development: valid.topology.development } }] },
+    { version: 1, bindings: [{ ...valid, topology: { ...valid.topology, development: { ...valid.topology.development, name: " " } } }] },
+    { version: 1, bindings: [valid], surprise: true },
+    { version: 1, bindings: "not-an-array" },
+  ];
+  for (const candidate of hostile) {
+    const fs = new MemoryFilesystem();
+    fs.files.set("/bindings.json", JSON.stringify(candidate));
+    await assert.rejects(new JsonBindingStore(fs, "/bindings.json").read(), (error: unknown) => error instanceof BindingError && error.code === "binding-store-invalid");
+  }
+});
+
+test("binding store validates writes as well as reads", async () => {
+  const fs = new MemoryFilesystem();
+  const store = new JsonBindingStore(fs, "/bindings.json");
+  await assert.rejects(store.write({ version: 1, bindings: [{ ...binding(), createdAt: "2026-02-30T00:00:00.000Z" }] }), (error: unknown) => error instanceof BindingError && error.code === "binding-store-invalid");
+  assert.equal(fs.files.has("/bindings.json"), false);
 });
 
 async function run(command: string, args: string[]): Promise<void> { await execFile(command, args); }

@@ -1,5 +1,9 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+
+export type ExclusiveDirectoryResult<T> =
+  | { acquired: true; value: T }
+  | { acquired: false };
 
 /** Narrow filesystem boundary. Production code and tests can supply different implementations. */
 export interface FilesystemAdapter {
@@ -8,6 +12,12 @@ export interface FilesystemAdapter {
   /** Returns false when a file already exists; it must never overwrite it. */
   createTextExclusive(path: string, contents: string): Promise<boolean>;
   remove(path: string): Promise<void>;
+  /**
+   * Runs a lifecycle transition while holding an atomic mkdir-based guard.
+   * Every participant that can create, recover, or release the guarded state
+   * must use this boundary, eliminating check-then-remove replacement races.
+   */
+  withExclusiveDirectory<T>(path: string, operation: () => Promise<T>): Promise<ExclusiveDirectoryResult<T>>;
 }
 
 export const nodeFilesystem: FilesystemAdapter = {
@@ -37,5 +47,21 @@ export const nodeFilesystem: FilesystemAdapter = {
   },
   async remove(path) {
     await rm(path, { force: true });
+  },
+  async withExclusiveDirectory(path, operation) {
+    await mkdir(dirname(path), { recursive: true });
+    try {
+      await mkdir(path);
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return { acquired: false };
+      throw error;
+    }
+    try {
+      return { acquired: true, value: await operation() };
+    } finally {
+      // The guard is implementation state and always empty. rmdir is deliberate:
+      // it cannot recursively erase an unexpected path if invariants are broken.
+      await rmdir(path);
+    }
   },
 };

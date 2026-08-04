@@ -21,22 +21,29 @@ export class MutationLockService {
 
   async acquire(path: string, repository: string, operation: string): Promise<AcquiredMutationLock> {
     const record: MutationLockRecord = { version: 1, repository, operation, processId: this.process.processId(), host: this.process.hostName(), acquiredAt: this.process.now().toISOString() };
-    if (!await this.filesystem.createTextExclusive(path, JSON.stringify(record))) {
-      await this.recoverStale(path, repository);
+    const transition = await this.filesystem.withExclusiveDirectory(`${path}.lifecycle`, async () => {
       if (!await this.filesystem.createTextExclusive(path, JSON.stringify(record))) {
-        throw new MutationLockError("lock-held", "A mutation lock is already held for this repository.");
+        await this.recoverStaleWhileGuarded(path, repository);
+        if (!await this.filesystem.createTextExclusive(path, JSON.stringify(record))) {
+          throw new MutationLockError("lock-held", "A mutation lock is already held for this repository.");
+        }
       }
-    }
+    });
+    if (!transition.acquired) throw new MutationLockError("lock-held", "Mutation lock lifecycle is being changed by another process.");
     return { record, release: async () => {
-      const current = await this.read(path);
-      if (!current || current.host !== record.host || current.processId !== record.processId || current.acquiredAt !== record.acquiredAt) {
-        throw new MutationLockError("lock-unsafe-recovery", "Lock ownership changed; refusing to remove another owner’s lock.");
-      }
-      await this.filesystem.remove(path);
+      const release = await this.filesystem.withExclusiveDirectory(`${path}.lifecycle`, async () => {
+        const current = await this.read(path);
+        if (!sameIdentity(current, record)) {
+          throw new MutationLockError("lock-unsafe-recovery", "Lock ownership changed; refusing to remove another owner’s lock.");
+        }
+        await this.filesystem.remove(path);
+      });
+      if (!release.acquired) throw new MutationLockError("lock-held", "Mutation lock lifecycle is being changed by another process.");
     }};
   }
 
-  private async recoverStale(path: string, repository: string): Promise<void> {
+  /** Called only while the lifecycle directory guard is held. */
+  private async recoverStaleWhileGuarded(path: string, repository: string): Promise<void> {
     const existing = await this.read(path);
     if (!existing) return;
     if (existing.repository !== repository) throw new MutationLockError("lock-invalid", "Lock repository identity does not match requested repository.");
@@ -59,4 +66,9 @@ export class MutationLockService {
       return record as MutationLockRecord;
     } catch { throw new MutationLockError("lock-invalid", "Mutation lock file is malformed."); }
   }
+}
+
+function sameIdentity(left: MutationLockRecord | undefined, right: MutationLockRecord): boolean {
+  return left !== undefined && left.repository === right.repository && left.operation === right.operation &&
+    left.host === right.host && left.processId === right.processId && left.acquiredAt === right.acquiredAt;
 }

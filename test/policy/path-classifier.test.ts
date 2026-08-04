@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PathPolicy, PathPolicyError, classifyPath } from "../../src/policy/path-classifier.js";
+import { ContractValidationError } from "../../src/contracts/errors.js";
+import { PathPolicy } from "../../src/contracts/types.js";
+import { PathPolicyError, classifyPath } from "../../src/policy/path-classifier.js";
 
-const policy: PathPolicy = { version: 1, rules: [
+const policy: PathPolicy = { schemaVersion: 1, rules: [
   { owner: "product", pattern: "src/**" },
   { owner: "development-record", pattern: ".claude/**" },
   { owner: "development-generated", pattern: ".shipyard/generated/**" },
@@ -21,9 +23,20 @@ test("classifies every Shipyard ownership behavior through one reusable function
 });
 
 test("fails closed for unclassified, conflicting, and unsafe paths", () => {
-  const conflict: PathPolicy = { version: 1, rules: [...policy.rules, { owner: "scratch", pattern: "src/**" }] };
+  const conflict: PathPolicy = { schemaVersion: 1, rules: [...policy.rules, { owner: "scratch", pattern: "src/*" }] };
   const cases: Array<[PathPolicy, string, PathPolicyError["code"]]> = [
     [policy, "README.md", "unclassified-path"], [conflict, "src/index.ts", "conflicting-path-ownership"], [policy, "../token", "invalid-path"],
   ];
   for (const [candidate, path, code] of cases) assert.throws(() => classifyPath(candidate, path), (error: unknown) => error instanceof PathPolicyError && error.code === code);
+});
+
+test("validates the canonical path-policy contract at the enforcement seam", () => {
+  const hostile = [
+    { version: 1, rules: [{ owner: "product", pattern: "src/**" }] },
+    { schemaVersion: 1, rules: [{ owner: "not-an-owner", pattern: "src/**" }] },
+    { schemaVersion: 1, rules: [{ owner: "product", pattern: "src/**", surprise: true }] },
+  ];
+  for (const candidate of hostile) {
+    assert.throws(() => classifyPath(candidate as PathPolicy, "src/index.ts"), (error: unknown) => error instanceof ContractValidationError && error.code === "invalid-path-policy");
+  }
 });

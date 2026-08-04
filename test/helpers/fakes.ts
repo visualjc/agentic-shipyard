@@ -5,7 +5,15 @@ import { BindingDocument } from "../../src/binding/types.js";
 
 export class MemoryFilesystem implements FilesystemAdapter {
   readonly files = new Map<string, string>();
-  async readText(path: string): Promise<string | undefined> { return this.files.get(path); }
+  readonly directories = new Set<string>();
+  onRead?: (path: string, contents: string | undefined) => Promise<void>;
+  async readText(path: string): Promise<string | undefined> {
+    const contents = this.files.get(path);
+    const hook = this.onRead;
+    this.onRead = undefined;
+    if (hook) await hook(path, contents);
+    return contents;
+  }
   async writeTextAtomic(path: string, contents: string): Promise<void> { this.files.set(path, contents); }
   async createTextExclusive(path: string, contents: string): Promise<boolean> {
     if (this.files.has(path)) return false;
@@ -13,6 +21,12 @@ export class MemoryFilesystem implements FilesystemAdapter {
     return true;
   }
   async remove(path: string): Promise<void> { this.files.delete(path); }
+  async withExclusiveDirectory<T>(path: string, operation: () => Promise<T>) {
+    if (this.directories.has(path)) return { acquired: false } as const;
+    this.directories.add(path);
+    try { return { acquired: true, value: await operation() } as const; }
+    finally { this.directories.delete(path); }
+  }
 }
 
 export class FakeGit implements GitAdapter {
