@@ -1,34 +1,33 @@
 ---
 issue: 7
-updated: 2026-08-04T00:00:00Z
-status: planned-blocked
-progress: 0%
-blocked_by: [6]
+updated: 2026-08-04T13:34:34Z
+status: completed
+progress: 100%
 ---
 
 # Execution Record: Issue #7
 
-`../../7-analysis.md` is the controlling staged-pair delivery plan.  This task
-is deliberately blocked from implementation until Issue #6's exact-SHA
-acceptance and independent-review APIs are accepted, independently reviewed,
-and integrated.  The current Issue #6 branch is not authority.
+Implementation, two adversarial correction rounds, integration, and exact-SHA
+review are complete at product SHA
+`d03351135a44e9f2017ae1dedb646d488d33824c`.
 
-When unblocked, use four bounded streams: pure promotion manifests/payload
-state; locked Git-native initial/revision executor; scoped normal destination
-PR bridge; then serialized human-merge finalization and recovery.  Shared
-barrel, CLI/public-skill, status-shape, binding, ledger, GitHub, and sync
-surfaces remain owned by their existing tasks and require explicit handoff.
+The implementation provides strict promotion manifests and product-owned tree
+projection, a credential-isolated Git-native initial/revision executor, a
+type-limited destination-owned non-fork PR capability, and serialized
+human-merge-only finalization. It consumes a frozen #6 receipt, performs
+under-lock main CAS synchronization, uses ownership-proven workspace cleanup,
+and records sealed intent plus an append-only execution journal and final
+receipt. Every external step is revalidated and restartable.
 
-All tests are deterministic local Git and fake-provider tests.  This task must
-not contact GitHub, mutate a remote, use `NativeInteractive`, or reuse the
-retired private fixture.  A final claim must explicitly distinguish those
-deterministic results from the separately unapproved live-fixture gate.
+Terra-high review rejected earlier candidates for post-merge ancestry,
+stale-evidence resume ordering, writable-remote alias bypasses, lossy raw-path
+decoding, branch-delete crash gaps, and explicit SSH-port aliases. Medium
+implementation corrected each finding, added regressions, and obtained a final
+exact-SHA PASS with no P0–P3 finding.
 
-Initial promotion, each revision, and finalization fail closed on any stale
-binding/actor/ref/path/evidence/manifest/provider observation.  The destination
-PR is a normal destination-owned non-fork PR; destination feedback returns to
-the development branch for a new accepted/reviewed SHA, then appends one
-sanitized descendant destination commit without force push.  Shipyard never
-merges.  Post-merge finalization is checkpointed/resumable: seal ledger, tag
-development-only reviewed SHA, exactly sync mains, close development PR without
-merge, close the development issue, and delete only proven delivery branches.
+The clean integrated tree passed typecheck, 447 tests (445 pass, 0 fail, 2
+expected environment skips), package verification, and diff checks. All
+provider coverage is deterministic local Git/fake transport; no GitHub call,
+push, live private fixture, or ledger mutation occurred. See
+`../../evidence/issue-7-d033511.md` and
+`../../reviews/issue-7-d033511.md`.
