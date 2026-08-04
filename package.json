@@ -9,8 +9,22 @@
   "exports": {
     ".": "./dist/src/index.js"
   },
+  "bin": {
+    "shipyard": "./bin/shipyard",
+    "shipyard-setup": "./bin/shipyard-setup",
+    "shipyard-status": "./bin/shipyard-status",
+    "shipyard-help": "./bin/shipyard-help"
+  },
+  "files": [
+    "dist/src",
+    "bin",
+    "skills",
+    "docs",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test $(find dist/test -type f -name '*.test.js' | sort)"
   },
