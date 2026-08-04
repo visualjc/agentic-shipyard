@@ -33,7 +33,11 @@ that guard or resolving authority. Issue and pull-request inputs must be exact
 objects with non-whitespace string titles and bodies. Optional resume state may
 contain only canonical non-empty string issue and pull-request IDs. Malformed,
 extra, or non-string fields fail with a stable local error before any provider
-request, including actor verification.
+request, including actor verification. Snapshotting accepts only ordinary own
+enumerable data descriptors; accessors, symbols, unexpected prototypes, and
+hostile Proxy reflection traps are rejected without invoking getters. Any
+reflection failure is collapsed to the same generic redacted request error, so
+trap or getter messages cannot escape.
 
 Authenticated Git sync uses the active bound development repository only. It
 derives the configured remote name and exact URL from the live profile/binding,

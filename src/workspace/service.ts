@@ -5,11 +5,13 @@ import { isAbsolute, resolve } from "node:path";
 import { promisify } from "node:util";
 import { DeliveryError } from "../delivery/errors.js";
 import { canonicalAbsolutePath, canonicalWorkspaceBranch, newDeliveryRegistryDocument, stableDeliveryId } from "../delivery/registry.js";
-import type { DeliveryRegistry, DeliveryWorkspace } from "../delivery/types.js";
+import type { DeliveryReadinessVerifier, DeliveryRegistry, DeliveryWorkspace } from "../delivery/types.js";
 import { LedgerError } from "../ledger/errors.js";
 import type { LedgerStore } from "../ledger/types.js";
 import { MutationLockService } from "../locking/mutation-lock.js";
 import { WorkspaceError } from "./errors.js";
+import { createWorkspaceProofRecord, parseWorkspaceProofRecord, proofMatchesWorkspace, serializeWorkspaceProofRecord, workspaceProofRef } from "./proof.js";
+import type { WorkspaceProofObservation, WorkspaceProofRecord } from "./proof.js";
 import { canonicalGitExecutable, DEFAULT_NODE_GIT_EXECUTABLE, sanitizedGitEnvironment } from "../adapters/git-transport.js";
 
 const execFileAsync = promisify(execFile);
@@ -23,26 +25,23 @@ export type WorktreeEnsureIntent = Readonly<
   | { mode: "create"; startSha: string }
   | { mode: "attach" }
 >;
-export interface WorkspaceGit {
+export interface WorkspaceGit extends DeliveryReadinessVerifier {
   commonDirectory(repositoryPath: string): Promise<string>;
   worktreeExists(path: string): Promise<boolean>;
   worktreeIdentity(path: string): Promise<WorkspaceGitIdentity | undefined>;
   branchExists(repositoryPath: string, branch: string): Promise<boolean>;
   branchHead(repositoryPath: string, branch: string): Promise<string | undefined>;
-  /** Atomically creates the ref and records this claim's token in its reflog. */
-  createClaimedBranch(repositoryPath: string, branch: string, startSha: string, token: string): Promise<boolean>;
-  /** True only when the canonical branch's creation reflog marker matches the claim. */
-  branchCreationMatches(repositoryPath: string, branch: string, token: string): Promise<boolean>;
-  /** Reads the token-keyed local readiness proof and its exact creation marker. */
-  readinessProof(repositoryPath: string, token: string): Promise<WorkspaceReadinessProof | undefined>;
-  /** Atomically verifies the branch start SHA and creates the immutable readiness proof. */
-  createReadinessProof(repositoryPath: string, branch: string, startSha: string, token: string): Promise<boolean>;
+  /** Atomically creates both the branch and its immutable ownership-proof ref. */
+  createClaimedBranch(repositoryPath: string, branch: string, startSha: string, ownership: WorkspaceProofRecord): Promise<boolean>;
+  ownershipProof(repositoryPath: string, token: string): Promise<WorkspaceProofObservation>;
+  readinessProof(repositoryPath: string, token: string): Promise<WorkspaceProofObservation>;
+  /** Atomically verifies branch and ownership refs, then creates readiness. */
+  createReadinessProof(repositoryPath: string, branch: string, startSha: string, ownership: WorkspaceProofRecord, readiness: WorkspaceProofRecord): Promise<boolean>;
   productHead(repositoryPath: string): Promise<string>;
   /** True only when this invocation successfully created the linked worktree. */
   ensureWorktree(repositoryPath: string, branch: string, path: string, intent: WorktreeEnsureIntent): Promise<boolean>;
 }
 export type WorkspaceGitIdentity = Readonly<{ commonDirectory: string; branch: string }>;
-export type WorkspaceReadinessProof = Readonly<{ startSha: string; marker: string | undefined }>;
 export type InitialDeliveryLedgerRecord = Readonly<{
   schemaVersion: 1;
   deliveryId: string;
@@ -113,24 +112,34 @@ export class WorkspaceService {
         } catch (error: unknown) { if (error instanceof DeliveryError) throw new WorkspaceError("workspace-registry-invalid", error.message); throw error; }
       }
       const claimedBranchExists = await this.git.branchExists(request.repositoryPath, request.branch);
-      if (claimed.state === "ready" && !claimedBranchExists) {
-        throw new WorkspaceError("workspace-conflict", "The ready canonical feature branch is missing.");
-      }
-      const readinessProof = claimed.state === "creating" ? await this.git.readinessProof(request.repositoryPath, claimed.creationToken) : undefined;
-      if (readinessProof && !matchesReadinessProof(readinessProof, provenance, claimed.creationToken)) {
-        throw new WorkspaceError("workspace-conflict", "The delivery readiness proof does not match this creating claim.");
+      const ownershipRecord = createWorkspaceProofRecord("ownership", claimed, provenance.startProductSha);
+      const readinessRecord = createWorkspaceProofRecord("readiness", claimed, provenance.startProductSha);
+      let ownershipProof = await this.git.ownershipProof(request.repositoryPath, claimed.creationToken);
+      let readinessProof = await this.git.readinessProof(request.repositoryPath, claimed.creationToken);
+      assertProofNotForeign(ownershipProof, ownershipRecord, "ownership");
+      assertProofNotForeign(readinessProof, readinessRecord, "readiness");
+      if (claimed.state === "ready" && (!claimedBranchExists || !proofExactlyMatches(ownershipProof, ownershipRecord) || !proofExactlyMatches(readinessProof, readinessRecord))) {
+        throw new WorkspaceError("workspace-conflict", "The ready delivery is missing its exact branch, ownership proof, or readiness proof.");
       }
       if (claimed.state === "creating") {
-        if (!readinessProof) {
-          if (claimedBranchExists) await this.assertCreatingBranchProvenance(request, provenance, claimed.creationToken);
-          if (!claimedBranchExists && !await this.git.createClaimedBranch(request.repositoryPath, request.branch, provenance.startProductSha, claimed.creationToken)) {
-            throw new WorkspaceError("workspace-conflict", "The canonical feature branch appeared during creation; refusing to adopt it.");
+        if (proofExactlyMatches(readinessProof, readinessRecord)) {
+          if (!proofExactlyMatches(ownershipProof, ownershipRecord) || !claimedBranchExists) {
+            throw new WorkspaceError("workspace-conflict", "The readiness-proven delivery is missing its exact ownership proof or branch.");
           }
-          // The branch may have been replaced or advanced after it was claimed.
-          // Prove both the recorded starting SHA and creation reflog marker at
-          // the last possible point before attaching a worktree.
-          await this.assertCreatingBranchProvenance(request, provenance, claimed.creationToken);
-        } else if (!claimedBranchExists) {
+        } else if (proofExactlyMatches(ownershipProof, ownershipRecord)) {
+          if (!claimedBranchExists || await this.git.branchHead(request.repositoryPath, request.branch) !== provenance.startProductSha) {
+            throw new WorkspaceError("workspace-conflict", "The ownership-proven creating branch no longer matches its ledger start SHA.");
+          }
+        } else if (claimedBranchExists) {
+          throw new WorkspaceError("workspace-conflict", "The creating branch exists without this claim's immutable ownership proof.");
+        } else {
+          if (!await this.git.createClaimedBranch(request.repositoryPath, request.branch, provenance.startProductSha, ownershipRecord)) {
+            throw new WorkspaceError("workspace-conflict", "The canonical feature branch or ownership proof appeared during creation; refusing to adopt it.");
+          }
+          ownershipProof = await this.git.ownershipProof(request.repositoryPath, claimed.creationToken);
+          if (!proofExactlyMatches(ownershipProof, ownershipRecord)) throw new WorkspaceError("workspace-conflict", "Git did not create the exact branch ownership proof.");
+        }
+        if (!await this.git.branchExists(request.repositoryPath, request.branch)) {
           throw new WorkspaceError("workspace-conflict", "The readiness-proven canonical feature branch is missing.");
         }
       }
@@ -140,19 +149,19 @@ export class WorkspaceService {
       const worktreeIntent: WorktreeEnsureIntent = { mode: "attach" };
       await this.ensureExpectedWorktree(request, actualCommonDirectory, worktreeIntent);
       if (claimed.state === "creating") {
-        if (!readinessProof) {
-          await this.assertCreatingBranchProvenance(request, provenance, claimed.creationToken);
+        if (!proofExactlyMatches(readinessProof, readinessRecord)) {
+          ownershipProof = await this.git.ownershipProof(request.repositoryPath, claimed.creationToken);
+          if (!proofExactlyMatches(ownershipProof, ownershipRecord)) throw new WorkspaceError("workspace-conflict", "The exact ownership proof disappeared before readiness.");
           // This transaction is the readiness linearization point: Git creates
-          // the durable token proof only if the feature ref is still exactly at
-          // the ledger start SHA. A later branch move is therefore after ready.
-          if (!await this.git.createReadinessProof(request.repositoryPath, request.branch, provenance.startProductSha, claimed.creationToken)) {
-            throw new WorkspaceError("workspace-conflict", "The canonical feature branch changed before readiness could be proven.");
-          }
-          const createdProof = await this.git.readinessProof(request.repositoryPath, claimed.creationToken);
-          if (!createdProof || !matchesReadinessProof(createdProof, provenance, claimed.creationToken)) {
-            throw new WorkspaceError("workspace-conflict", "Git did not create the exact delivery readiness proof.");
+          // a canonical blob proof only if both the feature and ownership refs
+          // still equal their expected immutable values.
+          if (!await this.git.createReadinessProof(request.repositoryPath, request.branch, provenance.startProductSha, ownershipRecord, readinessRecord)) {
+            throw new WorkspaceError("workspace-conflict", "The canonical feature branch or ownership proof changed before readiness could be proven.");
           }
         }
+        ownershipProof = await this.git.ownershipProof(request.repositoryPath, claimed.creationToken);
+        readinessProof = await this.git.readinessProof(request.repositoryPath, claimed.creationToken);
+        if (!proofExactlyMatches(ownershipProof, ownershipRecord) || !proofExactlyMatches(readinessProof, readinessRecord)) throw new WorkspaceError("workspace-conflict", "Git did not retain the exact delivery ownership and readiness proofs.");
         try { await this.registry.write(newDeliveryRegistryDocument((document?.workspaces ?? []).filter((candidate) => candidate.deliveryId !== request.deliveryId).concat({ ...readyWorkspace, creationToken: claimed.creationToken }))); }
         catch (error: unknown) { if (error instanceof DeliveryError) throw new WorkspaceError("workspace-registry-invalid", error.message); throw error; }
       }
@@ -221,13 +230,6 @@ export class WorkspaceService {
     }
   }
 
-  private async assertCreatingBranchProvenance(request: CreateOrResumeDelivery, provenance: InitialDeliveryLedgerRecord, token: string): Promise<void> {
-    if (await this.git.branchHead(request.repositoryPath, request.branch) !== provenance.startProductSha
-      || !await this.git.branchCreationMatches(request.repositoryPath, request.branch, token)) {
-      throw new WorkspaceError("workspace-conflict", "The creating canonical feature branch does not match this delivery claim.");
-    }
-  }
-
   /**
    * The global nested-lock order is registry, then Git common-directory.
    * Tracking takes only the latter, so it cannot form an inverse lock cycle.
@@ -279,6 +281,17 @@ export function createNodeWorkspaceGit(executable = DEFAULT_NODE_GIT_EXECUTABLE)
     if (result === undefined) throw new Error(`Git worktree operation failed: ${args.join(" ")}`);
     return result;
   };
+  const gitRawRequired = async (repositoryPath: string, args: string[]): Promise<string> => {
+    try { return (await execFileAsync(gitExecutable(), ["-C", repositoryPath, ...args], { encoding: "utf8", env: workspaceGitEnvironment() })).stdout; }
+    catch { throw new Error(`Git worktree operation failed: ${args.join(" ")}`); }
+  };
+  const readProof = async (repositoryPath: string, kind: "ownership" | "readiness", token: string): Promise<WorkspaceProofObservation> => {
+    const ref = workspaceProofRef(kind, token);
+    if (await git(repositoryPath, ["rev-parse", "--verify", "--quiet", ref]) === undefined) return { exists: false };
+    if (await gitRequired(repositoryPath, ["cat-file", "-t", ref]) !== "blob") return { exists: true };
+    const record = parseWorkspaceProofRecord(await gitRawRequired(repositoryPath, ["cat-file", "blob", ref]));
+    return record ? { exists: true, record } : { exists: true };
+  };
   const workspaceGit: WorkspaceGit = {
   async commonDirectory(repositoryPath) {
     const commonDirectory = await gitRequired(repositoryPath, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
@@ -294,27 +307,28 @@ export function createNodeWorkspaceGit(executable = DEFAULT_NODE_GIT_EXECUTABLE)
   },
   async branchExists(repositoryPath, branch) { return (await git(repositoryPath, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`])) !== undefined; },
   async branchHead(repositoryPath, branch) { return git(repositoryPath, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]); },
-  async createClaimedBranch(repositoryPath, branch, startSha, token) {
-    const nullOid = "0".repeat(startSha.length);
-    try {
-      await gitRequired(repositoryPath, ["update-ref", "--create-reflog", "-m", creationMarker(token), `refs/heads/${branch}`, startSha, nullOid]);
-      return true;
-    } catch (error: unknown) {
-      if (await workspaceGit.branchExists(repositoryPath, branch)) return false;
-      throw error;
-    }
-  },
-  async branchCreationMatches(repositoryPath, branch, token) { return await git(repositoryPath, ["reflog", "show", "-1", "--format=%gs", `refs/heads/${branch}`]) === creationMarker(token); },
-  async readinessProof(repositoryPath, token) {
-    const ref = readinessProofRef(token);
-    const startSha = await git(repositoryPath, ["rev-parse", "--verify", "--quiet", ref]);
-    if (startSha === undefined) return undefined;
-    return { startSha, marker: await git(repositoryPath, ["reflog", "show", "-1", "--format=%gs", ref]) };
-  },
-  async createReadinessProof(repositoryPath, branch, startSha, token) {
-    const transaction = `start\nverify refs/heads/${branch} ${startSha}\ncreate ${readinessProofRef(token)} ${startSha}\nprepare\ncommit\n`;
-    try { await gitWithInputRequired(gitExecutable(), repositoryPath, ["update-ref", "--stdin", "--create-reflog", "-m", readinessMarker(token)], transaction); return true; }
+  async createClaimedBranch(repositoryPath, branch, startSha, ownership) {
+    const ownershipBlob = await gitWithInputRequired(gitExecutable(), repositoryPath, ["hash-object", "-w", "--stdin"], serializeWorkspaceProofRecord(ownership));
+    const transaction = `start\ncreate refs/heads/${branch} ${startSha}\ncreate ${workspaceProofRef("ownership", ownership.creationToken)} ${ownershipBlob}\nprepare\ncommit\n`;
+    try { await gitWithInputRequired(gitExecutable(), repositoryPath, ["update-ref", "--stdin"], transaction); return true; }
     catch { return false; }
+  },
+  async ownershipProof(repositoryPath, token) { return readProof(repositoryPath, "ownership", token); },
+  async readinessProof(repositoryPath, token) { return readProof(repositoryPath, "readiness", token); },
+  async createReadinessProof(repositoryPath, branch, startSha, ownership, readiness) {
+    const ownershipBlob = await gitWithInputRequired(gitExecutable(), repositoryPath, ["hash-object", "-w", "--stdin"], serializeWorkspaceProofRecord(ownership));
+    const readinessBlob = await gitWithInputRequired(gitExecutable(), repositoryPath, ["hash-object", "-w", "--stdin"], serializeWorkspaceProofRecord(readiness));
+    const transaction = `start\nverify refs/heads/${branch} ${startSha}\nverify ${workspaceProofRef("ownership", ownership.creationToken)} ${ownershipBlob}\ncreate ${workspaceProofRef("readiness", readiness.creationToken)} ${readinessBlob}\nprepare\ncommit\n`;
+    try { await gitWithInputRequired(gitExecutable(), repositoryPath, ["update-ref", "--stdin"], transaction); return true; }
+    catch { return false; }
+  },
+  async verifyReadyWorkspace(repositoryPath, workspace) {
+    const ownership = await readProof(repositoryPath, "ownership", workspace.creationToken);
+    const readiness = await readProof(repositoryPath, "readiness", workspace.creationToken);
+    return ownership.exists && ownership.record !== undefined && readiness.exists && readiness.record !== undefined
+      && proofMatchesWorkspace(ownership.record, "ownership", workspace)
+      && proofMatchesWorkspace(readiness.record, "readiness", workspace)
+      && ownership.record.startProductSha === readiness.record.startProductSha;
   },
   async productHead(repositoryPath) { return gitRequired(repositoryPath, ["rev-parse", "--verify", "HEAD"]); },
   async ensureWorktree(repositoryPath, branch, path, intent) {
@@ -346,14 +360,11 @@ function sameProvenance(record: InitialDeliveryLedgerRecord, request: CreateOrRe
 function workspaceGitEnvironment(): NodeJS.ProcessEnv {
   return sanitizedGitEnvironment();
 }
-function creationMarker(token: string): string { return `shipyard-workspace-create:${token}`; }
-function readinessMarker(token: string): string { return `shipyard-workspace-ready:${token}`; }
-function readinessProofRef(token: string): string {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(token)) throw new Error("Invalid workspace creation token.");
-  return `refs/shipyard/workspace-ready/${token}`;
+function proofExactlyMatches(observation: WorkspaceProofObservation, expected: WorkspaceProofRecord): boolean {
+  return observation.exists && observation.record !== undefined && serializeWorkspaceProofRecord(observation.record) === serializeWorkspaceProofRecord(expected);
 }
-function matchesReadinessProof(proof: WorkspaceReadinessProof, provenance: InitialDeliveryLedgerRecord, token: string): boolean {
-  return proof.startSha === provenance.startProductSha && proof.marker === readinessMarker(token);
+function assertProofNotForeign(observation: WorkspaceProofObservation, expected: WorkspaceProofRecord, kind: "ownership" | "readiness"): void {
+  if (observation.exists && !proofExactlyMatches(observation, expected)) throw new WorkspaceError("workspace-conflict", `The delivery ${kind} proof does not match this claim.`);
 }
 async function gitWithInputRequired(executable: string, repositoryPath: string, args: readonly string[], input: string): Promise<string> {
   return new Promise((resolvePromise, reject) => {

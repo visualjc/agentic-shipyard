@@ -32,7 +32,7 @@ export { JsonDeliveryRegistry, canonicalAbsolutePath, canonicalWorkspaceBranch, 
 export { DeliveryResolver } from "./delivery/resolver.js";
 export { deliveryStatusContributor } from "./delivery/status.js";
 export type { DeliveryStatusPins } from "./delivery/status.js";
-export type { DeliveryRegistry, DeliveryRegistryDocument, DeliveryResolutionRequest, DeliveryWorkspace, ResolvedDelivery } from "./delivery/types.js";
+export type { DeliveryReadinessVerifier, DeliveryRegistry, DeliveryRegistryDocument, DeliveryResolutionRequest, DeliveryWorkspace, ResolvedDelivery } from "./delivery/types.js";
 export { LedgerError } from "./ledger/errors.js";
 export type { LedgerFailureCode } from "./ledger/errors.js";
 export { applyLedgerTransaction, validLedgerPath } from "./ledger/transaction.js";
@@ -43,7 +43,8 @@ export { createGitLedgerStore, GitLedgerStore } from "./adapters/ledger-git.js";
 export { WorkspaceError } from "./workspace/errors.js";
 export type { WorkspaceFailureCode } from "./workspace/errors.js";
 export { createNodeWorkspaceGit, WorkspaceService, nodeWorkspaceGit } from "./workspace/service.js";
-export type { CreateOrResumeDelivery, InitialDeliveryLedgerRecord, WorkspaceGit, WorkspaceGitIdentity, WorkspaceReadinessProof, WorktreeEnsureIntent } from "./workspace/service.js";
+export type { CreateOrResumeDelivery, InitialDeliveryLedgerRecord, WorkspaceGit, WorkspaceGitIdentity, WorktreeEnsureIntent } from "./workspace/service.js";
+export type { WorkspaceProofKind, WorkspaceProofObservation, WorkspaceProofRecord } from "./workspace/proof.js";
 
 // Role-limited, exact-SHA worker context.
 export { ContextError } from "./context/errors.js";

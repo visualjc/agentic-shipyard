@@ -8,7 +8,9 @@ import test from "node:test";
 import { nodeFilesystem } from "../../../src/adapters/filesystem.js";
 import { GitLedgerStore } from "../../../src/adapters/ledger-git.js";
 import { JsonDeliveryRegistry } from "../../../src/delivery/registry.js";
-import type { DeliveryRegistryDocument } from "../../../src/delivery/types.js";
+import type { DeliveryRegistryDocument, DeliveryWorkspace } from "../../../src/delivery/types.js";
+import { createWorkspaceProofRecord, serializeWorkspaceProofRecord } from "../../../src/workspace/proof.js";
+import type { WorkspaceProofRecord } from "../../../src/workspace/proof.js";
 import { MutationLockError, MutationLockService } from "../../../src/locking/mutation-lock.js";
 import { WorkspaceError } from "../../../src/workspace/errors.js";
 import { nodeWorkspaceGit, WorkspaceService } from "../../../src/workspace/service.js";
@@ -17,6 +19,10 @@ import { nodeProcess } from "../../../src/adapters/process.js";
 import { FakeProcess, MemoryFilesystem } from "../../helpers/fakes.js";
 
 const exec = promisify(execFile);
+const missingOwnershipMethods = {
+  async ownershipProof() { return { exists: false } as const; },
+  async verifyReadyWorkspace() { return false; },
+};
 async function git(repository: string, args: string[]): Promise<string> {
   return (await exec("git", ["-C", repository, ...args], { encoding: "utf8" })).stdout.trim();
 }
@@ -46,6 +52,20 @@ async function dispose(value: Fixture): Promise<void> { await rm(value.root, { r
 async function initialRecord(value: Fixture, request: ReturnType<Fixture["request"]>) {
   return JSON.parse((await value.ledger.snapshot([request.initialLedgerPath])).records[request.initialLedgerPath]!);
 }
+async function assertProof(repositoryPath: string, workspace: DeliveryWorkspace, kind: "ownership" | "readiness", startProductSha: string): Promise<void> {
+  const observation = kind === "ownership"
+    ? await nodeWorkspaceGit.ownershipProof(repositoryPath, workspace.creationToken)
+    : await nodeWorkspaceGit.readinessProof(repositoryPath, workspace.creationToken);
+  assert.equal(observation.exists, true);
+  assert.equal(observation.record?.schemaVersion, 1);
+  assert.equal(observation.record?.kind, kind);
+  assert.equal(observation.record?.creationToken, workspace.creationToken);
+  assert.equal(observation.record?.deliveryId, workspace.deliveryId);
+  assert.equal(observation.record?.commonDirectory, workspace.commonDirectory);
+  assert.equal(observation.record?.branch, workspace.branch);
+  assert.equal(observation.record?.worktreePath, workspace.worktreePath);
+  assert.equal(observation.record?.startProductSha, startProductSha);
+}
 
 test("creates, resumes after interruption, and recreates a missing linked Git worktree without rewriting its ledger record", async () => {
   const value = await fixture();
@@ -70,10 +90,11 @@ test("rejects non-string or empty initial ledger contents before touching any st
   const registry = { async lockScope() { mutations += 1; return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; }, async read() { mutations += 1; return undefined; }, async write() { mutations += 1; } };
   const ledger = { async snapshot() { mutations += 1; return { head: undefined, records: {} }; }, async transact() { mutations += 1; return "ledger"; } };
   const git = {
+    ...missingOwnershipMethods,
     async commonDirectory() { mutations += 1; return request.commonDirectory; }, async worktreeExists() { mutations += 1; return false; }, async worktreeIdentity() { mutations += 1; return undefined; },
     async branchExists() { mutations += 1; return false; }, async branchHead() { mutations += 1; return undefined; }, async productHead() { mutations += 1; return "a".repeat(40); },
     async createClaimedBranch() { mutations += 1; return true; }, async branchCreationMatches() { mutations += 1; return true; },
-    async readinessProof() { mutations += 1; return undefined; }, async createReadinessProof() { mutations += 1; return true; }, async ensureWorktree() { mutations += 1; return true; },
+    async readinessProof() { mutations += 1; return { exists: false } as const; }, async createReadinessProof() { mutations += 1; return true; }, async ensureWorktree() { mutations += 1; return true; },
   };
   const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
 
@@ -83,38 +104,42 @@ test("rejects non-string or empty initial ledger contents before touching any st
   assert.equal(mutations, 0);
 });
 
-test("fails closed before attach when a newly claimed branch loses its recorded provenance", async () => {
+test("fails closed without readiness when a newly owned branch changes before attachment completes", async () => {
   const startSha = "a".repeat(40); const replacementSha = "b".repeat(40);
   const request = { repositoryPath: "/repository", commonDirectory: "/repository/.git", deliveryId: "d-1", branch: "shipyard/d-1", worktreePath: "/worktrees/d-1", initialLedgerPath: "deliveries/d-1.json", initialLedgerContents: JSON.stringify({ deliveryId: "d-1" }) };
-  let document: DeliveryRegistryDocument | undefined; let branchExists = false; let attached = false;
+  let document: DeliveryRegistryDocument | undefined; let branchExists = false; let attached = false; let ownership: WorkspaceProofRecord | undefined;
   const registry = { async lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; }, async read() { return document; }, async write(next: DeliveryRegistryDocument) { document = next; } };
   const records: Record<string, string> = {};
   const ledger = { async snapshot(paths: readonly string[]) { return { head: records[request.initialLedgerPath] ? "ledger" : undefined, records: Object.fromEntries(paths.flatMap((path) => records[path] === undefined ? [] : [[path, records[path]]])) }; }, async transact(transaction: { writes: readonly { path: string; contents: string }[] }) { for (const write of transaction.writes) records[write.path] = write.contents; return "ledger"; } };
   const git = {
+    ...missingOwnershipMethods,
     async commonDirectory() { return request.commonDirectory; }, async worktreeExists() { return attached; }, async worktreeIdentity() { return attached ? { commonDirectory: request.commonDirectory, branch: request.branch } : undefined; },
     async branchExists() { return branchExists; }, async branchHead() { return replacementSha; }, async productHead() { return startSha; },
-    async createClaimedBranch() { branchExists = true; return true; }, async branchCreationMatches() { return false; },
-    async readinessProof() { return undefined; }, async createReadinessProof() { return true; }, async ensureWorktree() { attached = true; return true; },
+    async createClaimedBranch(_repositoryPath: string, _branch: string, _startSha: string, record: WorkspaceProofRecord) { branchExists = true; ownership = record; return true; },
+    async ownershipProof() { return ownership ? { exists: true as const, record: ownership } : { exists: false as const }; },
+    async readinessProof() { return { exists: false } as const; }, async createReadinessProof() { return true; }, async ensureWorktree() { attached = true; return true; },
   };
   const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
 
   await assert.rejects(service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
-  assert.equal(attached, false);
+  assert.equal(attached, true);
   assert.equal(document?.workspaces[0]?.state, "creating");
 });
 
-test("never promotes a creating claim when provenance changes during worktree attachment", async () => {
+test("never promotes when the atomic readiness transaction reports a concurrent change", async () => {
   const startSha = "a".repeat(40);
   const request = { repositoryPath: "/repository", commonDirectory: "/repository/.git", deliveryId: "d-1", branch: "shipyard/d-1", worktreePath: "/worktrees/d-1", initialLedgerPath: "deliveries/d-1.json", initialLedgerContents: JSON.stringify({ deliveryId: "d-1" }) };
-  let document: DeliveryRegistryDocument | undefined; let branchExists = false; let attached = false; let provenanceChecks = 0;
+  let document: DeliveryRegistryDocument | undefined; let branchExists = false; let attached = false; let ownership: WorkspaceProofRecord | undefined;
   const registry = { async lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; }, async read() { return document; }, async write(next: DeliveryRegistryDocument) { document = next; } };
   const records: Record<string, string> = {};
   const ledger = { async snapshot(paths: readonly string[]) { return { head: records[request.initialLedgerPath] ? "ledger" : undefined, records: Object.fromEntries(paths.flatMap((path) => records[path] === undefined ? [] : [[path, records[path]]])) }; }, async transact(transaction: { writes: readonly { path: string; contents: string }[] }) { for (const write of transaction.writes) records[write.path] = write.contents; return "ledger"; } };
   const git = {
+    ...missingOwnershipMethods,
     async commonDirectory() { return request.commonDirectory; }, async worktreeExists() { return attached; }, async worktreeIdentity() { return attached ? { commonDirectory: request.commonDirectory, branch: request.branch } : undefined; },
     async branchExists() { return branchExists; }, async branchHead() { return startSha; }, async productHead() { return startSha; },
-    async createClaimedBranch() { branchExists = true; return true; }, async branchCreationMatches() { return ++provenanceChecks === 1; },
-    async readinessProof() { return undefined; }, async createReadinessProof() { return true; }, async ensureWorktree() { attached = true; return true; },
+    async createClaimedBranch(_repositoryPath: string, _branch: string, _startSha: string, record: WorkspaceProofRecord) { branchExists = true; ownership = record; return true; },
+    async ownershipProof() { return ownership ? { exists: true as const, record: ownership } : { exists: false as const }; },
+    async readinessProof() { return { exists: false } as const; }, async createReadinessProof() { return false; }, async ensureWorktree() { attached = true; return true; },
   };
   const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
 
@@ -134,8 +159,8 @@ test("linearizes readiness before a branch move triggered inside the ready regis
       async write(document: DeliveryRegistryDocument) {
         const workspace = document.workspaces.find(candidate => candidate.deliveryId === request.deliveryId);
         if (workspace?.state === "ready") {
-          const proof = await nodeWorkspaceGit.readinessProof(value.repository, workspace.creationToken);
-          assert.deepEqual(proof, { startSha, marker: `shipyard-workspace-ready:${workspace.creationToken}` });
+          await assertProof(value.repository, workspace, "ownership", startSha);
+          await assertProof(value.repository, workspace, "readiness", startSha);
           await git(request.worktreePath, ["commit", "--allow-empty", "-m", "move during ready registry write"]);
           movedDuringReadyWrite = true;
         }
@@ -148,7 +173,7 @@ test("linearizes readiness before a branch move triggered inside the ready regis
     assert.equal(movedDuringReadyWrite, true);
     assert.notEqual(await nodeWorkspaceGit.branchHead(value.repository, request.branch), startSha);
     assert.equal((await value.registry.read())?.workspaces[0]?.state, "ready");
-    assert.deepEqual(await nodeWorkspaceGit.readinessProof(value.repository, workspace.creationToken), { startSha, marker: `shipyard-workspace-ready:${workspace.creationToken}` });
+    await assertProof(value.repository, workspace, "readiness", startSha);
   } finally { await dispose(value); }
 });
 
@@ -164,7 +189,7 @@ test("resumes a crash after readiness proof without requiring the branch to rema
         const workspace = document.workspaces.find(candidate => candidate.deliveryId === request.deliveryId);
         if (workspace?.state === "ready" && failReadyWrite) {
           failReadyWrite = false;
-          assert.deepEqual(await nodeWorkspaceGit.readinessProof(value.repository, workspace.creationToken), { startSha, marker: `shipyard-workspace-ready:${workspace.creationToken}` });
+          await assertProof(value.repository, workspace, "readiness", startSha);
           throw new Error("crash-after-readiness-proof");
         }
         await value.registry.write(document);
@@ -175,6 +200,10 @@ test("resumes a crash after readiness proof without requiring the branch to rema
     await assert.rejects(interrupted.createOrResume(request), /crash-after-readiness-proof/);
     const creating = (await value.registry.read())?.workspaces[0];
     assert.equal(creating?.state, "creating");
+    await git(value.repository, ["reflog", "expire", "--expire=now", "--all"]);
+    await git(value.repository, ["gc", "--prune=now"]);
+    await assertProof(value.repository, creating!, "ownership", startSha);
+    await assertProof(value.repository, creating!, "readiness", startSha);
     await git(request.worktreePath, ["commit", "--allow-empty", "-m", "delivery work after readiness"]);
     const advancedSha = await nodeWorkspaceGit.branchHead(value.repository, request.branch);
     assert.notEqual(advancedSha, startSha);
@@ -186,6 +215,7 @@ test("resumes a crash after readiness proof without requiring the branch to rema
     assert.equal((await nodeWorkspaceGit.worktreeIdentity(request.worktreePath))?.branch, request.branch);
     assert.equal(await nodeWorkspaceGit.branchHead(value.repository, request.branch), advancedSha);
     assert.equal((await value.registry.read())?.workspaces[0]?.state, "ready");
+    assert.equal((await value.service.createOrResume(request)).state, "ready");
   } finally { await dispose(value); }
 });
 
@@ -194,7 +224,7 @@ test("rejects a mismatched token readiness proof without promoting its creating 
   try {
     const request = value.request("d-proof-mismatch");
     const workspace = await value.service.createOrResume(request);
-    const proofRef = `refs/shipyard/workspace-ready/${workspace.creationToken}`;
+    const proofRef = `refs/shipyard/workspace-readiness/${workspace.creationToken}`;
     await git(value.repository, ["commit", "--allow-empty", "-m", "foreign proof target"]);
     const foreignSha = await nodeWorkspaceGit.productHead(value.repository);
     await git(value.repository, ["update-ref", "-m", "foreign-readiness-proof", proofRef, foreignSha]);
@@ -203,7 +233,64 @@ test("rejects a mismatched token readiness proof without promoting its creating 
 
     await assert.rejects(value.service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict" && error.message.includes("readiness proof"));
     assert.equal((await value.registry.read())?.workspaces[0]?.state, "creating");
-    assert.deepEqual(await nodeWorkspaceGit.readinessProof(value.repository, workspace.creationToken), { startSha: foreignSha, marker: "foreign-readiness-proof" });
+    assert.deepEqual(await nodeWorkspaceGit.readinessProof(value.repository, workspace.creationToken), { exists: true });
+  } finally { await dispose(value); }
+});
+
+test("ready service resumes reject deleted ownership or readiness proof refs", async () => {
+  for (const kind of ["ownership", "readiness"] as const) {
+    const value = await fixture();
+    try {
+      const request = value.request(`d-ready-missing-${kind}`);
+      const workspace = await value.service.createOrResume(request);
+      await git(value.repository, ["update-ref", "-d", `refs/shipyard/workspace-${kind}/${workspace.creationToken}`]);
+
+      await assert.rejects(value.service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict" && error.message.includes("ready delivery"));
+      assert.equal((await value.registry.read())?.workspaces[0]?.state, "ready");
+    } finally { await dispose(value); }
+  }
+});
+
+test("ready service resumes reject a foreign object behind an existing proof ref", async () => {
+  const value = await fixture();
+  try {
+    const request = value.request("d-ready-foreign-proof");
+    const workspace = await value.service.createOrResume(request);
+    const productSha = await nodeWorkspaceGit.productHead(value.repository);
+    await git(value.repository, ["update-ref", `refs/shipyard/workspace-ownership/${workspace.creationToken}`, productSha]);
+
+    await assert.rejects(value.service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict" && error.message.includes("ownership proof"));
+    assert.deepEqual(await nodeWorkspaceGit.ownershipProof(value.repository, workspace.creationToken), { exists: true });
+    assert.equal((await value.registry.read())?.workspaces[0]?.state, "ready");
+  } finally { await dispose(value); }
+});
+
+test("an exact readiness blob cannot substitute for the atomic branch ownership proof", async () => {
+  const value = await fixture();
+  try {
+    const request = value.request("d-readiness-only");
+    let interrupt = true;
+    const registry = {
+      lockScope: value.registry.lockScope.bind(value.registry), read: value.registry.read.bind(value.registry),
+      async write(document: DeliveryRegistryDocument) {
+        await value.registry.write(document);
+        if (interrupt) { interrupt = false; throw new Error("after-creating-claim"); }
+      },
+    };
+    const interrupted = new WorkspaceService(registry, value.ledger, nodeWorkspaceGit, new MutationLockService(nodeFilesystem, nodeProcess));
+    await assert.rejects(interrupted.createOrResume(request), /after-creating-claim/);
+    const claim = (await value.registry.read())!.workspaces[0];
+    const startSha = (await initialRecord(value, request)).startProductSha as string;
+    await git(value.repository, ["branch", request.branch, startSha]);
+    const proofPath = join(value.root, "forged-readiness.json");
+    await writeFile(proofPath, serializeWorkspaceProofRecord(createWorkspaceProofRecord("readiness", claim, startSha)), "utf8");
+    const blob = await git(value.repository, ["hash-object", "-w", proofPath]);
+    await git(value.repository, ["update-ref", `refs/shipyard/workspace-readiness/${claim.creationToken}`, blob]);
+
+    await assert.rejects(value.service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict" && error.message.includes("ownership proof"));
+    assert.deepEqual(await nodeWorkspaceGit.ownershipProof(value.repository, claim.creationToken), { exists: false });
+    assert.equal(await nodeWorkspaceGit.worktreeExists(request.worktreePath), false);
+    assert.equal((await value.registry.read())?.workspaces[0]?.state, "creating");
   } finally { await dispose(value); }
 });
 
@@ -214,12 +301,12 @@ test("atomic readiness proof creation rejects a branch move immediately before i
     let injected = false;
     const racingGit = {
       ...nodeWorkspaceGit,
-      async createReadinessProof(repositoryPath: string, branch: string, startSha: string, token: string) {
+      async createReadinessProof(repositoryPath: string, branch: string, startSha: string, ownership: WorkspaceProofRecord, readiness: WorkspaceProofRecord) {
         if (!injected) {
           injected = true;
           await git(request.worktreePath, ["commit", "--allow-empty", "-m", "move immediately before readiness transaction"]);
         }
-        return nodeWorkspaceGit.createReadinessProof(repositoryPath, branch, startSha, token);
+        return nodeWorkspaceGit.createReadinessProof(repositoryPath, branch, startSha, ownership, readiness);
       },
     };
     const service = new WorkspaceService(value.registry, value.ledger, racingGit, new MutationLockService(nodeFilesystem, nodeProcess));
@@ -227,7 +314,7 @@ test("atomic readiness proof creation rejects a branch move immediately before i
     await assert.rejects(service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
     const creating = (await value.registry.read())?.workspaces[0];
     assert.equal(creating?.state, "creating");
-    assert.equal(await nodeWorkspaceGit.readinessProof(value.repository, creating!.creationToken), undefined);
+    assert.deepEqual(await nodeWorkspaceGit.readinessProof(value.repository, creating!.creationToken), { exists: false });
   } finally { await dispose(value); }
 });
 
@@ -239,7 +326,8 @@ test("creates exact token readiness proofs in SHA-1 and SHA-256 repositories", a
       const startSha = await nodeWorkspaceGit.productHead(value.repository);
       const workspace = await value.service.createOrResume(request);
       assert.equal(startSha.length, length);
-      assert.deepEqual(await nodeWorkspaceGit.readinessProof(value.repository, workspace.creationToken), { startSha, marker: `shipyard-workspace-ready:${workspace.creationToken}` });
+      await assertProof(value.repository, workspace, "ownership", startSha);
+      await assertProof(value.repository, workspace, "readiness", startSha);
     } finally { await dispose(value); }
   }
 });
@@ -372,6 +460,7 @@ test("does not delete a foreign replacement during cleanup's adversarial path sw
   };
   const ledger = { async snapshot() { return { head: undefined, records: {} }; }, async transact() { return "ledger"; } };
   const git = {
+    ...missingOwnershipMethods,
     async commonDirectory() { return request.commonDirectory; },
     // The original linked worktree was replaced between an unsafe hypothetical
     // identity check and path removal. Cleanup must not inspect or remove it.
@@ -379,7 +468,7 @@ test("does not delete a foreign replacement during cleanup's adversarial path sw
     async worktreeIdentity() { assert.fail("cleanup must not rely on a non-atomic identity recheck"); },
     async branchExists() { return false; }, async branchHead() { return undefined; }, async productHead() { return "a".repeat(40); },
     async createClaimedBranch() { return false; }, async branchCreationMatches() { return false; },
-    async readinessProof() { return undefined; }, async createReadinessProof() { return false; },
+    async readinessProof() { return { exists: false } as const; }, async createReadinessProof() { return false; },
     async ensureWorktree() { return false; },
   };
   const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
@@ -402,6 +491,25 @@ test("cleanup keeps a claim while its branch remains, then removes it after both
 
     assert.equal((await value.registry.read())?.workspaces.length, 0);
     assert.deepEqual(await value.ledger.snapshot([request.initialLedgerPath]), ledgerBefore);
+  } finally { await dispose(value); }
+});
+
+test("cleanup retains token proofs while a reused delivery ID creates distinct new proofs", async () => {
+  const value = await fixture();
+  try {
+    const request = value.request("d-reused");
+    const startSha = await nodeWorkspaceGit.productHead(value.repository);
+    const first = await value.service.createOrResume(request);
+    await git(value.repository, ["worktree", "remove", request.worktreePath]);
+    await git(value.repository, ["branch", "-D", request.branch]);
+    await value.service.cleanup(value.repository, request.deliveryId);
+
+    const second = await value.service.createOrResume(request);
+    assert.notEqual(second.creationToken, first.creationToken);
+    await assertProof(value.repository, first, "ownership", startSha);
+    await assertProof(value.repository, first, "readiness", startSha);
+    await assertProof(value.repository, second, "ownership", startSha);
+    await assertProof(value.repository, second, "readiness", startSha);
   } finally { await dispose(value); }
 });
 
@@ -565,12 +673,13 @@ test("create intent rejects a same-SHA foreign branch race without registry adop
     async transact(transaction: { writes: readonly { path: string; contents: string }[] }) { for (const write of transaction.writes) records[write.path] = write.contents; return "ledger"; },
   };
   const git = {
+    ...missingOwnershipMethods,
     async commonDirectory() { return request.commonDirectory; }, async worktreeExists() { return worktreeExists; },
     async worktreeIdentity() { return worktreeExists ? { commonDirectory: request.commonDirectory, branch: request.branch } : undefined; },
     async branchExists() { return branchExists; },
     async branchHead() { return branchExists ? foreignSha : undefined; }, async productHead() { return startSha; },
     async createClaimedBranch() { branchExists = true; return false; }, async branchCreationMatches() { return false; },
-    async readinessProof() { return undefined; }, async createReadinessProof() { return false; },
+    async readinessProof() { return { exists: false } as const; }, async createReadinessProof() { return false; },
     async ensureWorktree(_repositoryPath: string, _branch: string, _path: string, intent: WorktreeEnsureIntent) {
       assert.deepEqual(intent, { mode: "create", startSha });
       branchExists = true;
@@ -596,6 +705,7 @@ test("rejects an unregistered matching worktree before writing the initial ledge
     async transact(transaction: { writes: readonly { path: string; contents: string }[] }) { for (const write of transaction.writes) records[write.path] = write.contents; return "ledger"; },
   };
   const git = {
+    ...missingOwnershipMethods,
     async commonDirectory() { return request.commonDirectory; },
     // Even an indistinguishable same-branch/same-SHA worktree is not
     // attributable without a registry claim.
@@ -603,7 +713,7 @@ test("rejects an unregistered matching worktree before writing the initial ledge
     async worktreeIdentity() { assert.fail("create intent must not inspect then adopt an existing path"); },
     async productHead() { return startSha; }, async branchHead() { return startSha; },
     async createClaimedBranch() { return true; }, async branchCreationMatches() { return true; },
-    async readinessProof() { return undefined; }, async createReadinessProof() { return true; },
+    async readinessProof() { return { exists: false } as const; }, async createReadinessProof() { return true; },
     async ensureWorktree() { ensureCalls += 1; return true; },
   };
   const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
@@ -625,11 +735,12 @@ test("rejects an unproven false worktree-creation result without adopting its pa
     async transact(transaction: { writes: readonly { path: string; contents: string }[] }) { for (const write of transaction.writes) records[write.path] = write.contents; return "ledger"; },
   };
   const git = {
+    ...missingOwnershipMethods,
     async commonDirectory() { return request.commonDirectory; }, async branchExists() { return false; }, async worktreeExists() { return false; },
     async worktreeIdentity() { assert.fail("an unproven creation result must not be inspected or adopted"); },
     async productHead() { return startSha; }, async branchHead() { return startSha; }, async ensureWorktree() { return false; },
     async createClaimedBranch() { return true; }, async branchCreationMatches() { return true; },
-    async readinessProof() { return undefined; }, async createReadinessProof() { return true; },
+    async readinessProof() { return { exists: false } as const; }, async createReadinessProof() { return true; },
   };
   const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
 
@@ -641,7 +752,7 @@ test("rejects an unproven false worktree-creation result without adopting its pa
 test("does not remove a swapped path when the branch changes after created-worktree identity verification", async () => {
   const startSha = "a".repeat(40); const changedSha = "b".repeat(40);
   const request = { repositoryPath: "/repository", commonDirectory: "/repository/.git", deliveryId: "d-1", branch: "shipyard/d-1", worktreePath: "/worktrees/d-1", initialLedgerPath: "deliveries/d-1.json", initialLedgerContents: JSON.stringify({ deliveryId: "d-1" }) };
-  let registryWrites = 0; let createdPathExists = false; let foreignReplacementExists = false; let removalAttempts = 0;
+  let registryWrites = 0; let branchExists = false; let createdPathExists = false; let foreignReplacementExists = false; let removalAttempts = 0; let ownership: WorkspaceProofRecord | undefined;
   const records: Record<string, string> = {};
   const registry = { async lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; }, async read() { return undefined; }, async write() { registryWrites += 1; } };
   const ledger = {
@@ -649,18 +760,20 @@ test("does not remove a swapped path when the branch changes after created-workt
     async transact(transaction: { writes: readonly { path: string; contents: string }[] }) { for (const write of transaction.writes) records[write.path] = write.contents; return "ledger"; },
   };
   const git = {
+    ...missingOwnershipMethods,
     async commonDirectory() { return request.commonDirectory; },
     async worktreeExists() { return createdPathExists || foreignReplacementExists; },
     async worktreeIdentity() { return createdPathExists ? { commonDirectory: request.commonDirectory, branch: request.branch } : undefined; },
-    async branchExists() { return createdPathExists; }, async productHead() { return startSha; },
+    async branchExists() { return branchExists; }, async productHead() { return startSha; },
     async branchHead() {
       // The path is swapped after identity verification but before the old
       // implementation would have issued its path-based removal.
       createdPathExists = false; foreignReplacementExists = true;
       return changedSha;
     },
-    async createClaimedBranch() { return true; }, async branchCreationMatches() { return true; },
-    async readinessProof() { return undefined; }, async createReadinessProof() { return true; },
+    async createClaimedBranch(_repositoryPath: string, _branch: string, _startSha: string, record: WorkspaceProofRecord) { branchExists = true; ownership = record; return true; },
+    async ownershipProof() { return ownership ? { exists: true as const, record: ownership } : { exists: false as const }; },
+    async readinessProof() { return { exists: false } as const; }, async createReadinessProof() { return true; },
     async ensureWorktree() { createdPathExists = true; return true; },
     async removeWorktree() { removalAttempts += 1; foreignReplacementExists = false; },
   };
@@ -679,18 +792,20 @@ test("real Git same-SHA foreign branch race remains rejected on retry", async ()
     const request = value.request("d-race"); let foreignHead = ""; let injected = false;
     const racingGit = {
       ...nodeWorkspaceGit,
-      async createClaimedBranch(repositoryPath: string, branch: string, startSha: string, _token: string) {
+      async createClaimedBranch(repositoryPath: string, branch: string, startSha: string, ownership: WorkspaceProofRecord) {
         if (!injected) {
           injected = true;
           foreignHead = startSha;
           await git(repositoryPath, ["branch", branch, foreignHead]);
         }
-        return false;
+        return nodeWorkspaceGit.createClaimedBranch(repositoryPath, branch, startSha, ownership);
       },
     };
     const service = new WorkspaceService(value.registry, value.ledger, racingGit, new MutationLockService(nodeFilesystem, nodeProcess));
     await assert.rejects(service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
     assert.equal((await value.registry.read())?.workspaces.length ?? 0, 1);
+    const claim = (await value.registry.read())!.workspaces[0];
+    assert.deepEqual(await nodeWorkspaceGit.ownershipProof(value.repository, claim.creationToken), { exists: false });
     assert.equal(await nodeWorkspaceGit.worktreeExists(request.worktreePath), false);
     assert.equal(await nodeWorkspaceGit.branchHead(value.repository, request.branch), foreignHead);
     await assert.rejects(value.service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");

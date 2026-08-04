@@ -282,7 +282,8 @@ function refspecPatternMatches(pattern: string, ref: string): boolean {
 function protectedRefspecPattern(pattern: string, ledgerRef: string): boolean {
   return refspecPatternMatches(pattern, ledgerRef)
     || pattern.startsWith("refs/shipyard/")
-    || refspecPatternMatches(pattern, "refs/shipyard/workspace-ready/11111111-1111-4111-8111-111111111111");
+    || refspecPatternMatches(pattern, "refs/shipyard/workspace-readiness/11111111-1111-4111-8111-111111111111")
+    || refspecPatternMatches(pattern, "refs/shipyard/workspace-ownership/11111111-1111-4111-8111-111111111111");
 }
 function escapeRegExp(value: string): string { return value.replace(/[|\\{}()[\]^$+?.]/g, "\\$&"); }
 function fullObjectIdFor(format: GitObjectFormat, value: string): boolean { return new RegExp(`^[a-f0-9]{${format === "sha1" ? 40 : 64}}$`).test(value); }

@@ -5,7 +5,7 @@ export type DeliveryWorkspace = {
   schemaVersion: 1;
   /** `creating` is a durable claim which may be resumed only by WorkspaceService. */
   state: "creating" | "ready";
-  /** Opaque, non-secret token recorded in the branch reflog during creation. */
+  /** Opaque, non-secret key for immutable local ownership/readiness proof refs. */
   creationToken: string;
   deliveryId: string;
   /** Canonical Git common directory, shared by the main clone and linked worktrees. */
@@ -28,6 +28,11 @@ export interface DeliveryRegistry {
   lockScope(): Promise<Readonly<{ path: string; scope: string }>>;
   read(): Promise<DeliveryRegistryDocument | undefined>;
   write(document: DeliveryRegistryDocument): Promise<void>;
+}
+
+/** Read-only proof boundary used by core delivery resolution. */
+export interface DeliveryReadinessVerifier {
+  verifyReadyWorkspace(repositoryPath: string, workspace: DeliveryWorkspace): Promise<boolean>;
 }
 
 export type DeliveryResolutionRequest = {

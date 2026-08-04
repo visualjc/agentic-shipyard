@@ -71,35 +71,47 @@ then by the Git common-directory workspace lock. This fixed registry-then-
 workspace order prevents two repositories that share a registry from losing
 each other's entries; tracking takes only the workspace lock. A registry entry
 without that record is rejected rather than repaired, and a `creating` claim is
-not resolvable for tracking. Shipyard creates a missing claimed branch with an
-atomic `update-ref` create-only operation and records the claim token in that
-branch's reflog. A retry of a durable `creating` claim may attach or recreate
-only a branch at its recorded start SHA whose creation marker matches the
-claim, then recreate its missing worktree or validate the completed matching
-worktree, without deleting Git state. The creating branch's start SHA and
-creation marker are re-proven immediately before attachment. After attachment,
-one atomic Git ref transaction verifies that the branch is still at the ledger
-start SHA and creates an immutable token-keyed readiness proof under
-`refs/shipyard/workspace-ready/` with an exact token marker. This transaction
-is the readiness linearization point. Only an exact proof permits the registry
-claim to advance to `ready`, so a branch move during the later registry write
-is ordered after readiness. A crash between those operations resumes from the
-proof and may accept normal branch advancement while validating or recreating
-the canonical worktree. Missing, mismatched, or foreign proof state fails
-closed, and token-keying prevents delivery-ID reuse from adopting an older
-proof. A wrong creating-branch head, creation marker, path, or worktree identity
-also fails closed. Conversely,
+not resolvable for tracking. Ownership and readiness proofs are strict canonical
+version-1 JSON records stored as Git blobs. Each binds its kind, token, delivery
+ID, common directory, branch, worktree path, and ledger start SHA. Token-keyed
+refs under `refs/shipyard/workspace-ownership/` and
+`refs/shipyard/workspace-readiness/` point to those blobs; reflogs are never
+proof authority. Shipyard precomputes the ownership blob, then one atomic
+`update-ref --stdin` transaction create-only adds both the feature branch at the
+start SHA and its ownership ref. An ordinary same-SHA branch race therefore
+cannot acquire an ownership witness. A creating retry without readiness accepts
+only that exact ownership blob and the branch at the recorded start, then
+recreates or validates the worktree without deleting Git state. After attach,
+another atomic ref transaction verifies both branch and ownership ref and
+create-only adds the exact readiness blob. This is the readiness linearization
+point. Only exact ownership and readiness records permit the registry claim to
+advance to `ready`, so a branch move during the later registry write is ordered
+after readiness. A crash between those operations resumes from both blobs and
+may accept normal branch advancement while validating or recreating the
+canonical worktree. The proof refs keep their blobs reachable through reflog
+expiration and aggressive object pruning. Every ready WorkspaceService resume
+and DeliveryResolver read revalidates both token-keyed proofs; missing,
+noncanonical, mismatched, deleted, or foreign proof state fails closed.
+Token-keying prevents delivery-ID reuse from adopting an older proof. A wrong
+creating-branch head, path, or worktree identity also fails closed. Conversely,
 before a claim exists Shipyard never adopts an existing branch or worktree path:
 the initial ledger record proves intent but cannot attribute unclaimed Git
 state. A `ready` claim whose branch later disappears also fails closed rather
 than recreating and possibly discarding delivery history. Cleanup retains either
 kind of claim while either its branch or worktree remains, preventing an
 unregistered stranded branch; after both are manually absent it removes only
-the registry entry and retains the ledger and immutable local readiness proof.
+the registry entry and retains the ledger and immutable local ownership and
+readiness proofs.
 `GitLedgerStore` always writes
 `refs/heads/shipyard-ledger`; its constructor accepts no configurable ledger
 ref. Its subprocesses use a canonical absolute Git executable and never
 resolve a bare `git` from `PATH`.
+
+These records establish provenance against ordinary competing operations and
+crash recovery inside one local clone; they are not cryptographic
+authentication. A writer with the same user's ability to rewrite arbitrary
+local Git refs, blobs, registry files, and ledger state can forge the complete
+local authority set and is outside this threat model.
 
 ### Final cleanup handoff
 

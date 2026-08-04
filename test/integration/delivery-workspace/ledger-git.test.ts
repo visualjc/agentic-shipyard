@@ -43,7 +43,8 @@ test("stores durable records on an orphan ledger ref outside product ancestry an
     assert.equal(await git(path, ["merge-base", "--is-ancestor", "main", first]).then(() => "yes", () => "no"), "no");
     assert.equal(GitLedgerStore.excludesRefspec("refs/heads/main:refs/heads/main"), true);
     assert.equal(GitLedgerStore.excludesRefspec("refs/heads/shipyard-ledger:refs/heads/shipyard-ledger"), false);
-    assert.equal(GitLedgerStore.excludesRefspec("refs/shipyard/workspace-ready/11111111-1111-4111-8111-111111111111:refs/heads/proof"), false);
+    assert.equal(GitLedgerStore.excludesRefspec("refs/shipyard/workspace-readiness/11111111-1111-4111-8111-111111111111:refs/heads/proof"), false);
+    assert.equal(GitLedgerStore.excludesRefspec("refs/shipyard/workspace-ownership/11111111-1111-4111-8111-111111111111:refs/heads/proof"), false);
     assert.equal(GitLedgerStore.excludesRefspec("refs/shipyard/*:refs/archive/*"), false);
     assert.equal(GitLedgerStore.excludesRefspec("refs/heads/*:refs/heads/archive/*"), false);
     assert.equal(GitLedgerStore.excludesRefspec("refs/*:refs/*"), false);
@@ -51,7 +52,7 @@ test("stores durable records on an orphan ledger ref outside product ancestry an
     assert.equal(GitLedgerStore.excludesRefspec("*:*"), false);
     assert.throws(() => GitLedgerStore.requireProductOnlyTransport(["refs/heads/main:refs/heads/main"], JSON.stringify({ ref: GitLedgerStore.ref })), LedgerError);
     assert.throws(() => GitLedgerStore.requireProductOnlyTransport(["refs/heads/shipyard-ledger:refs/heads/main"]), LedgerError);
-    assert.throws(() => GitLedgerStore.requireProductOnlyTransport(["refs/heads/main:refs/heads/main"], JSON.stringify({ ref: "refs/shipyard/workspace-ready/token" })), LedgerError);
+    assert.throws(() => GitLedgerStore.requireProductOnlyTransport(["refs/heads/main:refs/heads/main"], JSON.stringify({ ref: "refs/shipyard/workspace-readiness/token" })), LedgerError);
     assert.doesNotThrow(() => GitLedgerStore.requireProductOnlyTransport(["refs/heads/main:refs/heads/main"], JSON.stringify({ ref: "refs/heads/main" })));
   } finally { await rm(path, { recursive: true, force: true }); }
 });

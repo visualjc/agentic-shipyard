@@ -1,14 +1,14 @@
 import type { BindingService } from "../binding/service.js";
 import { DeliveryError } from "./errors.js";
 import { validateDeliveryRegistryDocument } from "./registry.js";
-import type { DeliveryRegistry, DeliveryResolutionRequest, DeliveryWorkspace, ResolvedDelivery } from "./types.js";
+import type { DeliveryReadinessVerifier, DeliveryRegistry, DeliveryResolutionRequest, DeliveryWorkspace, ResolvedDelivery } from "./types.js";
 
 /**
  * Resolves every request afresh. A returned snapshot intentionally carries no
  * registry handle, lease, or mutation capability; mutators must re-read state.
  */
 export class DeliveryResolver {
-  constructor(private readonly bindings: BindingService, private readonly registry: DeliveryRegistry) {}
+  constructor(private readonly bindings: BindingService, private readonly registry: DeliveryRegistry, private readonly readiness: DeliveryReadinessVerifier) {}
 
   async resolve(request: DeliveryResolutionRequest): Promise<ResolvedDelivery> {
     const binding = await this.bindings.resolve(request.repositoryPath);
@@ -33,6 +33,7 @@ export class DeliveryResolver {
       if (matches[0].commonDirectory !== binding.commonDirectory) throw mismatch();
     }
     if (matches[0].state !== "ready") throw new DeliveryError("delivery-incomplete", "The delivery workspace claim is still being created; resume workspace initialization first.");
+    if (!await this.readiness.verifyReadyWorkspace(request.repositoryPath, matches[0])) throw new DeliveryError("delivery-incomplete", "The ready delivery workspace is missing its exact local ownership or readiness proof.");
     return immutableSnapshot(binding, matches[0]);
   }
 }

@@ -93,6 +93,31 @@ test("rejects malformed public request fields before authority or provider acces
   }
 });
 
+test("redacts getter and Proxy reflection failures before authority or provider access", async () => {
+  const secret = "super-secret-reflection-message";
+  const getterIssue: Record<string, unknown> = { title: request.issue.title };
+  Object.defineProperty(getterIssue, "body", { enumerable: true, get() { throw new Error(secret); } });
+  const prototypeIssue = Object.assign(Object.create({ inherited: true }), request.issue);
+  const symbolIssue = { ...request.issue, [Symbol("secret")]: secret };
+  const cases: unknown[] = [
+    { ...request, issue: getterIssue },
+    { ...request, issue: prototypeIssue },
+    { ...request, issue: symbolIssue },
+    new Proxy(request, { ownKeys() { throw new Error(secret); } }),
+    { ...request, issue: new Proxy(request.issue, { getOwnPropertyDescriptor() { throw new Error(secret); } }) },
+  ];
+  for (const input of cases) {
+    const api = new RecordingApi(() => assert.fail("hostile input must not reach the provider"));
+    let authorityCalls = 0;
+    const authority = api.authority();
+    authority.trackingAuthority = { resolve: async () => { authorityCalls += 1; throw new Error("must not resolve authority"); } };
+    await assert.rejects(trackDevelopmentRecords(authority, input as never), (error: unknown) => error instanceof GitHubTrackerError && error.code === "invalid-request" && !error.message.includes(secret));
+    assert.equal(authorityCalls, 0);
+    assert.equal(api.calls.length, 0);
+    assert.equal(api.writes.length, 0);
+  }
+});
+
 test("a destination-returning resolver cannot escape a real staged-pair bound guard", async () => {
   const api = new RecordingApi(rest => rest.path === "/user" ? { login: "shipyard-actor" } : []);
   const authority = api.authority(staged);

@@ -114,34 +114,56 @@ export async function trackDevelopmentRecords(
 
 /** Validates and snapshots public JS/deserialized input before authority or provider access. */
 function validateDevelopmentRecordRequest(value: unknown): DevelopmentRecordRequest {
-  if (!record(value) || !exactKeys(value, ["deliveryId", "issue", "pullRequest", "resume"], ["resume"]) || typeof value.deliveryId !== "string") throw invalidRequest();
-  const issue = validateDevelopmentRecordInput(value.issue);
-  const pullRequest = validateDevelopmentRecordInput(value.pullRequest);
-  let resume: DevelopmentRecordResume | undefined;
-  if (value.resume !== undefined) {
-    if (!record(value.resume) || !exactKeys(value.resume, ["issueId", "pullRequestId"], ["issueId", "pullRequestId"])) throw invalidRequest();
-    const issueId = optionalCanonicalId(value.resume.issueId);
-    const pullRequestId = optionalCanonicalId(value.resume.pullRequestId);
-    resume = { ...(issueId === undefined ? {} : { issueId }), ...(pullRequestId === undefined ? {} : { pullRequestId }) };
+  try {
+    const root = snapshotObject(value);
+    requireExactKeys(root, ["deliveryId", "issue", "pullRequest", "resume"], ["resume"]);
+    const deliveryId = root.get("deliveryId");
+    if (typeof deliveryId !== "string") throw new Error();
+    const issue = validateDevelopmentRecordInput(root.get("issue"));
+    const pullRequest = validateDevelopmentRecordInput(root.get("pullRequest"));
+    let resume: DevelopmentRecordResume | undefined;
+    if (root.has("resume") && root.get("resume") !== undefined) {
+      const fields = snapshotObject(root.get("resume"));
+      requireExactKeys(fields, ["issueId", "pullRequestId"], ["issueId", "pullRequestId"]);
+      const issueId = fields.has("issueId") && fields.get("issueId") !== undefined ? canonicalId(fields.get("issueId")) : undefined;
+      const pullRequestId = fields.has("pullRequestId") && fields.get("pullRequestId") !== undefined ? canonicalId(fields.get("pullRequestId")) : undefined;
+      resume = { ...(issueId === undefined ? {} : { issueId }), ...(pullRequestId === undefined ? {} : { pullRequestId }) };
+    }
+    return { deliveryId, issue, pullRequest, ...(resume === undefined ? {} : { resume }) };
+  } catch {
+    throw invalidRequest();
   }
-  return { deliveryId: value.deliveryId, issue, pullRequest, ...(resume === undefined ? {} : { resume }) };
 }
 
 function validateDevelopmentRecordInput(value: unknown): DevelopmentIssueRequest {
-  if (!record(value) || !exactKeys(value, ["title", "body"]) || !meaningfulString(value.title) || !meaningfulString(value.body)) throw invalidRequest();
-  return { title: value.title, body: value.body };
+  const fields = snapshotObject(value);
+  requireExactKeys(fields, ["title", "body"]);
+  const title = fields.get("title"); const body = fields.get("body");
+  if (!meaningfulString(title) || !meaningfulString(body)) throw new Error();
+  return { title, body };
 }
 
-function optionalCanonicalId(value: unknown): string | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== "string" || value.trim() === "" || value !== value.trim()) throw invalidRequest();
+function canonicalId(value: unknown): string {
+  if (typeof value !== "string" || value.trim() === "" || value !== value.trim()) throw new Error();
   return value;
 }
 
-function record(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
-function exactKeys(value: Record<string, unknown>, allowed: readonly string[], optional: readonly string[] = []): boolean {
+/** Snapshots only ordinary own enumerable data properties without invoking accessors. */
+function snapshotObject(value: unknown): ReadonlyMap<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw new Error();
+  const keys = Reflect.ownKeys(value);
+  if (keys.some(key => typeof key !== "string")) throw new Error();
+  const snapshot = new Map<string, unknown>();
+  for (const key of keys as string[]) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) throw new Error();
+    snapshot.set(key, descriptor.value);
+  }
+  return snapshot;
+}
+function requireExactKeys(value: ReadonlyMap<string, unknown>, allowed: readonly string[], optional: readonly string[] = []): void {
   const required = allowed.filter(key => !optional.includes(key));
-  return required.every(key => Object.hasOwn(value, key)) && Object.keys(value).every(key => allowed.includes(key));
+  if (!required.every(key => value.has(key)) || [...value.keys()].some(key => !allowed.includes(key))) throw new Error();
 }
 function meaningfulString(value: unknown): value is string { return typeof value === "string" && value.trim() !== ""; }
 function invalidRequest(): GitHubTrackerError { return new GitHubTrackerError("invalid-request", "Tracker request must contain exact non-empty issue, pull request, and canonical resume fields."); }

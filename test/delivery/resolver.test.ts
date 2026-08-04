@@ -18,7 +18,7 @@ class Registry {
   async write(document: DeliveryRegistryDocument) { this.document = document; }
 }
 
-function makeResolver(document: DeliveryRegistryDocument | undefined) {
+function makeResolver(document: DeliveryRegistryDocument | undefined, readinessValid = true) {
   const git = new FakeGit();
   for (const path of ["/main", "/worktrees/delivery-001", "/worktrees/delivery-002", "/wrong-worktree"]) {
     git.commonDirectories.set(path, commonDirectory);
@@ -26,7 +26,8 @@ function makeResolver(document: DeliveryRegistryDocument | undefined) {
   }
   const bindings = new BindingService(new MemoryBindingStore({ schemaVersion: 1, bindings: [{ schemaVersion: 1, profileName: "test", commonDirectory, topology, profileFingerprint: "0".repeat(64), boundAt: "2026-08-04T00:00:00.000Z" }] }), git);
   const registry = new Registry(document);
-  return { registry, resolver: new DeliveryResolver(bindings, registry) };
+  const readiness = { calls: 0, async verifyReadyWorkspace() { this.calls += 1; return readinessValid; } };
+  return { registry, readiness, resolver: new DeliveryResolver(bindings, registry, readiness) };
 }
 
 test("resolves a linked worktree through its canonical common-directory binding", async () => {
@@ -67,4 +68,10 @@ test("recomputes from the registry for every resolve and never reuses a mutable 
 
 test("does not resolve an interrupted creating claim", async () => {
   await assert.rejects(makeResolver({ schemaVersion: 1, workspaces: [workspace({ state: "creating" })] }).resolver.resolve({ repositoryPath: "/main", deliveryId: "delivery-001" }), (error: unknown) => error instanceof DeliveryError && error.code === "delivery-incomplete");
+});
+
+test("does not resolve a ready registration with missing or mismatched durable proofs", async () => {
+  const { readiness, resolver } = makeResolver({ schemaVersion: 1, workspaces: [workspace()] }, false);
+  await assert.rejects(resolver.resolve({ repositoryPath: "/main", deliveryId: "delivery-001" }), (error: unknown) => error instanceof DeliveryError && error.code === "delivery-incomplete");
+  assert.equal(readiness.calls, 1);
 });
