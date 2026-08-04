@@ -71,6 +71,9 @@ export function validateBindingDocument(value: unknown): BindingDocument | undef
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
     const record = value as Record<string, unknown>;
     if (Object.keys(record).length !== 2 || record.schemaVersion !== 1 || !Array.isArray(record.bindings)) throw new Error();
-    return { schemaVersion: 1, bindings: record.bindings.map((binding) => validateBinding(binding)) };
+    const bindings = record.bindings.map((binding) => validateBinding(binding));
+    const commonDirectories = bindings.map((binding) => binding.commonDirectory);
+    if (new Set(commonDirectories).size !== commonDirectories.length) throw new Error();
+    return { schemaVersion: 1, bindings };
   } catch { throw new BindingError("binding-store-invalid", "Binding store is not a valid canonical version 1 binding document."); }
 }

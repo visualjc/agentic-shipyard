@@ -1,0 +1,54 @@
+#!/usr/bin/env node
+import { lstat, mkdir, readFile, readlink, realpath, symlink } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const names = ["shipyard", "shipyard-setup", "shipyard-status", "shipyard-help"];
+const args = process.argv.slice(2);
+let target;
+let home;
+for (let index = 0; index < args.length; index += 1) {
+  if (args[index] === "--target") target = args[++index];
+  else if (args[index] === "--home") home = args[++index];
+  else if (args[index] === "--help") {
+    process.stdout.write("Usage: shipyard-skills-install [--target PROJECT_ROOT | --home HOME_ROOT]\n");
+    process.exit(0);
+  } else fail(`Unknown or incomplete option: ${args[index]}`);
+}
+if (target && home) fail("Use either --target or --home, not both.");
+const root = target ? resolve(target) : home ? resolve(home) : process.cwd();
+const skillsRoot = join(root, ".agents", "skills");
+const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const canonical = await Promise.all(names.map(async (name) => {
+  const directory = join(packageRoot, "skills", name);
+  try {
+    await readFile(join(directory, "SKILL.md"), "utf8");
+    const metadata = await readFile(join(directory, "agents", "openai.yaml"), "utf8");
+    if (!/^display_name: .+\nshort_description: .+\ndefault_prompt: .+\ninvocation_policy: explicit\n$/.test(metadata)) throw new Error("invalid metadata");
+    return [name, await realpath(directory)];
+  } catch { fail(`Packaged skill ${name} is incomplete; refusing to change discovery paths.`); }
+}));
+
+// Validate every destination before creating even a parent directory.
+for (const [name, source] of canonical) {
+  const destination = join(skillsRoot, name);
+  try {
+    const info = await lstat(destination);
+    if (!info.isSymbolicLink()) fail(`Refusing to replace existing ${destination}.`);
+    if (await readlink(destination) !== source) fail(`Refusing to replace symlink ${destination} with a different target.`);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
+await mkdir(skillsRoot, { recursive: true });
+for (const [name, source] of canonical) {
+  const destination = join(skillsRoot, name);
+  try { await lstat(destination); }
+  catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    await symlink(source, destination);
+  }
+}
+process.stdout.write(`Installed ${names.length} Shipyard skills at ${skillsRoot}.\n`);
+
+function fail(message) { process.stderr.write(`shipyard-skills-install: ${message}\n`); process.exit(1); }

@@ -8,7 +8,7 @@ import test from "node:test";
 import { nodeGit } from "../../src/adapters/git.js";
 import { BindingError } from "../../src/binding/errors.js";
 import { ContractValidationError } from "../../src/contracts/validate.js";
-import { BindingService, newBindingDocument, validateTopology } from "../../src/binding/service.js";
+import { BindingService, newBindingDocument, validateBindingDocument, validateTopology } from "../../src/binding/service.js";
 import { JsonBindingStore } from "../../src/binding/store.js";
 import { RepositoryBinding, RepositoryTopology } from "../../src/binding/types.js";
 import { FakeGit, MemoryBindingStore, MemoryFilesystem } from "../helpers/fakes.js";
@@ -31,7 +31,7 @@ function configuredGit(): FakeGit {
 test("rejects missing, duplicate, stale, partial, and remote-mismatched bindings", async () => {
   const cases: Array<[string, ReturnType<typeof newBindingDocument> | undefined, (git: FakeGit) => void, BindingError["code"]]> = [
     ["missing", undefined, () => {}, "repository-unbound"],
-    ["duplicate", newBindingDocument([binding(), binding()]), () => {}, "binding-duplicate"],
+    ["duplicate", { schemaVersion: 1, bindings: [binding(), binding()] } as never, () => {}, "binding-store-invalid"],
     ["stale common directory", newBindingDocument([binding("/old/.git")]), () => {}, "repository-unbound"],
     ["remote mismatch", newBindingDocument([binding()]), (git) => git.remotes.set("/main:origin", "https://example.test/wrong.git"), "binding-remote-mismatch"],
   ];
@@ -78,12 +78,24 @@ test("binding store deep-validates hostile persisted documents", async () => {
     { schemaVersion: 1, bindings: [{ ...valid, topology: { ...topology, development: { ...topology.development, remote: { ...topology.development.remote, name: " " } } } }] },
     { schemaVersion: 1, bindings: [valid], surprise: true },
     { schemaVersion: 1, bindings: "not-an-array" },
+    { schemaVersion: 1, bindings: [valid, { ...valid, profileName: "duplicate" }] },
   ];
   for (const candidate of hostile) {
     const fs = new MemoryFilesystem();
     fs.files.set("/bindings.json", JSON.stringify(candidate));
     await assert.rejects(new JsonBindingStore(fs, "/bindings.json").read(), (error: unknown) => error instanceof BindingError && error.code === "binding-store-invalid");
   }
+});
+
+test("duplicate common directories are rejected at the document boundary before git or store mutation", async () => {
+  const duplicate = { schemaVersion: 1, bindings: [binding(), { ...binding(), profileName: "other" }] };
+  assert.throws(() => validateBindingDocument(duplicate), (error: unknown) => error instanceof BindingError && error.code === "binding-store-invalid");
+  const git = configuredGit();
+  const hostile = new MemoryBindingStore(duplicate as never);
+  await assert.rejects(new BindingService(hostile, git).resolve("/main"), (error: unknown) => error instanceof BindingError && error.code === "binding-store-invalid");
+  const fs = new MemoryFilesystem();
+  fs.files.set("/bindings.json", JSON.stringify(duplicate));
+  await assert.rejects(new JsonBindingStore(fs, "/bindings.json").read(), (error: unknown) => error instanceof BindingError && error.code === "binding-store-invalid");
 });
 
 test("binding store validates writes as well as reads", async () => {

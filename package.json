@@ -13,13 +13,13 @@
     "shipyard": "./bin/shipyard",
     "shipyard-setup": "./bin/shipyard-setup",
     "shipyard-status": "./bin/shipyard-status",
-    "shipyard-help": "./bin/shipyard-help"
+    "shipyard-help": "./bin/shipyard-help",
+    "shipyard-skills-install": "./bin/shipyard-skills-install"
   },
   "files": [
     "dist/src",
     "bin",
     "skills",
-    ".agents",
     "docs",
     "README.md"
   ],

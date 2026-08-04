@@ -29,6 +29,6 @@ the common-directory lock first and then one Shipyard-home binding-store lock,
 so concurrent setup in different repositories cannot lose a binding update.
 
 Focused Codex skills are in `skills/shipyard*` and are discovered in this repo
-through `.agents/skills` symlinks; see [skills](docs/skills.md), [setup](docs/setup.md),
+through source-checkout `.agents/skills` symlinks (npm users run the packaged installer); see [skills](docs/skills.md), [setup](docs/setup.md),
 [status](docs/status.md), [help](docs/help.md), and
 [metadata ownership](docs/metadata-ownership.md).

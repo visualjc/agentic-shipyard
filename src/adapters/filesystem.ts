@@ -12,6 +12,8 @@ export interface FilesystemAdapter {
   /** Returns false when a file already exists; it must never overwrite it. */
   createTextExclusive(path: string, contents: string): Promise<boolean>;
   remove(path: string): Promise<void>;
+  /** Removes only an empty directory. False means another owner replaced or populated it. */
+  removeEmptyDirectory(path: string): Promise<boolean>;
   /**
    * Runs a lifecycle transition while holding an atomic mkdir-based guard.
    * Every participant that can create, recover, or release the guarded state
@@ -47,6 +49,16 @@ export const nodeFilesystem: FilesystemAdapter = {
   },
   async remove(path) {
     await rm(path, { force: true });
+  },
+  async removeEmptyDirectory(path) {
+    try {
+      await rmdir(path);
+      return true;
+    } catch (error: unknown) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTEMPTY") return false;
+      throw error;
+    }
   },
   async withExclusiveDirectory(path, operation) {
     await mkdir(dirname(path), { recursive: true });

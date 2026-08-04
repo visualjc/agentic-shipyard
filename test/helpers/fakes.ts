@@ -21,6 +21,12 @@ export class MemoryFilesystem implements FilesystemAdapter {
     return true;
   }
   async remove(path: string): Promise<void> { this.files.delete(path); }
+  async removeEmptyDirectory(path: string): Promise<boolean> {
+    if (!this.directories.has(path)) return false;
+    if ([...this.files.keys()].some((file) => file.startsWith(`${path}/`))) return false;
+    this.directories.delete(path);
+    return true;
+  }
   async withExclusiveDirectory<T>(path: string, operation: () => Promise<T>) {
     if (this.directories.has(path)) return { acquired: false } as const;
     this.directories.add(path);

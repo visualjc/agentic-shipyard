@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { readFile, stat } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, readlink, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -23,6 +24,7 @@ test("packed package contains runnable public API, commands, skills, and focused
     "shipyard-setup": "./bin/shipyard-setup",
     "shipyard-status": "./bin/shipyard-status",
     "shipyard-help": "./bin/shipyard-help",
+    "shipyard-skills-install": "./bin/shipyard-skills-install",
   });
 
   const { stdout } = await execFileAsync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
@@ -59,4 +61,38 @@ test("packed package contains runnable public API, commands, skills, and focused
   ];
   for (const path of expectedContent) assert.ok(entries.has(path), `missing package content ${path}`);
   assert.equal([...entries.keys()].some((path) => path.startsWith("src/") || path.startsWith("test/") || path.startsWith("dist/test/")), false);
+  assert.equal([...entries.keys()].some((path) => path.startsWith(".agents/")), false, "npm must not claim to ship source-checkout symlinks");
+});
+
+test("packaged skill installer creates only exact canonical discovery symlinks", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "shipyard-pack-"));
+  try {
+    const { stdout } = await execFileAsync("npm", ["pack", "--json"], { cwd: packageRoot, encoding: "utf8" });
+    const tarball = join(packageRoot, (JSON.parse(stdout) as Array<{ filename: string }>)[0].filename);
+    const installRoot = join(sandbox, "installed");
+    const projectRoot = join(sandbox, "project");
+    const userRoot = join(sandbox, "user");
+    await execFileAsync("npm", ["install", "--ignore-scripts", "--prefix", installRoot, tarball], { encoding: "utf8" });
+    const installer = join(installRoot, "node_modules", "@visualjc", "shipyard", "bin", "shipyard-skills-install");
+    const installedSkills = join(installRoot, "node_modules", "@visualjc", "shipyard", "skills");
+    for (const root of [projectRoot, userRoot]) {
+      await execFileAsync(process.execPath, [installer, root === projectRoot ? "--target" : "--home", root], { encoding: "utf8" });
+      await execFileAsync(process.execPath, [installer, root === projectRoot ? "--target" : "--home", root], { encoding: "utf8" });
+      for (const skill of ["shipyard", "shipyard-setup", "shipyard-status", "shipyard-help"]) {
+        const link = join(root, ".agents", "skills", skill);
+        assert.ok((await lstat(link)).isSymbolicLink());
+        assert.equal(await readlink(link), await (await import("node:fs/promises")).realpath(join(installedSkills, skill)));
+        await readFile(join(link, "SKILL.md"), "utf8");
+        await readFile(join(link, "agents", "openai.yaml"), "utf8");
+      }
+    }
+    const refusal = join(projectRoot, ".agents", "skills", "shipyard");
+    await rm(refusal);
+    await writeFile(refusal, "do not replace");
+    await assert.rejects(execFileAsync(process.execPath, [installer, "--target", projectRoot]), /Refusing to replace existing/);
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+    const packs = await (await import("node:fs/promises")).readdir(packageRoot);
+    await Promise.all(packs.filter((file) => /^visualjc-shipyard-.*\.tgz$/.test(file)).map((file) => rm(join(packageRoot, file), { force: true })));
+  }
 });

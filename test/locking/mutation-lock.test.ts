@@ -65,3 +65,50 @@ test("serializes stale recovery and refuses to release a different identity", as
   await assert.rejects(recovered.release(), (error: unknown) => error instanceof MutationLockError && error.code === "lock-unsafe-recovery");
   assert.deepEqual(JSON.parse(fs.files.get("/locks/repo")!), newer);
 });
+
+test("recovers an empty orphan lifecycle directory and a proven-dead owner", async () => {
+  const fs = new MemoryFilesystem();
+  const process = new FakeProcess();
+  const service = new MutationLockService(fs, process, 1_000);
+  fs.directories.add("/locks/repo.lifecycle");
+  const fromEmpty = await service.acquire("/locks/repo", "/git/repo", "sync");
+  await fromEmpty.release();
+
+  fs.directories.add("/locks/repo.lifecycle");
+  fs.files.set("/locks/repo.lifecycle/owner.json", JSON.stringify({ version: 1, host: "test-host", processId: 22, token: "crashed", acquiredAt: "2026-08-03T00:00:00.000Z" }));
+  const fromDead = await service.acquire("/locks/repo", "/git/repo", "sync");
+  await fromDead.release();
+});
+
+test("lifecycle recovery fails closed for live, cross-host, and malformed owners", async () => {
+  const cases: Array<[string, unknown, MutationLockError["code"]]> = [
+    ["live", { version: 1, host: "test-host", processId: 22, token: "live", acquiredAt: "2026-08-03T00:00:00.000Z" }, "lock-held"],
+    ["cross-host", { version: 1, host: "other", processId: 22, token: "other", acquiredAt: "2026-08-03T00:00:00.000Z" }, "lock-unsafe-recovery"],
+    ["corrupt", "{partial", "lock-unsafe-recovery"],
+  ];
+  for (const [name, owner, expected] of cases) {
+    const fs = new MemoryFilesystem(); const process = new FakeProcess();
+    if (name === "live") process.alive.add(22);
+    fs.directories.add("/locks/repo.lifecycle");
+    fs.files.set("/locks/repo.lifecycle/owner.json", typeof owner === "string" ? owner : JSON.stringify(owner));
+    await assert.rejects(new MutationLockService(fs, process).acquire("/locks/repo", "/git/repo", "sync"), (error: unknown) => error instanceof MutationLockError && error.code === expected, name);
+  }
+});
+
+test("two recoverers cannot remove a replacement lifecycle owner", async () => {
+  const fs = new MemoryFilesystem();
+  const process = new FakeProcess();
+  fs.directories.add("/locks/repo.lifecycle");
+  fs.files.set("/locks/repo.lifecycle/owner.json", JSON.stringify({ version: 1, host: "test-host", processId: 22, token: "dead", acquiredAt: "2026-08-03T00:00:00.000Z" }));
+  let raced = false;
+  fs.onRead = async (path) => {
+    if (path === "/locks/repo.lifecycle/owner.json") {
+      await assert.rejects(new MutationLockService(fs, process).acquire("/locks/repo", "/git/repo", "racer"), (error: unknown) => error instanceof MutationLockError && error.code === "lock-held");
+      raced = true;
+    }
+  };
+  const winner = await new MutationLockService(fs, process).acquire("/locks/repo", "/git/repo", "winner");
+  assert.equal(raced, true);
+  assert.equal(JSON.parse(fs.files.get("/locks/repo")!).operation, "winner");
+  await winner.release();
+});
