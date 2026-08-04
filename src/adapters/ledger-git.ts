@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { LedgerError } from "../ledger/errors.js";
 import { applyLedgerTransaction, validLedgerPath } from "../ledger/transaction.js";
-import type { LedgerSnapshot, LedgerStore, LedgerTransaction } from "../ledger/types.js";
+import type { LedgerCommitChange, LedgerCommitInspection, LedgerSnapshot, LedgerStore, LedgerTransaction } from "../ledger/types.js";
 import type { PinnedLedgerReader } from "../context/types.js";
 import { canonicalGitExecutable, DEFAULT_NODE_GIT_EXECUTABLE, sanitizedGitEnvironment } from "./git-transport.js";
 
@@ -52,6 +52,30 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
       if (value !== undefined) records[path] = value;
     }
     return records;
+  }
+
+  /** Reads the exact reachable commit identity, sole parent, and tree diff needed by final-seal verification. */
+  async inspectCommit(ledgerSha: string): Promise<LedgerCommitInspection> {
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(ledgerSha)) throw new LedgerError("ledger-invalid-path", "Ledger commit inspection requires a full object ID.");
+    const commitSha = await this.optionalRef(`${ledgerSha}^{commit}`);
+    if (!commitSha) throw new LedgerError("ledger-unavailable", "The inspected ledger commit is unavailable.");
+    const head = await this.optionalRef(GitLedgerStore.ref);
+    if (!head || !(await this.isAncestor(commitSha, head))) throw new LedgerError("ledger-unavailable", "The inspected ledger commit is not reachable from the configured ledger ref.");
+    const ancestry = (await this.gitRequired(["rev-list", "--parents", "-n", "1", commitSha])).split(" ");
+    if (ancestry[0] !== commitSha || ancestry.length > 2) throw new LedgerError("ledger-invalid-record", "Ledger commits must have a single linear parent.");
+    const parentSha = ancestry[1];
+    const rawDiff = await this.gitRequired(["diff-tree", "--root", "--no-commit-id", "--name-status", "-r", "--no-renames", "-z", commitSha]);
+    const fields = rawDiff === "" ? [] : rawDiff.split("\0");
+    if (fields.at(-1) === "") fields.pop();
+    if (fields.length % 2 !== 0) throw new LedgerError("ledger-invalid-record", "Ledger commit diff is malformed.");
+    const changes: LedgerCommitChange[] = [];
+    for (let index = 0; index < fields.length; index += 2) {
+      const status = fields[index]!; const path = fields[index + 1]!;
+      const mapped = status === "A" ? "added" : status === "M" ? "modified" : status === "D" ? "deleted" : undefined;
+      if (!mapped || !validLedgerPath(path)) throw new LedgerError("ledger-invalid-record", "Ledger commit diff contains an unsupported change.");
+      changes.push(Object.freeze({ status: mapped, path }));
+    }
+    return Object.freeze({ commitSha, parentSha, changes: Object.freeze(changes) });
   }
 
   async transact(transaction: LedgerTransaction): Promise<string> {

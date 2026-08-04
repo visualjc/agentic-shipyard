@@ -57,9 +57,47 @@ The first durable delivery record is a canonical version-1 JSON document. It
 binds the delivery ID, Git common directory, canonical branch, exact starting
 product SHA, and the caller's initial payload. The workspace service writes it
 before creating the linked worktree and writes the registry last. A registry
-entry without that record is rejected rather than repaired. When recovering
-before registry creation, an existing branch is accepted only if its head is
-the recorded starting SHA; a newly-created branch is explicitly created at
-that SHA. `GitLedgerStore` always writes `refs/heads/shipyard-ledger`; its
-constructor accepts no configurable ledger ref. Its subprocesses use a
-canonical absolute Git executable and never resolve a bare `git` from `PATH`.
+entry without that record is rejected rather than repaired. The registry write
+is also gated on a post-creation check that the canonical feature branch still
+points at that recorded product SHA. If a concurrent creator supplied a
+different branch during `worktree add`, Shipyard removes only the linked
+worktree it just created and leaves the foreign branch untouched. When
+recovering before registry creation, an existing branch is accepted only if
+its head is the recorded starting SHA; a newly-created branch is explicitly
+created at that SHA. `GitLedgerStore` always writes
+`refs/heads/shipyard-ledger`; its constructor accepts no configurable ledger
+ref. Its subprocesses use a canonical absolute Git executable and never
+resolve a bare `git` from `PATH`.
+
+## Final delivery seal
+
+A delivery's final ledger seal is a canonical version-1 JSON record at
+`deliveries/<id>/final-seal.json`. It binds the stable delivery ID, exact
+product SHA, and exact pre-seal ledger SHA. Its manifest is a strictly sorted
+list of every sealed durable-record path and the SHA-256 of that record's exact
+UTF-8 bytes. Missing, additional, reordered, duplicate, cross-delivery, unsafe,
+or changed records invalidate verification. The seal path itself is forbidden
+from the manifest.
+
+`sealDelivery` first snapshots exactly the declared record paths plus the seal
+path. Every declared record must exist and the seal must not. It then performs
+one semantic compare-and-swap transaction against the exact snapshot head,
+writing only the seal record. The returned commit SHA is the **external seal
+commit SHA** and must be retained by the delivery workflow outside the seal.
+
+This external SHA is intentional: a Git commit cannot contain its own final
+object ID. Verification resolves that external SHA through `GitLedgerStore`,
+proves it remains reachable from `refs/heads/shipyard-ledger`, inspects its
+single parent and exact diff, and reads the seal plus manifested records from
+that commit. The pure verifier then requires:
+
+- the inspected commit to equal the external seal commit SHA;
+- its parent to equal the seal's pre-seal ledger SHA;
+- its only change to be addition of the final-seal record;
+- the current product SHA to equal the sealed product SHA;
+- exact manifest membership and byte hashes; and
+- canonical seal serialization with no self-reference.
+
+Any later product change makes the seal stale. Any ledger-record change,
+missing/extra observed record, wrong commit or parent, altered seal bytes, or
+attempt to seal the same delivery again fails closed.

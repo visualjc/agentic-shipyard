@@ -5,6 +5,8 @@ export type StatusProjection = Readonly<{
   phase: DeliveryPhase;
   productSha?: string;
   ledgerSha?: string;
+  workspacePath?: string;
+  workspaceBranch?: string;
   destinationSha?: string;
   acceptanceFresh?: boolean;
   providerRefs?: Readonly<Record<string, string>>;

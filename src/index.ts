@@ -36,7 +36,9 @@ export type { DeliveryRegistry, DeliveryRegistryDocument, DeliveryResolutionRequ
 export { LedgerError } from "./ledger/errors.js";
 export type { LedgerFailureCode } from "./ledger/errors.js";
 export { applyLedgerTransaction, validLedgerPath } from "./ledger/transaction.js";
-export type { LedgerSnapshot, LedgerStore, LedgerTransaction, LedgerWrite } from "./ledger/types.js";
+export { createFinalLedgerSeal, finalSealManifest, finalSealPath, sealDelivery, validateFinalLedgerSeal, verifyFinalLedgerSeal } from "./ledger/final-seal.js";
+export type { CreateFinalLedgerSeal, FinalLedgerSeal, FinalLedgerSealManifestEntry, FinalLedgerSealObservation, SealDeliveryRequest } from "./ledger/final-seal.js";
+export type { LedgerCommitChange, LedgerCommitInspection, LedgerSnapshot, LedgerStore, LedgerTransaction, LedgerWrite } from "./ledger/types.js";
 export { createGitLedgerStore, GitLedgerStore } from "./adapters/ledger-git.js";
 export { WorkspaceError } from "./workspace/errors.js";
 export type { WorkspaceFailureCode } from "./workspace/errors.js";
