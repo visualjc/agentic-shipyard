@@ -53,6 +53,8 @@ test("stores durable records on an orphan ledger ref outside product ancestry an
     assert.throws(() => GitLedgerStore.requireProductOnlyTransport(["refs/heads/main:refs/heads/main"], JSON.stringify({ ref: GitLedgerStore.ref })), LedgerError);
     assert.throws(() => GitLedgerStore.requireProductOnlyTransport(["refs/heads/shipyard-ledger:refs/heads/main"]), LedgerError);
     assert.throws(() => GitLedgerStore.requireProductOnlyTransport(["refs/heads/main:refs/heads/main"], JSON.stringify({ ref: "refs/shipyard/workspace-readiness/token" })), LedgerError);
+    assert.throws(() => GitLedgerStore.requireProductOnlyTransport(["refs/shipyard/source/upstream/object:refs/heads/main"]), LedgerError);
+    assert.throws(() => GitLedgerStore.requireProductOnlyTransport(["refs/heads/main:refs/heads/main"], JSON.stringify({ ref: "refs/shipyard/source/upstream/object" })), LedgerError);
     assert.doesNotThrow(() => GitLedgerStore.requireProductOnlyTransport(["refs/heads/main:refs/heads/main"], JSON.stringify({ ref: "refs/heads/main" })));
   } finally { await rm(path, { recursive: true, force: true }); }
 });

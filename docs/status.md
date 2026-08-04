@@ -6,3 +6,7 @@ authorization, then prints the status projection. It performs no provider
 mutation, filesystem write, or mutation-lock operation. An unbound, stale,
 missing, malformed, changed, or unauthorized profile reports deterministic
 setup/rebind guidance.
+
+Sync freshness is reported as unavailable until an explicit `shipyard-sync`
+operation establishes fresh destination facts. Status never fetches, imports,
+acquires the sync lock, or reads/writes isolated ledger history to refresh it.

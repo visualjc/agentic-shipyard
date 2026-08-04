@@ -17,6 +17,7 @@ node bin/shipyard-help setup
 node bin/shipyard-setup --profile NAME --topology single-repository \
   --development-name origin --development-url URL
 node bin/shipyard-status
+SHIPYARD_GIT_TOKEN=... node bin/shipyard-sync
 ```
 
 Bindings are machine-local (`$SHIPYARD_HOME/bindings.json`, defaulting to
@@ -31,4 +32,4 @@ so concurrent setup in different repositories cannot lose a binding update.
 Focused Codex skills are in `skills/shipyard*` and are discovered in this repo
 through source-checkout `.agents/skills` symlinks (npm users run the packaged installer); see [skills](docs/skills.md), [setup](docs/setup.md),
 [status](docs/status.md), [help](docs/help.md), and
-[metadata ownership](docs/metadata-ownership.md).
+[metadata ownership](docs/metadata-ownership.md), and [synchronization](docs/synchronization.md).

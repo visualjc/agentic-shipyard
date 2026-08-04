@@ -2,8 +2,10 @@ import { BindingError } from "../binding/errors.js";
 import { MutationLockError } from "../locking/mutation-lock.js";
 import { RepositoryIdentityError } from "../commands/setup.js";
 import { ProfileStoreError } from "./profile-store.js";
+import { SyncError } from "../sync/errors.js";
 
 export function setupGuidance(error: unknown): string {
+  if (error instanceof SyncError) return error.message;
   if (error instanceof BindingError) {
     switch (error.code) {
       case "repository-unbound": return "No binding was found. Run shipyard-setup with the complete, existing topology.";

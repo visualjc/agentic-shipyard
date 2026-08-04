@@ -3,7 +3,7 @@ import { lstat, mkdir, readFile, readlink, realpath, symlink } from "node:fs/pro
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const names = ["shipyard", "shipyard-setup", "shipyard-status", "shipyard-help"];
+const names = ["shipyard", "shipyard-setup", "shipyard-status", "shipyard-sync", "shipyard-help"];
 const args = process.argv.slice(2);
 let target;
 let home;

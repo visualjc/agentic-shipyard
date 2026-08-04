@@ -23,6 +23,7 @@ test("packed package contains runnable public API, commands, skills, and focused
     shipyard: "./bin/shipyard",
     "shipyard-setup": "./bin/shipyard-setup",
     "shipyard-status": "./bin/shipyard-status",
+    "shipyard-sync": "./bin/shipyard-sync",
     "shipyard-help": "./bin/shipyard-help",
     "shipyard-skills-install": "./bin/shipyard-skills-install",
   });
@@ -48,13 +49,17 @@ test("packed package contains runnable public API, commands, skills, and focused
     "skills/shipyard/SKILL.md",
     "skills/shipyard-setup/SKILL.md",
     "skills/shipyard-status/SKILL.md",
+    "skills/shipyard-sync/SKILL.md",
     "skills/shipyard-help/SKILL.md",
     "skills/shipyard/agents/openai.yaml",
     "skills/shipyard-setup/agents/openai.yaml",
     "skills/shipyard-status/agents/openai.yaml",
+    "skills/shipyard-sync/agents/openai.yaml",
     "skills/shipyard-help/agents/openai.yaml",
     "docs/setup.md",
     "docs/status.md",
+    "docs/synchronization.md",
+    "docs/sync-recovery.md",
     "docs/help.md",
     "docs/metadata-ownership.md",
     "docs/skills.md",
@@ -104,7 +109,7 @@ test("packaged skill installer creates only exact canonical discovery symlinks",
     for (const root of [projectRoot, userRoot]) {
       await execFileAsync(process.execPath, [installer, root === projectRoot ? "--target" : "--home", root], { encoding: "utf8" });
       await execFileAsync(process.execPath, [installer, root === projectRoot ? "--target" : "--home", root], { encoding: "utf8" });
-      for (const skill of ["shipyard", "shipyard-setup", "shipyard-status", "shipyard-help"]) {
+      for (const skill of ["shipyard", "shipyard-setup", "shipyard-status", "shipyard-sync", "shipyard-help"]) {
         const link = join(root, ".agents", "skills", skill);
         assert.ok((await lstat(link)).isSymbolicLink());
         assert.equal(await readlink(link), await (await import("node:fs/promises")).realpath(join(installedSkills, skill)));

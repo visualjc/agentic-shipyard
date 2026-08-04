@@ -1,8 +1,8 @@
 ---
 name: shipyard
-description: Dispatch a Shipyard setup, status, or focused help command safely.
+description: Dispatch a Shipyard setup, status, sync, or focused help command safely.
 metadata:
-  invocation: shipyard <setup|status|help>
+  invocation: shipyard <setup|status|sync|help>
 ---
 
 # Shipyard

@@ -70,3 +70,15 @@ export { githubTrackerStatusContributor } from "./github/status.js";
 export type { GitHubTrackerStatus } from "./github/status.js";
 export { GitTransportError, GitTransportService, redactGitTransportDiagnostic } from "./github/git-transport.js";
 export type { GitTransportCredential, GitTransportResult } from "./github/git-transport.js";
+
+// Narrow baseline synchronization and read-only source-import contracts.
+export { SyncError, SyncService, canonicalSourceRef } from "./sync/service.js";
+export type { SyncErrorCode } from "./sync/errors.js";
+export type { BaselineObservation, SyncGit } from "./sync/git.js";
+export type { SourceProvenance, SyncOutcome, SyncRequest } from "./sync/types.js";
+export { syncStatusContributor } from "./sync/status.js";
+export type { SyncStatus } from "./sync/status.js";
+export { NodeSyncGit } from "./adapters/sync-git.js";
+export { DestinationSyncTransport, assertNoSourcePublication, requireSourceFreePublication } from "./sync/transport.js";
+export type { GitTransportCredentialResolver, PublicationRequest, StagedDestination, SyncDestinationTransport, VerifiedGitTransportCredential } from "./sync/transport.js";
+export { validateSourceProvenance } from "./sync/provenance.js";

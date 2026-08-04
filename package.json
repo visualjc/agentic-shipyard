@@ -13,6 +13,7 @@
     "shipyard": "./bin/shipyard",
     "shipyard-setup": "./bin/shipyard-setup",
     "shipyard-status": "./bin/shipyard-status",
+    "shipyard-sync": "./bin/shipyard-sync",
     "shipyard-help": "./bin/shipyard-help",
     "shipyard-skills-install": "./bin/shipyard-skills-install"
   },
