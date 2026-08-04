@@ -7,6 +7,8 @@ import { MemoryFilesystem } from "../helpers/fakes.js";
 
 const workspace = (overrides: Partial<DeliveryWorkspace> = {}): DeliveryWorkspace => ({
   schemaVersion: 1,
+  state: "ready",
+  creationToken: "11111111-1111-4111-8111-111111111111",
   deliveryId: "delivery-001",
   commonDirectory: "/repos/widget/.git",
   branch: "shipyard/delivery-001",
@@ -21,6 +23,7 @@ test("validates versioned local workspace records and preserves independent snap
   assert.notStrictEqual(validated.workspaces, document.workspaces);
   assert.throws(() => validateDeliveryRegistryDocument({ schemaVersion: 2, workspaces: [] }), DeliveryError);
   assert.throws(() => validateDeliveryRegistryDocument({ schemaVersion: 1, workspaces: [{ ...workspace(), unknown: true }] }), DeliveryError);
+  assert.throws(() => validateDeliveryRegistryDocument({ schemaVersion: 1, workspaces: [{ ...workspace(), creationToken: "not-a-token" }] }), DeliveryError);
 });
 
 test("rejects duplicate delivery IDs and duplicate linked-worktree registrations", () => {

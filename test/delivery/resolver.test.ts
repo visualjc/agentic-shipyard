@@ -8,7 +8,7 @@ import { FakeGit, MemoryBindingStore } from "../helpers/fakes.js";
 
 const commonDirectory = "/repos/widget/.git";
 const topology = { kind: "single-repository", repository: { owner: "test", name: "widget", remote: { name: "origin", url: "https://example.test/widget.git" }, defaultBranch: "main" } } as const;
-const workspace = (overrides: Partial<DeliveryWorkspace> = {}): DeliveryWorkspace => ({ schemaVersion: 1, deliveryId: "delivery-001", commonDirectory, branch: "shipyard/delivery-001", worktreePath: "/worktrees/delivery-001", ...overrides });
+const workspace = (overrides: Partial<DeliveryWorkspace> = {}): DeliveryWorkspace => ({ schemaVersion: 1, state: "ready", creationToken: "11111111-1111-4111-8111-111111111111", deliveryId: "delivery-001", commonDirectory, branch: "shipyard/delivery-001", worktreePath: "/worktrees/delivery-001", ...overrides });
 
 class Registry {
   reads = 0;
@@ -63,4 +63,8 @@ test("recomputes from the registry for every resolve and never reuses a mutable 
   assert.equal(first.workspace.branch, "shipyard/delivery-001");
   assert.equal(second.workspace.worktreePath, "/worktrees/delivery-001-recomputed");
   assert.notStrictEqual(first.workspace, second.workspace);
+});
+
+test("does not resolve an interrupted creating claim", async () => {
+  await assert.rejects(makeResolver({ schemaVersion: 1, workspaces: [workspace({ state: "creating" })] }).resolver.resolve({ repositoryPath: "/main", deliveryId: "delivery-001" }), (error: unknown) => error instanceof DeliveryError && error.code === "delivery-incomplete");
 });

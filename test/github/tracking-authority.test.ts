@@ -5,7 +5,7 @@ import { GitHubTrackerError } from "../../src/github/markers.js";
 
 const topology = { kind: "single-repository" as const, repository: { owner: "acme", name: "development", remote: { name: "origin", url: "https://example.test/development.git" }, defaultBranch: "main" } };
 const binding = { schemaVersion: 1 as const, profileName: "p", commonDirectory: "/repo/.git", topology, profileFingerprint: "0".repeat(64), boundAt: "2026-08-04T00:00:00.000Z" };
-const delivery = { binding, workspace: { schemaVersion: 1 as const, deliveryId: "d-1", commonDirectory: "/repo/.git", branch: "shipyard/d-1", worktreePath: "/worktree" } };
+const delivery = { binding, workspace: { schemaVersion: 1 as const, state: "ready" as const, creationToken: "11111111-1111-4111-8111-111111111111", deliveryId: "d-1", commonDirectory: "/repo/.git", branch: "shipyard/d-1", worktreePath: "/worktree" } };
 const bound = { resolve: async () => ({ profileName: "p", commonDirectory: "/repo/.git", profileFingerprint: "0".repeat(64), actorLogin: "actor", topology }) };
 
 test("derives trusted refs only from a live canonical worktree and branch head", async () => {

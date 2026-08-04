@@ -32,6 +32,7 @@ export class DeliveryResolver {
       if (matches.length !== 1) throw new DeliveryError("delivery-duplicate", "This worktree path is registered more than once.");
       if (matches[0].commonDirectory !== binding.commonDirectory) throw mismatch();
     }
+    if (matches[0].state !== "ready") throw new DeliveryError("delivery-incomplete", "The delivery workspace claim is still being created; resume workspace initialization first.");
     return immutableSnapshot(binding, matches[0]);
   }
 }

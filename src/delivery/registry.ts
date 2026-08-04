@@ -84,7 +84,7 @@ export function validateDeliveryRegistryDocument(value: unknown): DeliveryRegist
 }
 
 function validateWorkspace(value: unknown): DeliveryWorkspace {
-  if (!record(value) || !exactKeys(value, ["schemaVersion", "deliveryId", "commonDirectory", "branch", "worktreePath"]) || value.schemaVersion !== 1) throw new Error();
+  if (!record(value) || !exactKeys(value, ["schemaVersion", "state", "creationToken", "deliveryId", "commonDirectory", "branch", "worktreePath"]) || value.schemaVersion !== 1 || (value.state !== "creating" && value.state !== "ready") || typeof value.creationToken !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value.creationToken)) throw new Error();
   const deliveryId = stableDeliveryId(value.deliveryId);
   const commonDirectory = canonicalAbsolutePath(value.commonDirectory);
   const worktreePath = canonicalAbsolutePath(value.worktreePath);
@@ -92,6 +92,8 @@ function validateWorkspace(value: unknown): DeliveryWorkspace {
   if (commonDirectory === worktreePath) throw new Error();
   return {
     schemaVersion: 1,
+    state: value.state,
+    creationToken: value.creationToken,
     deliveryId,
     commonDirectory,
     branch,

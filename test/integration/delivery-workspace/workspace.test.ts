@@ -50,13 +50,15 @@ test("creates, resumes after interruption, and recreates a missing linked Git wo
   const value = await fixture();
   try {
     const request = value.request("d-1");
-    await value.service.createOrResume(request);
+    const firstWorkspace = await value.service.createOrResume(request);
     const originalHead = (await value.ledger.snapshot([request.initialLedgerPath])).head;
     assert.equal((await nodeWorkspaceGit.worktreeIdentity(request.worktreePath))?.branch, request.branch);
     await git(value.repository, ["worktree", "remove", request.worktreePath]);
-    await value.service.createOrResume(request);
+    const resumedWorkspace = await value.service.createOrResume(request);
     assert.equal((await value.ledger.snapshot([request.initialLedgerPath])).head, originalHead);
     assert.equal((await nodeWorkspaceGit.worktreeIdentity(request.worktreePath))?.commonDirectory, value.commonDirectory);
+    assert.equal(resumedWorkspace.creationToken, firstWorkspace.creationToken);
+    assert.equal((await value.registry.read())?.workspaces[0]?.creationToken, firstWorkspace.creationToken);
     assert.deepEqual((await value.registry.read())?.workspaces.map((workspace) => workspace.deliveryId), ["d-1"]);
   } finally { await dispose(value); }
 });
@@ -168,11 +170,12 @@ test("hands off a present registered worktree for manual cleanup, then removes a
     await assert.rejects(value.service.cleanup(value.repository, "d-1"), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-manual-cleanup");
     assert.equal((await value.registry.read())?.workspaces.length, 1);
     await git(value.repository, ["worktree", "remove", "--force", request.worktreePath]);
+    await assert.rejects(value.service.cleanup(value.repository, "d-1"), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-manual-cleanup");
+    await git(value.repository, ["branch", "-D", request.branch]);
     await value.service.cleanup(value.repository, "d-1");
     assert.equal((await value.registry.read())?.workspaces.length, 0);
     assert.equal((await initialRecord(value, request)).payload, request.initialLedgerContents);
     const ledgerHead = (await value.ledger.snapshot([])).head!;
-    await git(value.repository, ["branch", "-D", request.branch]);
     assert.equal(JSON.parse((await value.ledger.read(ledgerHead, [request.initialLedgerPath]))[request.initialLedgerPath]!).payload, request.initialLedgerContents);
   } finally { await dispose(value); }
 });
@@ -183,7 +186,7 @@ test("does not delete a foreign replacement during cleanup's adversarial path sw
   let foreignReplacementExists = true;
   const registry = {
     async lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; },
-    async read() { return { schemaVersion: 1 as const, workspaces: [{ schemaVersion: 1 as const, deliveryId: request.deliveryId, commonDirectory: request.commonDirectory, branch: request.branch, worktreePath: request.worktreePath }] }; },
+    async read() { return { schemaVersion: 1 as const, workspaces: [{ schemaVersion: 1 as const, state: "ready" as const, creationToken: "11111111-1111-4111-8111-111111111111", deliveryId: request.deliveryId, commonDirectory: request.commonDirectory, branch: request.branch, worktreePath: request.worktreePath }] }; },
     async write() { registryWrites += 1; },
   };
   const ledger = { async snapshot() { return { head: undefined, records: {} }; }, async transact() { return "ledger"; } };
@@ -194,6 +197,7 @@ test("does not delete a foreign replacement during cleanup's adversarial path sw
     async worktreeExists() { return foreignReplacementExists; },
     async worktreeIdentity() { assert.fail("cleanup must not rely on a non-atomic identity recheck"); },
     async branchExists() { return false; }, async branchHead() { return undefined; }, async productHead() { return "a".repeat(40); },
+    async createClaimedBranch() { return false; }, async branchCreationMatches() { return false; },
     async ensureWorktree() { return false; },
   };
   const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
@@ -203,14 +207,15 @@ test("does not delete a foreign replacement during cleanup's adversarial path sw
   assert.equal(registryWrites, 0);
 });
 
-test("cleanup removes registry state when its registered worktree is already absent", async () => {
+test("cleanup keeps a claim while its branch remains, then removes it after both Git objects are absent", async () => {
   const value = await fixture();
   try {
     const request = value.request("d-1");
     await value.service.createOrResume(request);
     const ledgerBefore = await value.ledger.snapshot([request.initialLedgerPath]);
     await git(value.repository, ["worktree", "remove", request.worktreePath]);
-
+    await assert.rejects(value.service.cleanup(value.repository, request.deliveryId), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-manual-cleanup");
+    await git(value.repository, ["branch", "-D", request.branch]);
     await value.service.cleanup(value.repository, request.deliveryId);
 
     assert.equal((await value.registry.read())?.workspaces.length, 0);
@@ -230,7 +235,7 @@ test("rejects a foreign canonical feature branch before creating ledger or workt
   } finally { await dispose(value); }
 });
 
-test("only ledger-before-Git interruptions retry automatically; unregistered Git state requires manual cleanup", async () => {
+test("every claimed initialization boundary resumes without deleting branch or worktree state", async () => {
   const value = await fixture();
   try {
     const afterLedger = value.request("d-ledger");
@@ -245,21 +250,72 @@ test("only ledger-before-Git interruptions retry automatically; unregistered Git
     const gitFault = { ...nodeWorkspaceGit, async ensureWorktree(repositoryPath: string, branch: string, path: string, intent: WorktreeEnsureIntent) { const created = await nodeWorkspaceGit.ensureWorktree(repositoryPath, branch, path, intent); if (failWorktree) { failWorktree = false; throw new Error("after-worktree"); } return created; } };
     await assert.rejects(new WorkspaceService(value.registry, value.ledger, gitFault, new MutationLockService(nodeFilesystem, nodeProcess)).createOrResume(afterWorktree), /after-worktree/);
     assert.equal(await nodeWorkspaceGit.worktreeExists(afterWorktree.worktreePath), true);
-    await assert.rejects(value.service.createOrResume(afterWorktree), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
-    await git(value.repository, ["worktree", "remove", afterWorktree.worktreePath]);
-    await git(value.repository, ["branch", "-D", afterWorktree.branch]);
     await value.service.createOrResume(afterWorktree);
 
     const beforeRegistry = value.request("d-registry");
     let failRegistry = true;
     const registryFault = { lockScope: value.registry.lockScope.bind(value.registry), read: value.registry.read.bind(value.registry), async write(document: Parameters<JsonDeliveryRegistry["write"]>[0]) { if (failRegistry) { failRegistry = false; throw new Error("before-registry"); } return value.registry.write(document); } };
     await assert.rejects(new WorkspaceService(registryFault, value.ledger, nodeWorkspaceGit, new MutationLockService(nodeFilesystem, nodeProcess)).createOrResume(beforeRegistry), /before-registry/);
-    assert.equal(await nodeWorkspaceGit.worktreeExists(beforeRegistry.worktreePath), true);
-    await assert.rejects(value.service.createOrResume(beforeRegistry), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
-    await git(value.repository, ["worktree", "remove", beforeRegistry.worktreePath]);
-    await git(value.repository, ["branch", "-D", beforeRegistry.branch]);
+    assert.equal(await nodeWorkspaceGit.worktreeExists(beforeRegistry.worktreePath), false);
     await value.service.createOrResume(beforeRegistry);
     assert.deepEqual((await value.registry.read())?.workspaces.map((workspace) => workspace.deliveryId).sort(), ["d-ledger", "d-registry", "d-worktree"]);
+  } finally { await dispose(value); }
+});
+
+test("a registry-first creating claim resumes branch-only state, but rejects a wrong creating head", async () => {
+  const value = await fixture();
+  try {
+    const registryOnly = value.request("d-registry-only");
+    let interrupt = true;
+    const faultingRegistry = {
+      lockScope: value.registry.lockScope.bind(value.registry), read: value.registry.read.bind(value.registry),
+      async write(document: Parameters<JsonDeliveryRegistry["write"]>[0]) {
+        await value.registry.write(document);
+        if (interrupt) { interrupt = false; throw new Error("after-registry-claim"); }
+      },
+    };
+    await assert.rejects(new WorkspaceService(faultingRegistry, value.ledger, nodeWorkspaceGit, new MutationLockService(nodeFilesystem, nodeProcess)).createOrResume(registryOnly), /after-registry-claim/);
+    assert.equal((await value.registry.read())?.workspaces.find((workspace) => workspace.deliveryId === registryOnly.deliveryId)?.state, "creating");
+    assert.equal(await nodeWorkspaceGit.branchExists(value.repository, registryOnly.branch), false);
+    await value.service.createOrResume(registryOnly);
+
+    const branchOnly = value.request("d-branch-only");
+    let branchInterrupt = true;
+    const branchClaimRegistry = {
+      lockScope: value.registry.lockScope.bind(value.registry), read: value.registry.read.bind(value.registry),
+      async write(document: Parameters<JsonDeliveryRegistry["write"]>[0]) {
+        await value.registry.write(document);
+        if (branchInterrupt) { branchInterrupt = false; throw new Error("after-branch-claim"); }
+      },
+    };
+    await assert.rejects(new WorkspaceService(branchClaimRegistry, value.ledger, nodeWorkspaceGit, new MutationLockService(nodeFilesystem, nodeProcess)).createOrResume(branchOnly), /after-branch-claim/);
+    let stopBeforeWorktree = true;
+    const branchOnlyGit = {
+      ...nodeWorkspaceGit,
+      async ensureWorktree(repositoryPath: string, branch: string, path: string, intent: WorktreeEnsureIntent) {
+        if (stopBeforeWorktree) { stopBeforeWorktree = false; throw new Error("after-claimed-branch"); }
+        return nodeWorkspaceGit.ensureWorktree(repositoryPath, branch, path, intent);
+      },
+    };
+    await assert.rejects(new WorkspaceService(value.registry, value.ledger, branchOnlyGit, new MutationLockService(nodeFilesystem, nodeProcess)).createOrResume(branchOnly), /after-claimed-branch/);
+    assert.equal(await nodeWorkspaceGit.branchExists(value.repository, branchOnly.branch), true);
+    assert.equal(await nodeWorkspaceGit.worktreeExists(branchOnly.worktreePath), false);
+    await value.service.createOrResume(branchOnly);
+
+    const wrongHead = value.request("d-wrong-head");
+    let wrongInterrupt = true;
+    const wrongClaimRegistry = {
+      lockScope: value.registry.lockScope.bind(value.registry), read: value.registry.read.bind(value.registry),
+      async write(document: Parameters<JsonDeliveryRegistry["write"]>[0]) {
+        await value.registry.write(document);
+        if (wrongInterrupt) { wrongInterrupt = false; throw new Error("after-wrong-claim"); }
+      },
+    };
+    await assert.rejects(new WorkspaceService(wrongClaimRegistry, value.ledger, nodeWorkspaceGit, new MutationLockService(nodeFilesystem, nodeProcess)).createOrResume(wrongHead), /after-wrong-claim/);
+    await writeFile(join(value.repository, "wrong-head.txt"), "foreign", "utf8"); await git(value.repository, ["add", "wrong-head.txt"]); await git(value.repository, ["commit", "-m", "foreign"]);
+    await git(value.repository, ["branch", wrongHead.branch]);
+    await assert.rejects(value.service.createOrResume(wrongHead), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
+    assert.equal(await nodeWorkspaceGit.worktreeExists(wrongHead.worktreePath), false);
   } finally { await dispose(value); }
 });
 
@@ -267,7 +323,7 @@ test("rejects a registry entry whose initial ledger record is missing without re
   const value = await fixture();
   try {
     const request = value.request("d-1");
-    await value.registry.write({ schemaVersion: 1, workspaces: [{ schemaVersion: 1, deliveryId: request.deliveryId, commonDirectory: value.commonDirectory, branch: request.branch, worktreePath: request.worktreePath }] });
+    await value.registry.write({ schemaVersion: 1, workspaces: [{ schemaVersion: 1, state: "creating", creationToken: "11111111-1111-4111-8111-111111111111", deliveryId: request.deliveryId, commonDirectory: value.commonDirectory, branch: request.branch, worktreePath: request.worktreePath }] });
     await assert.rejects(value.service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-ledger-conflict");
     assert.equal((await value.ledger.snapshot([request.initialLedgerPath])).head, undefined);
     assert.equal(await nodeWorkspaceGit.worktreeExists(request.worktreePath), false);
@@ -331,6 +387,7 @@ test("create intent rejects a same-SHA foreign branch race without registry adop
     async worktreeIdentity() { return worktreeExists ? { commonDirectory: request.commonDirectory, branch: request.branch } : undefined; },
     async branchExists() { return branchExists; },
     async branchHead() { return branchExists ? foreignSha : undefined; }, async productHead() { return startSha; },
+    async createClaimedBranch() { branchExists = true; return false; }, async branchCreationMatches() { return false; },
     async ensureWorktree(_repositoryPath: string, _branch: string, _path: string, intent: WorktreeEnsureIntent) {
       assert.deepEqual(intent, { mode: "create", startSha });
       branchExists = true;
@@ -340,7 +397,7 @@ test("create intent rejects a same-SHA foreign branch race without registry adop
   const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
 
   await assert.rejects(service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
-  assert.equal(registryWrites, 0);
+  assert.equal(registryWrites, 1);
   assert.equal(worktreeExists, false);
   assert.equal(await git.branchHead(), foreignSha);
 });
@@ -362,6 +419,7 @@ test("rejects an unregistered matching worktree before writing the initial ledge
     async branchExists() { return false; }, async worktreeExists() { return true; },
     async worktreeIdentity() { assert.fail("create intent must not inspect then adopt an existing path"); },
     async productHead() { return startSha; }, async branchHead() { return startSha; },
+    async createClaimedBranch() { return true; }, async branchCreationMatches() { return true; },
     async ensureWorktree() { ensureCalls += 1; return true; },
   };
   const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
@@ -386,11 +444,12 @@ test("rejects an unproven false worktree-creation result without adopting its pa
     async commonDirectory() { return request.commonDirectory; }, async branchExists() { return false; }, async worktreeExists() { return false; },
     async worktreeIdentity() { assert.fail("an unproven creation result must not be inspected or adopted"); },
     async productHead() { return startSha; }, async branchHead() { return startSha; }, async ensureWorktree() { return false; },
+    async createClaimedBranch() { return true; }, async branchCreationMatches() { return true; },
   };
   const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
 
   await assert.rejects(service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
-  assert.equal(registryWrites, 0);
+  assert.equal(registryWrites, 1);
   assert.ok(records[request.initialLedgerPath]);
 });
 
@@ -415,6 +474,7 @@ test("does not remove a swapped path when the branch changes after created-workt
       createdPathExists = false; foreignReplacementExists = true;
       return changedSha;
     },
+    async createClaimedBranch() { return true; }, async branchCreationMatches() { return true; },
     async ensureWorktree() { createdPathExists = true; return true; },
     async removeWorktree() { removalAttempts += 1; foreignReplacementExists = false; },
   };
@@ -423,31 +483,32 @@ test("does not remove a swapped path when the branch changes after created-workt
   await assert.rejects(service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
   assert.equal(foreignReplacementExists, true);
   assert.equal(removalAttempts, 0);
-  assert.equal(registryWrites, 0);
+  assert.equal(registryWrites, 1);
   assert.ok(records[request.initialLedgerPath]);
 });
 
-test("real Git create intent preserves a same-SHA foreign branch created after preflight", async () => {
+test("real Git same-SHA foreign branch race remains rejected on retry", async () => {
   const value = await fixture();
   try {
     const request = value.request("d-race"); let foreignHead = ""; let injected = false;
     const racingGit = {
       ...nodeWorkspaceGit,
-      async ensureWorktree(repositoryPath: string, branch: string, path: string, intent: WorktreeEnsureIntent) {
-        assert.equal(intent.mode, "create");
+      async createClaimedBranch(repositoryPath: string, branch: string, startSha: string, _token: string) {
         if (!injected) {
           injected = true;
-          foreignHead = intent.startSha;
+          foreignHead = startSha;
           await git(repositoryPath, ["branch", branch, foreignHead]);
         }
-        return nodeWorkspaceGit.ensureWorktree(repositoryPath, branch, path, intent);
+        return false;
       },
     };
     const service = new WorkspaceService(value.registry, value.ledger, racingGit, new MutationLockService(nodeFilesystem, nodeProcess));
     await assert.rejects(service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
-    assert.equal((await value.registry.read())?.workspaces.length ?? 0, 0);
+    assert.equal((await value.registry.read())?.workspaces.length ?? 0, 1);
     assert.equal(await nodeWorkspaceGit.worktreeExists(request.worktreePath), false);
     assert.equal(await nodeWorkspaceGit.branchHead(value.repository, request.branch), foreignHead);
+    await assert.rejects(value.service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
+    assert.equal(await nodeWorkspaceGit.worktreeExists(request.worktreePath), false);
   } finally { await dispose(value); }
 });
 

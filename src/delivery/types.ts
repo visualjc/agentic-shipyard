@@ -3,6 +3,10 @@ import type { Binding } from "../contracts/types.js";
 /** Rebuildable, machine-local registration for one active delivery worktree. */
 export type DeliveryWorkspace = {
   schemaVersion: 1;
+  /** `creating` is a durable claim which may be resumed only by WorkspaceService. */
+  state: "creating" | "ready";
+  /** Opaque, non-secret token recorded in the branch reflog during creation. */
+  creationToken: string;
   deliveryId: string;
   /** Canonical Git common directory, shared by the main clone and linked worktrees. */
   commonDirectory: string;

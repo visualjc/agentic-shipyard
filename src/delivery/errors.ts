@@ -4,6 +4,7 @@ export type DeliveryFailureCode =
   | "delivery-duplicate"
   | "delivery-not-found"
   | "delivery-ambiguous"
+  | "delivery-incomplete"
   | "delivery-worktree-mismatch";
 
 /** Structured delivery failures; the CLI layer alone is responsible for guidance. */

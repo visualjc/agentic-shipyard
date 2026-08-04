@@ -61,39 +61,43 @@ branch’s current head or accept an unrelated product commit.
 The first durable delivery record is a canonical version-1 JSON document. It
 binds the delivery ID, Git common directory, canonical branch, exact starting
 product SHA, and the caller's initial payload. The workspace service writes it
-before creating the linked worktree and writes the registry last. Its
+before a canonical registry claim and before creating any branch or linked
+worktree. A claim is explicitly `creating` until its exact branch/worktree
+identity has been validated, at which point the locked registry update advances
+it to `ready`. Each claim carries an opaque non-secret UUID creation token. Its
 read-modify-write cycle is serialized by a registry-scoped durable lock (the
 JSON registry derives its canonical lock file from its canonical file path),
 then by the Git common-directory workspace lock. This fixed registry-then-
 workspace order prevents two repositories that share a registry from losing
 each other's entries; tracking takes only the workspace lock. A registry entry
-without that record is rejected rather than repaired. The registry write is
-also gated on a post-creation check that the canonical feature branch still
-points at that recorded product SHA. If a concurrent creator supplied a
-different branch during `worktree add`, Shipyard fails closed and leaves the
-created path and foreign branch for manual inspection: an identity check before
-a later path-based removal cannot prove the path was not swapped. When
-recovering before registry creation, Shipyard never adopts an existing branch
-or worktree path: the initial ledger record proves intent but cannot attribute
-pre-existing Git state. The operator must inspect and remove that state before
-retrying. A ledger record with neither branch nor worktree remains safe to
-retry, while a registered branch with a missing worktree may be attached or
-recreated. A newly-created branch is explicitly created at the recorded start
-SHA. `GitLedgerStore` always writes
+without that record is rejected rather than repaired, and a `creating` claim is
+not resolvable for tracking. Shipyard creates a missing claimed branch with an
+atomic `update-ref` create-only operation and records the claim token in that
+branch's reflog. A retry of a durable `creating` claim may attach or recreate
+only a branch at its recorded start SHA whose creation marker matches the
+claim, then recreate its missing worktree or validate the completed matching
+worktree, without deleting Git state. A wrong creating-branch head, creation
+marker, path, or worktree identity fails closed. Conversely,
+before a claim exists Shipyard never adopts an existing branch or worktree path:
+the initial ledger record proves intent but cannot attribute unclaimed Git
+state. A `ready` claim whose branch later disappears also fails closed rather
+than recreating and possibly discarding delivery history. Cleanup retains either
+kind of claim while either its branch or worktree remains, preventing an
+unregistered stranded branch; after both are manually absent it removes only
+the registry entry and retains the ledger. `GitLedgerStore` always writes
 `refs/heads/shipyard-ledger`; its constructor accepts no configurable ledger
 ref. Its subprocesses use a canonical absolute Git executable and never
 resolve a bare `git` from `PATH`.
 
 ### Final cleanup handoff
 
-Workspace logic never automatically removes a worktree path. A prior identity
-or cleanliness check cannot be atomically bound to a later path-based removal,
-so a path swap could otherwise delete a foreign replacement. Cleanup therefore
-fails with `workspace-manual-cleanup` and leaves the registry intact whenever
-the registered path exists; likewise, a post-creation branch change is a
-conflict that preserves the path. An operator must verify ownership and remove
-the worktree manually; a subsequent cleanup call removes the now-absent
-registry entry. The durable ledger record remains unchanged in either case.
+Workspace logic never automatically removes a worktree path or branch. A prior
+identity or cleanliness check cannot be atomically bound to a later path-based
+removal, so a path swap could otherwise delete a foreign replacement. Cleanup
+therefore fails with `workspace-manual-cleanup` and leaves the registry intact
+whenever the registered path or branch exists. An operator must verify ownership
+and remove both; a subsequent cleanup call removes the now-unclaimed registry
+entry. The durable ledger record remains unchanged in either case.
 
 ### Ledger/product ancestry invariant
 
