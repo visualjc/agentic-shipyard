@@ -41,6 +41,8 @@ test("rejects non-canonical delivery identifiers, branches, and equivalent path 
   assert.throws(() => newDeliveryRegistryDocument([workspace({ deliveryId: "../escape", branch: "shipyard/../escape" })]), DeliveryError);
   assert.throws(() => newDeliveryRegistryDocument([workspace({ branch: "feature/unrelated" })]), DeliveryError);
   assert.throws(() => newDeliveryRegistryDocument([workspace({ worktreePath: "/worktrees/../delivery-001" })]), DeliveryError);
+  assert.throws(() => newDeliveryRegistryDocument([workspace({ worktreePath: "/worktrees/delivery-001/" })]), DeliveryError);
+  assert.throws(() => newDeliveryRegistryDocument([workspace({ commonDirectory: "/repos/widget/.git/" })]), DeliveryError);
 });
 
 test("filesystem registry rejects malformed persisted JSON and validates before persistence", async () => {

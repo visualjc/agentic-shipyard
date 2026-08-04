@@ -8,6 +8,7 @@ import test from "node:test";
 import { nodeFilesystem } from "../../../src/adapters/filesystem.js";
 import { GitLedgerStore } from "../../../src/adapters/ledger-git.js";
 import { JsonDeliveryRegistry } from "../../../src/delivery/registry.js";
+import type { DeliveryRegistryDocument } from "../../../src/delivery/types.js";
 import { MutationLockError, MutationLockService } from "../../../src/locking/mutation-lock.js";
 import { WorkspaceError } from "../../../src/workspace/errors.js";
 import { nodeWorkspaceGit, WorkspaceService } from "../../../src/workspace/service.js";
@@ -61,6 +62,62 @@ test("creates, resumes after interruption, and recreates a missing linked Git wo
     assert.equal((await value.registry.read())?.workspaces[0]?.creationToken, firstWorkspace.creationToken);
     assert.deepEqual((await value.registry.read())?.workspaces.map((workspace) => workspace.deliveryId), ["d-1"]);
   } finally { await dispose(value); }
+});
+
+test("rejects non-string or empty initial ledger contents before touching any state", async () => {
+  const request = { repositoryPath: "/repository", commonDirectory: "/repository/.git", deliveryId: "d-1", branch: "shipyard/d-1", worktreePath: "/worktrees/d-1", initialLedgerPath: "deliveries/d-1.json", initialLedgerContents: JSON.stringify({ deliveryId: "d-1" }) };
+  let mutations = 0;
+  const registry = { async lockScope() { mutations += 1; return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; }, async read() { mutations += 1; return undefined; }, async write() { mutations += 1; } };
+  const ledger = { async snapshot() { mutations += 1; return { head: undefined, records: {} }; }, async transact() { mutations += 1; return "ledger"; } };
+  const git = {
+    async commonDirectory() { mutations += 1; return request.commonDirectory; }, async worktreeExists() { mutations += 1; return false; }, async worktreeIdentity() { mutations += 1; return undefined; },
+    async branchExists() { mutations += 1; return false; }, async branchHead() { mutations += 1; return undefined; }, async productHead() { mutations += 1; return "a".repeat(40); },
+    async createClaimedBranch() { mutations += 1; return true; }, async branchCreationMatches() { mutations += 1; return true; }, async ensureWorktree() { mutations += 1; return true; },
+  };
+  const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
+
+  for (const initialLedgerContents of [undefined, 0, {}, ""] as const) {
+    await assert.rejects(service.createOrResume({ ...request, initialLedgerContents } as never), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-invalid-input");
+  }
+  assert.equal(mutations, 0);
+});
+
+test("fails closed before attach when a newly claimed branch loses its recorded provenance", async () => {
+  const startSha = "a".repeat(40); const replacementSha = "b".repeat(40);
+  const request = { repositoryPath: "/repository", commonDirectory: "/repository/.git", deliveryId: "d-1", branch: "shipyard/d-1", worktreePath: "/worktrees/d-1", initialLedgerPath: "deliveries/d-1.json", initialLedgerContents: JSON.stringify({ deliveryId: "d-1" }) };
+  let document: DeliveryRegistryDocument | undefined; let branchExists = false; let attached = false;
+  const registry = { async lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; }, async read() { return document; }, async write(next: DeliveryRegistryDocument) { document = next; } };
+  const records: Record<string, string> = {};
+  const ledger = { async snapshot(paths: readonly string[]) { return { head: records[request.initialLedgerPath] ? "ledger" : undefined, records: Object.fromEntries(paths.flatMap((path) => records[path] === undefined ? [] : [[path, records[path]]])) }; }, async transact(transaction: { writes: readonly { path: string; contents: string }[] }) { for (const write of transaction.writes) records[write.path] = write.contents; return "ledger"; } };
+  const git = {
+    async commonDirectory() { return request.commonDirectory; }, async worktreeExists() { return attached; }, async worktreeIdentity() { return attached ? { commonDirectory: request.commonDirectory, branch: request.branch } : undefined; },
+    async branchExists() { return branchExists; }, async branchHead() { return replacementSha; }, async productHead() { return startSha; },
+    async createClaimedBranch() { branchExists = true; return true; }, async branchCreationMatches() { return false; }, async ensureWorktree() { attached = true; return true; },
+  };
+  const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
+
+  await assert.rejects(service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
+  assert.equal(attached, false);
+  assert.equal(document?.workspaces[0]?.state, "creating");
+});
+
+test("never promotes a creating claim when provenance changes during worktree attachment", async () => {
+  const startSha = "a".repeat(40);
+  const request = { repositoryPath: "/repository", commonDirectory: "/repository/.git", deliveryId: "d-1", branch: "shipyard/d-1", worktreePath: "/worktrees/d-1", initialLedgerPath: "deliveries/d-1.json", initialLedgerContents: JSON.stringify({ deliveryId: "d-1" }) };
+  let document: DeliveryRegistryDocument | undefined; let branchExists = false; let attached = false; let provenanceChecks = 0;
+  const registry = { async lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; }, async read() { return document; }, async write(next: DeliveryRegistryDocument) { document = next; } };
+  const records: Record<string, string> = {};
+  const ledger = { async snapshot(paths: readonly string[]) { return { head: records[request.initialLedgerPath] ? "ledger" : undefined, records: Object.fromEntries(paths.flatMap((path) => records[path] === undefined ? [] : [[path, records[path]]])) }; }, async transact(transaction: { writes: readonly { path: string; contents: string }[] }) { for (const write of transaction.writes) records[write.path] = write.contents; return "ledger"; } };
+  const git = {
+    async commonDirectory() { return request.commonDirectory; }, async worktreeExists() { return attached; }, async worktreeIdentity() { return attached ? { commonDirectory: request.commonDirectory, branch: request.branch } : undefined; },
+    async branchExists() { return branchExists; }, async branchHead() { return startSha; }, async productHead() { return startSha; },
+    async createClaimedBranch() { branchExists = true; return true; }, async branchCreationMatches() { return ++provenanceChecks === 1; }, async ensureWorktree() { attached = true; return true; },
+  };
+  const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
+
+  await assert.rejects(service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
+  assert.equal(attached, true);
+  assert.equal(document?.workspaces[0]?.state, "creating");
 });
 
 test("rejects a registered delivery whose removed linked worktree also lost its feature ref without mutating durable state", async () => {

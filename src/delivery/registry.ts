@@ -121,7 +121,7 @@ export function canonicalWorkspaceBranch(value: unknown, deliveryId: string): st
 /** Persist only normalized absolute POSIX paths, preventing equivalent registry keys. */
 export function canonicalAbsolutePath(value: unknown): string {
   const path = nonEmpty(value);
-  if (!isAbsolute(path) || normalize(path) !== path || path === "/" || path.includes("\0")) throw new Error();
+  if (!isAbsolute(path) || normalize(path) !== path || path === "/" || path.endsWith("/") || path.includes("\0")) throw new Error();
   return path;
 }
 function invalidDocument(): DeliveryError { return new DeliveryError("delivery-registry-invalid", "Delivery registry is not a valid canonical version 1 document."); }

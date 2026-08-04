@@ -112,12 +112,14 @@ export class WorkspaceService {
         throw new WorkspaceError("workspace-conflict", "The ready canonical feature branch is missing.");
       }
       if (claimed.state === "creating") {
-        if (claimedBranchExists && (await this.git.branchHead(request.repositoryPath, request.branch) !== provenance.startProductSha || !await this.git.branchCreationMatches(request.repositoryPath, request.branch, claimed.creationToken))) {
-          throw new WorkspaceError("workspace-conflict", "The creating canonical feature branch does not match this delivery claim.");
-        }
+        if (claimedBranchExists) await this.assertCreatingBranchProvenance(request, provenance, claimed.creationToken);
         if (!claimedBranchExists && !await this.git.createClaimedBranch(request.repositoryPath, request.branch, provenance.startProductSha, claimed.creationToken)) {
           throw new WorkspaceError("workspace-conflict", "The canonical feature branch appeared during creation; refusing to adopt it.");
         }
+        // The branch may have been replaced or advanced after it was claimed.
+        // Prove both the recorded starting SHA and creation reflog marker at
+        // the last possible point before attaching a worktree.
+        await this.assertCreatingBranchProvenance(request, provenance, claimed.creationToken);
       }
       // This is deliberately decided here, under the workspace lock. The Git
       // adapter must not inspect the branch again and silently turn a create
@@ -125,6 +127,9 @@ export class WorkspaceService {
       const worktreeIntent: WorktreeEnsureIntent = { mode: "attach" };
       await this.ensureExpectedWorktree(request, actualCommonDirectory, worktreeIntent);
       if (claimed.state === "creating") {
+        // Worktree attachment cannot be atomically coupled to a ref/reflog
+        // read. Do not promote the claim if either changed during attachment.
+        await this.assertCreatingBranchProvenance(request, provenance, claimed.creationToken);
         try { await this.registry.write(newDeliveryRegistryDocument((document?.workspaces ?? []).filter((candidate) => candidate.deliveryId !== request.deliveryId).concat({ ...readyWorkspace, creationToken: claimed.creationToken }))); }
         catch (error: unknown) { if (error instanceof DeliveryError) throw new WorkspaceError("workspace-registry-invalid", error.message); throw error; }
       }
@@ -193,6 +198,13 @@ export class WorkspaceService {
     }
   }
 
+  private async assertCreatingBranchProvenance(request: CreateOrResumeDelivery, provenance: InitialDeliveryLedgerRecord, token: string): Promise<void> {
+    if (await this.git.branchHead(request.repositoryPath, request.branch) !== provenance.startProductSha
+      || !await this.git.branchCreationMatches(request.repositoryPath, request.branch, token)) {
+      throw new WorkspaceError("workspace-conflict", "The creating canonical feature branch does not match this delivery claim.");
+    }
+  }
+
   /**
    * The global nested-lock order is registry, then Git common-directory.
    * Tracking takes only the latter, so it cannot form an inverse lock cycle.
@@ -222,7 +234,7 @@ function validateRequest(request: CreateOrResumeDelivery): void {
     canonicalAbsolutePath(request.repositoryPath);
     canonicalAbsolutePath(request.commonDirectory);
     canonicalAbsolutePath(request.worktreePath);
-    if (!request.initialLedgerPath || request.initialLedgerPath !== `deliveries/${deliveryId}.json` || request.initialLedgerContents.length === 0) throw new Error();
+    if (!request.initialLedgerPath || request.initialLedgerPath !== `deliveries/${deliveryId}.json` || typeof request.initialLedgerContents !== "string" || request.initialLedgerContents.length === 0) throw new Error();
     if (request.authoritativeBranch !== undefined && (!request.authoritativeBranch || request.authoritativeBranch.includes("..") || request.authoritativeBranch.startsWith("-") || /[\s~^:?*\\[\\]/.test(request.authoritativeBranch))) throw new Error();
   } catch { throw new WorkspaceError("workspace-invalid-input", "Workspace inputs must use canonical stable delivery IDs, branch names, paths, and ledger record paths."); }
 }

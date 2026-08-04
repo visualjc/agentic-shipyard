@@ -76,8 +76,11 @@ atomic `update-ref` create-only operation and records the claim token in that
 branch's reflog. A retry of a durable `creating` claim may attach or recreate
 only a branch at its recorded start SHA whose creation marker matches the
 claim, then recreate its missing worktree or validate the completed matching
-worktree, without deleting Git state. A wrong creating-branch head, creation
-marker, path, or worktree identity fails closed. Conversely,
+worktree, without deleting Git state. The creating branch's start SHA and
+creation marker are re-proven immediately before attachment and before the
+claim can advance to `ready`; a change during attachment leaves it `creating`.
+A wrong creating-branch head, creation marker, path, or worktree identity
+fails closed. Conversely,
 before a claim exists Shipyard never adopts an existing branch or worktree path:
 the initial ledger record proves intent but cannot attribute unclaimed Git
 state. A `ready` claim whose branch later disappears also fails closed rather
