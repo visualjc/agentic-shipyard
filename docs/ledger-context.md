@@ -56,16 +56,24 @@ branch’s current head or accept an unrelated product commit.
 The first durable delivery record is a canonical version-1 JSON document. It
 binds the delivery ID, Git common directory, canonical branch, exact starting
 product SHA, and the caller's initial payload. The workspace service writes it
-before creating the linked worktree and writes the registry last. A registry
-entry without that record is rejected rather than repaired. The registry write
-is also gated on a post-creation check that the canonical feature branch still
+before creating the linked worktree and writes the registry last. Its
+read-modify-write cycle is serialized by a registry-scoped durable lock (the
+JSON registry derives its canonical lock file from its canonical file path),
+then by the Git common-directory workspace lock. This fixed registry-then-
+workspace order prevents two repositories that share a registry from losing
+each other's entries; tracking takes only the workspace lock. A registry entry
+without that record is rejected rather than repaired. The registry write is
+also gated on a post-creation check that the canonical feature branch still
 points at that recorded product SHA. If a concurrent creator supplied a
 different branch during `worktree add`, Shipyard fails closed and leaves the
 created path and foreign branch for manual inspection: an identity check before
 a later path-based removal cannot prove the path was not swapped. When
-recovering before registry creation, an existing branch is accepted only if
-the expected linked worktree proves its delivery identity and its head is the
-recorded starting SHA; a newly-created branch is explicitly created at that
+recovering before registry creation, Shipyard never adopts an existing branch
+or worktree path: the initial ledger record proves intent but cannot attribute
+pre-existing Git state. The operator must inspect and remove that state before
+retrying. A ledger record with neither branch nor worktree remains safe to
+retry, while a registered branch with a missing worktree may be attached or
+recreated. A newly-created branch is explicitly created at the recorded start
 SHA. `GitLedgerStore` always writes
 `refs/heads/shipyard-ledger`; its constructor accepts no configurable ledger
 ref. Its subprocesses use a canonical absolute Git executable and never

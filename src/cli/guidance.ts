@@ -31,7 +31,7 @@ export function setupGuidance(error: unknown): string {
     switch (error.code) {
       case "lock-held": return "Setup is blocked by another repository mutation. Wait for that owner to finish, then rerun shipyard-status before retrying shipyard-setup.";
       case "lock-invalid": return "The repository mutation lock is malformed or names another identity. Inspect it manually; Shipyard will not remove it automatically.";
-      case "lock-unsafe-recovery": return "The repository mutation lock cannot be recovered safely on this host. Verify its owner process and host before retrying shipyard-setup.";
+      case "lock-unsafe-recovery": return "The repository mutation lock requires manual recovery. Verify that its recorded owner is no longer active in every checkout or container sharing this path, remove only that record, then rerun shipyard-setup.";
     }
   }
   if (error instanceof RepositoryIdentityError) return "Repository identity could not be established. Run shipyard-setup from an existing Git repository and verify its common directory.";

@@ -3,15 +3,16 @@ import test from "node:test";
 import { MutationLockError, MutationLockService } from "../../src/locking/mutation-lock.js";
 import { FakeProcess, MemoryFilesystem } from "../helpers/fakes.js";
 
-test("rejects a concurrent live lock and reclaims only a proven-dead same-host stale lock", async () => {
+test("rejects concurrent and stale primary locks without deleting either", async () => {
   const fs = new MemoryFilesystem();
   const process = new FakeProcess();
   const service = new MutationLockService(fs, process, 1_000);
   const first = await service.acquire("/locks/repo", "/git/repo", "sync");
   await assert.rejects(service.acquire("/locks/repo", "/git/repo", "promote"), (error: unknown) => error instanceof MutationLockError && error.code === "lock-held");
   fs.files.set("/locks/repo", JSON.stringify({ ...first.record, processId: 22, acquiredAt: "2026-08-03T00:00:00.000Z" }));
-  const recovered = await service.acquire("/locks/repo", "/git/repo", "promote");
-  await recovered.release();
+  const stale = fs.files.get("/locks/repo")!;
+  await assert.rejects(service.acquire("/locks/repo", "/git/repo", "promote"), (error: unknown) => error instanceof MutationLockError && error.code === "lock-unsafe-recovery");
+  assert.equal(fs.files.get("/locks/repo"), stale);
 });
 
 test("never removes a stale lock without host and process validation", async () => {
@@ -80,24 +81,17 @@ test("serializes release against acquisition so a replacement lock survives", as
   await replacement.release();
 });
 
-test("serializes stale recovery and refuses to release a different identity", async () => {
+test("stale primary records remain intact and cannot be replaced automatically", async () => {
   const fs = new MemoryFilesystem();
   const process = new FakeProcess();
   const service = new MutationLockService(fs, process, 1_000);
   fs.files.set("/locks/repo", JSON.stringify({ version: 1, repository: "/git/repo", operation: "old", processId: 22, host: "test-host", token: "dead-owner", acquiredAt: "2026-08-03T00:00:00.000Z" }));
-  fs.onRead = async () => {
-    await assert.rejects(service.acquire("/locks/repo", "/git/repo", "racer"), (error: unknown) => error instanceof MutationLockError && error.code === "lock-held");
-  };
-  const recovered = await service.acquire("/locks/repo", "/git/repo", "recovered");
-  assert.equal(JSON.parse(fs.files.get("/locks/repo")!).operation, "recovered");
-
-  const newer = { ...recovered.record, token: "replacement-owner" };
-  fs.files.set("/locks/repo", JSON.stringify(newer));
-  await assert.rejects(recovered.release(), (error: unknown) => error instanceof MutationLockError && error.code === "lock-unsafe-recovery");
-  assert.deepEqual(JSON.parse(fs.files.get("/locks/repo")!), newer);
+  const stale = fs.files.get("/locks/repo")!;
+  await assert.rejects(service.acquire("/locks/repo", "/git/repo", "recovered"), (error: unknown) => error instanceof MutationLockError && error.code === "lock-unsafe-recovery");
+  assert.equal(fs.files.get("/locks/repo"), stale);
 });
 
-test("recovers an empty orphan lifecycle directory and a proven-dead owner", async () => {
+test("recovers an empty orphan lifecycle directory but not a stale owner", async () => {
   const fs = new MemoryFilesystem();
   const process = new FakeProcess();
   const service = new MutationLockService(fs, process, 1_000);
@@ -107,8 +101,9 @@ test("recovers an empty orphan lifecycle directory and a proven-dead owner", asy
 
   fs.directories.add("/locks/repo.lifecycle");
   fs.files.set("/locks/repo.lifecycle/owner.json", JSON.stringify({ version: 1, host: "test-host", processId: 22, token: "crashed", acquiredAt: "2026-08-03T00:00:00.000Z" }));
-  const fromDead = await service.acquire("/locks/repo", "/git/repo", "sync");
-  await fromDead.release();
+  const staleOwner = fs.files.get("/locks/repo.lifecycle/owner.json")!;
+  await assert.rejects(service.acquire("/locks/repo", "/git/repo", "sync"), (error: unknown) => error instanceof MutationLockError && error.code === "lock-unsafe-recovery");
+  assert.equal(fs.files.get("/locks/repo.lifecycle/owner.json"), staleOwner);
 });
 
 test("lifecycle recovery fails closed for live, cross-host, and malformed owners", async () => {
@@ -143,39 +138,23 @@ test("rejects malformed lifecycle records before recovery without removing them"
   }
 });
 
-test("two recoverers cannot remove a replacement lifecycle owner", async () => {
+test("a stale lifecycle owner remains intact even after local liveness reports it dead", async () => {
   const fs = new MemoryFilesystem();
   const process = new FakeProcess();
   fs.directories.add("/locks/repo.lifecycle");
   fs.files.set("/locks/repo.lifecycle/owner.json", JSON.stringify({ version: 1, host: "test-host", processId: 22, token: "dead", acquiredAt: "2026-08-03T00:00:00.000Z" }));
-  let raced = false;
-  fs.onRead = async (path) => {
-    if (path === "/locks/repo.lifecycle/owner.json") {
-      await assert.rejects(new MutationLockService(fs, process).acquire("/locks/repo", "/git/repo", "racer"), (error: unknown) => error instanceof MutationLockError && error.code === "lock-held");
-      raced = true;
-    }
-  };
-  const winner = await new MutationLockService(fs, process).acquire("/locks/repo", "/git/repo", "winner");
-  assert.equal(raced, true);
-  assert.equal(JSON.parse(fs.files.get("/locks/repo")!).operation, "winner");
-  await winner.release();
+  const owner = fs.files.get("/locks/repo.lifecycle/owner.json")!;
+  await assert.rejects(new MutationLockService(fs, process).acquire("/locks/repo", "/git/repo", "winner"), (error: unknown) => error instanceof MutationLockError && error.code === "lock-unsafe-recovery");
+  assert.equal(fs.files.get("/locks/repo.lifecycle/owner.json"), owner);
 });
 
-test("transition mutex blocks concurrent lifecycle recovery without a filesystem race", async () => {
+test("transition mutex does not turn a stale lifecycle owner into an automatic recovery", async () => {
   const fs = new MemoryFilesystem(); const process = new FakeProcess();
   fs.directories.add("/locks/repo.lifecycle");
   fs.files.set("/locks/repo.lifecycle/owner.json", JSON.stringify({ version: 1, host: "test-host", processId: 22, token: "dead", acquiredAt: "2026-08-03T00:00:00.000Z" }));
-  let contenderBlocked = false;
-  fs.onRead = async (path) => {
-    if (path === "/locks/repo.lifecycle/owner.json") {
-      await assert.rejects(new MutationLockService(fs, process).acquire("/locks/repo", "/git/repo", "contender"), (error: unknown) => error instanceof MutationLockError && error.code === "lock-held");
-      assert.ok(fs.files.has("/locks/repo.transition"), "the transition record must serialize lifecycle recovery");
-      contenderBlocked = true;
-    }
-  };
-  const winner = await new MutationLockService(fs, process).acquire("/locks/repo", "/git/repo", "winner");
-  assert.equal(contenderBlocked, true);
-  await winner.release();
+  await assert.rejects(new MutationLockService(fs, process).acquire("/locks/repo", "/git/repo", "winner"), (error: unknown) => error instanceof MutationLockError && error.code === "lock-unsafe-recovery");
+  assert.ok(fs.files.has("/locks/repo.lifecycle/owner.json"));
+  assert.equal(fs.files.has("/locks/repo.transition"), false);
 });
 
 test("a stale lifecycle finalizer cannot race recovery and replacement", async () => {

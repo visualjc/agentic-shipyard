@@ -93,6 +93,13 @@ async function isolatedRemoteGitDirectory(executable: string, remote: Readonly<{
   const url = trustedGitHubRemoteUrl(remote.expectedUrl);
   const directory = await mkdtemp(join(tmpdir(), "shipyard-git-remote-"));
   try {
+    // A config file alone is not a Git directory: fetch also requires HEAD,
+    // objects, and refs. Initialize with the same pinned executable and clean
+    // environment used by the authenticated child, then replace its config
+    // with the deliberately minimal, authority-checked remote configuration.
+    await execFileAsync(executable, ["init", "--bare", directory], {
+      encoding: "utf8", env: sanitizedGitEnvironment(),
+    });
     await writeFile(join(directory, "config"), `[core]\n\tbare = true\n[remote \"${remote.remote}\"]\n\turl = ${url}\n`, { encoding: "utf8", mode: 0o600 });
     return directory;
   } catch (error) { await rm(directory, { recursive: true, force: true }); throw error; }

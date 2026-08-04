@@ -17,6 +17,11 @@ export type DeliveryRegistryDocument = {
 };
 
 export interface DeliveryRegistry {
+  /**
+   * Canonical mutation authority for this registry's read-modify-write cycle.
+   * The scope identifies the guarded registry state; path is its lock file.
+   */
+  lockScope(): Readonly<{ path: string; scope: string }>;
   read(): Promise<DeliveryRegistryDocument | undefined>;
   write(document: DeliveryRegistryDocument): Promise<void>;
 }

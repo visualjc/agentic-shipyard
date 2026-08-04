@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 import { GitTransportService } from "../../src/github/git-transport.js";
 import { createNodeGitTransportCommandRunner, GitTransportCommand, GitTransportCommandRunner, nodeGitTransportCommandRunner } from "../../src/adapters/git-transport.js";
+
+const execFileAsync = promisify(execFile);
 
 class RecordingRunner implements GitTransportCommandRunner {
   readonly commands: GitTransportCommand[] = [];
@@ -146,7 +150,7 @@ test("authenticated runner isolates a named remote from hostile Git config and d
   const executable = join(directory, "trusted-git");
   const inherited = Object.fromEntries(["DEVELOPER_DIR", "SDKROOT", "TOOLCHAINS", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM"].map((key) => [key, process.env[key]]));
   try {
-    await writeFile(executable, "#!/bin/sh\nif [ \"$3\" = config ]; then printf '%s\\n' 'https://github.com/acme/widget.git'; exit 0; fi\nprintf '%s\\n' '--CONFIG--'; cat \"$GIT_DIR/config\"; printf '%s\\n' '--ENV--'; printenv\n", { mode: 0o700 });
+    await writeFile(executable, "#!/bin/sh\nif [ \"$1\" = init ]; then exit 0; fi\nif [ \"$3\" = config ]; then printf '%s\\n' 'https://github.com/acme/widget.git'; exit 0; fi\nprintf '%s\\n' '--CONFIG--'; cat \"$GIT_DIR/config\"; printf '%s\\n' '--ENV--'; printenv\n", { mode: 0o700 });
     await chmod(executable, 0o700);
     process.env.DEVELOPER_DIR = "/hostile/developer"; process.env.SDKROOT = "/hostile/sdk"; process.env.TOOLCHAINS = "hostile"; process.env.GIT_CONFIG_GLOBAL = "/hostile/config";
     const runner = createNodeGitTransportCommandRunner(executable);
@@ -171,10 +175,30 @@ test("runner rejects a remote changed after authority validation before the cred
   const directory = await mkdtemp(join(tmpdir(), "shipyard-remote-race-"));
   const executable = join(directory, "trusted-git");
   try {
-    await writeFile(executable, "#!/bin/sh\nif [ \"$3\" = config ]; then printf '%s\\n' 'https://github.com/acme/destination.git'; exit 0; fi\nprintf 'NETWORK %s' \"$GIT_CONFIG_VALUE_1\"\n", { mode: 0o700 });
+    await writeFile(executable, "#!/bin/sh\nif [ \"$1\" = init ]; then exit 0; fi\nif [ \"$3\" = config ]; then printf '%s\\n' 'https://github.com/acme/destination.git'; exit 0; fi\nprintf 'NETWORK %s' \"$GIT_CONFIG_VALUE_1\"\n", { mode: 0o700 });
     await chmod(executable, 0o700);
     const result = await createNodeGitTransportCommandRunner(executable).run({ executable, argv: ["-C", "/repository", "fetch", "origin"], env: { GIT_CONFIG_VALUE_1: "AUTHORIZATION: bearer secret-token" }, isolatedRemote: { repositoryPath: "/repository", remote: "origin", expectedUrl: "https://github.com/acme/widget.git" } });
     assert.notEqual(result.exitCode, 0); assert.match(result.stderr, /changed after authority/i);
     assert.equal(result.stdout.includes("NETWORK"), false); assert.equal(`${result.stdout}\n${result.stderr}`.includes("secret-token"), false);
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("authenticated runner creates a valid bare Git directory with only the checked remote", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "shipyard-real-git-"));
+  const repository = join(directory, "repository");
+  try {
+    await execFileAsync("/usr/bin/git", ["init", repository], { encoding: "utf8" });
+    await execFileAsync("/usr/bin/git", ["-C", repository, "remote", "add", "origin", "https://github.com/acme/widget.git"], { encoding: "utf8" });
+    const runner = createNodeGitTransportCommandRunner("/usr/bin/git");
+    const isolatedRemote = { repositoryPath: repository, remote: "origin", expectedUrl: "https://github.com/acme/widget.git" };
+
+    const validity = await runner.run({ executable: "/usr/bin/git", argv: ["fsck", "--no-dangling"], env: {}, isolatedRemote });
+    assert.equal(validity.exitCode, 0, validity.stderr);
+
+    const configuredRemote = await runner.run({ executable: "/usr/bin/git", argv: ["config", "--get", "remote.origin.url"], env: {}, isolatedRemote });
+    assert.equal(configuredRemote.exitCode, 0, configuredRemote.stderr);
+    assert.equal(configuredRemote.stdout.trim(), "https://github.com/acme/widget.git");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

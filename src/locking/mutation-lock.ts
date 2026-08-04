@@ -36,7 +36,7 @@ export class MutationLockError extends Error {
 }
 export interface AcquiredMutationLock { record: MutationLockRecord; release(): Promise<void>; }
 
-/** Exclusive lock with deliberately conservative recovery: another host is never removed locally. */
+/** Exclusive lock whose durable owner records always require manual recovery. */
 export class MutationLockService {
   constructor(private readonly filesystem: FilesystemAdapter, private readonly process: ProcessAdapter, private readonly staleAfterMs = 10 * 60_000) {}
 
@@ -120,8 +120,8 @@ export class MutationLockService {
   }
 
   /**
-   * Retains the existing lifecycle owner record for conservative stale-owner
-   * recovery, but wraps its entire creation/recovery/removal finalizer in the
+   * Retains an existing lifecycle owner record for manual recovery, but wraps
+   * its entire creation/removal finalizer in the
    * transition mutex. The mutex is not held while the user's mutation runs.
    */
   private async withLifecycleGuard<T>(path: string, operation: () => Promise<T>, waitForLiveTransition = false): Promise<T> {
@@ -162,12 +162,10 @@ export class MutationLockService {
     }
     const owner = this.parseLifecycleOwner(text);
     if (owner instanceof MutationLockError) return owner;
-    if (owner.host !== this.process.hostName()) return new MutationLockError("lock-unsafe-recovery", "Cannot validate a lifecycle guard owned by another host; manual recovery is required.");
-    if (owner.processId === this.process.processId() || await this.process.isProcessAlive(owner.processId)) return new MutationLockError("lock-held", "Mutation lock lifecycle is owned by a live process.");
-    await this.filesystem.remove(ownerPath);
-    return await this.filesystem.removeEmptyDirectory(guard)
-      ? "retry"
-      : new MutationLockError("lock-held", "Lifecycle guard changed during recovery; retry the operation.");
+    if (owner.processId === this.process.processId() || (owner.host === this.process.hostName() && await this.process.isProcessAlive(owner.processId))) {
+      return new MutationLockError("lock-held", "Mutation lock lifecycle is owned by a live process.");
+    }
+    return new MutationLockError("lock-unsafe-recovery", "Lifecycle guard ownership cannot be globally proven; manual recovery is required.");
   }
 
   private async readLifecycleOwner(path: string): Promise<LifecycleOwner | undefined> {
@@ -185,7 +183,7 @@ export class MutationLockService {
     } catch { return new MutationLockError("lock-invalid", "Lifecycle guard owner record is malformed; manual recovery is required."); }
   }
 
-  /** Called only while the lifecycle guard and transition record are held. */
+  /** Called only while the lifecycle guard and transition record are held. Durable primary locks are never auto-removed. */
   private async recoverStaleWhileGuarded(path: string, repository: string): Promise<void> {
     const existing = await this.read(path);
     if (!existing) return;
@@ -193,9 +191,10 @@ export class MutationLockService {
     const acquired = Date.parse(existing.acquiredAt);
     if (!Number.isFinite(acquired)) throw new MutationLockError("lock-invalid", "Lock acquisition time is invalid.");
     if (this.process.now().getTime() - acquired <= this.staleAfterMs) throw new MutationLockError("lock-held", "A recent mutation lock is already held.");
-    if (existing.host !== this.process.hostName()) throw new MutationLockError("lock-unsafe-recovery", "Cannot validate a stale lock owned by another host.");
-    if (await this.process.isProcessAlive(existing.processId)) throw new MutationLockError("lock-held", "Stale-looking lock owner process is still alive.");
-    await this.filesystem.remove(path);
+    if (existing.processId === this.process.processId() || (existing.host === this.process.hostName() && await this.process.isProcessAlive(existing.processId))) {
+      throw new MutationLockError("lock-held", "Stale-looking lock owner process is still alive.");
+    }
+    throw new MutationLockError("lock-unsafe-recovery", "Stale mutation lock ownership cannot be globally proven; manual recovery is required.");
   }
 
   private async read(path: string): Promise<MutationLockRecord | undefined> {

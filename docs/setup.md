@@ -50,11 +50,13 @@ machine-local binding. It never provisions repositories or rewrites a remote.
 An existing binding requires explicit `--rebind`; first fix any remote mismatch
 outside Shipyard. Setup takes the common-directory mutation lock and then the
 single Shipyard-home binding-store mutation lock for every read-modify-write.
-A live lock blocks another writer;
-stale recovery uses the lock's host/process ownership rules and fails closed
-if ownership cannot be proven. Lifecycle creation, release, and recovery use a
+A live lock blocks another writer. Stale primary locks and populated lifecycle
+guards always require manual recovery: matching hostname and PID observations
+are not global proof in shared or containerized checkouts. Lifecycle creation,
+release, and recovery use a
 short sibling transition record so finalization cannot remove a replacement.
 That transition record is never auto-recovered: a crashed transition requires
-manual inspection before removal, while ordinary stale primary/lifecycle locks
-remain recoverable only after same-host process validation. See
+manual inspection before removal. Before removing any durable lock record,
+verify its owner is inactive in every checkout or container sharing the path.
+See
 [metadata ownership](metadata-ownership.md).

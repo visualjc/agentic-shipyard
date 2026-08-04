@@ -43,6 +43,7 @@ test("rejects non-canonical delivery identifiers, branches, and equivalent path 
 test("filesystem registry rejects malformed persisted JSON and validates before persistence", async () => {
   const filesystem = new MemoryFilesystem();
   const registry = new JsonDeliveryRegistry(filesystem, "/state/deliveries.json");
+  assert.deepEqual(registry.lockScope(), { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" });
   assert.equal(await registry.read(), undefined);
   filesystem.files.set("/state/deliveries.json", "{");
   await assert.rejects(registry.read(), (error: unknown) => error instanceof DeliveryError && error.code === "delivery-registry-invalid");

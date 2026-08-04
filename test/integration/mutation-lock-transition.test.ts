@@ -80,7 +80,7 @@ test("real filesystem contenders never surface a lifecycle finalizer race or rem
   }
 });
 
-test("real processes recover a dead lifecycle owner while a replacement races its finalizer", async () => {
+test("real processes leave a dead lifecycle owner for manual recovery", async () => {
   const root = await mkdtemp(join(tmpdir(), "shipyard-lock-recovery-"));
   const lockPath = join(root, "locks", "repository.lock");
   const lifecycleDirectory = `${lockPath}.lifecycle`;
@@ -130,30 +130,20 @@ test("real processes recover a dead lifecycle owner while a replacement races it
   try {
     await mkdir(lifecycleDirectory, { recursive: true });
     await mkdir(coordination, { recursive: true });
-    await writeFile(join(lifecycleDirectory, "owner.json"), JSON.stringify({
+    const staleOwner = {
       version: 1, host: nodeProcess.hostName(), processId: 99_999_999, token: "dead-owner", acquiredAt: new Date(Date.now() - 60_000).toISOString(),
-    }), "utf8");
+    };
+    await writeFile(join(lifecycleDirectory, "owner.json"), JSON.stringify(staleOwner), "utf8");
 
-    const recoverers = ["recoverer-one", "recoverer-two", "recoverer-three"].map(name =>
+    const recoverers = ["recoverer-one"].map(name =>
       execFileAsync(process.execPath, ["--input-type=module", "--eval", worker, lockPath, coordination, name, "recover"], { encoding: "utf8" }),
     );
-    const initial = await Promise.all(["recoverer-one", "recoverer-two", "recoverer-three"].map(name => waitForJson(join(coordination, `${name}.json`))));
-    assert.equal(initial.filter(result => result.outcome === "success").length, 1);
-    assert.ok(initial.every(result => result.outcome === "success" || (result.outcome === "blocker" && result.code === "lock-held")));
+    const initial = await Promise.all(["recoverer-one"].map(name => waitForJson(join(coordination, `${name}.json`))));
+    assert.ok(initial.every(result => result.outcome === "blocker" && result.code === "lock-unsafe-recovery"));
+    assert.equal(await readFile(join(lifecycleDirectory, "owner.json"), "utf8"), JSON.stringify(staleOwner));
 
-    const racer = execFileAsync(process.execPath, ["--input-type=module", "--eval", worker, lockPath, coordination, "racer", "race"], { encoding: "utf8" });
-    await waitForFile(join(coordination, "racer-attempted"));
-    await writeFile(join(coordination, "release"), "release", "utf8");
-
-    const outcomes = await Promise.allSettled([...recoverers, racer]);
+    const outcomes = await Promise.allSettled(recoverers);
     for (const outcome of outcomes) assert.equal(outcome.status, "fulfilled", outcome.status === "rejected" ? String(outcome.reason) : "");
-    const finalRecovery = await Promise.all(["recoverer-one", "recoverer-two", "recoverer-three"].map(name => waitForJson(join(coordination, `${name}.json`))));
-    assert.equal(finalRecovery.filter(result => result.outcome === "released").length, 1);
-    assert.equal((await waitForJson(join(coordination, "racer.json"))).outcome, "success");
-
-    const replacement = await new MutationLockService(nodeFilesystem, nodeProcess).acquire(lockPath, "/git/repository", "final-replacement");
-    assert.equal(replacement.record.operation, "final-replacement");
-    await replacement.release();
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -5,7 +5,16 @@ import type { DeliveryRegistry, DeliveryRegistryDocument, DeliveryWorkspace } fr
 
 /** Filesystem-backed adapter for explicitly configured machine-local registry state. */
 export class JsonDeliveryRegistry implements DeliveryRegistry {
-  constructor(private readonly filesystem: FilesystemAdapter, private readonly path: string) {}
+  private readonly path: string;
+
+  constructor(private readonly filesystem: FilesystemAdapter, path: string) {
+    try { this.path = canonicalAbsolutePath(path); }
+    catch { throw new DeliveryError("delivery-registry-invalid", "Delivery registry path must be a canonical absolute path."); }
+  }
+
+  lockScope(): Readonly<{ path: string; scope: string }> {
+    return { path: `${this.path}.lock`, scope: this.path };
+  }
 
   async read(): Promise<DeliveryRegistryDocument | undefined> {
     const text = await this.filesystem.readText(this.path);

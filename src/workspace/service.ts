@@ -59,7 +59,7 @@ export class WorkspaceService {
     }
     const actualCommonDirectory = await this.git.commonDirectory(request.repositoryPath);
     if (actualCommonDirectory !== request.commonDirectory) throw new WorkspaceError("workspace-identity-mismatch", "The requested common directory does not match the repository Git identity.");
-    return this.withLock(actualCommonDirectory, async () => {
+    return this.withLocks(actualCommonDirectory, async () => {
       const workspace: DeliveryWorkspace = { schemaVersion: 1, deliveryId: request.deliveryId, commonDirectory: actualCommonDirectory, branch: request.branch, worktreePath: request.worktreePath };
       const document = await this.registry.read();
       const matches = document?.workspaces.filter((candidate) => candidate.deliveryId === request.deliveryId || candidate.worktreePath === request.worktreePath) ?? [];
@@ -72,8 +72,12 @@ export class WorkspaceService {
       // durable record therefore cannot be a recoverable interruption.
       if (matches.length === 1 && existing === undefined) throw new WorkspaceError("workspace-ledger-conflict", "The registry entry has no durable initial delivery record.");
       const branchExists = await this.git.branchExists(request.repositoryPath, request.branch);
-      if (existing === undefined && branchExists) {
-        throw new WorkspaceError("workspace-conflict", "The canonical feature branch already exists without durable delivery provenance.");
+      const worktreeExists = await this.git.worktreeExists(request.worktreePath);
+      // A registry entry is the sole authority for adopting an existing branch
+      // or path. The ledger proves intent, but cannot attribute pre-existing
+      // Git state to this invocation after an interrupted creation attempt.
+      if (matches.length === 0 && (branchExists || worktreeExists)) {
+        throw new WorkspaceError("workspace-conflict", "The canonical feature branch or worktree path already exists without a registry claim; inspect it manually before retrying.");
       }
       const startSha = await this.git.productHead(request.repositoryPath);
       const provenance = existing === undefined
@@ -87,19 +91,6 @@ export class WorkspaceService {
       // any later branch history, so require explicit conflict resolution.
       if (matches.length === 1 && !branchExists) {
         throw new WorkspaceError("workspace-conflict", "The registered canonical feature branch is missing.");
-      }
-      // Without a registry entry, a pre-existing branch is recoverable only
-      // when the expected linked worktree proves this delivery already created
-      // it. Matching the recorded start object alone cannot attribute a branch
-      // that an external actor created during an interrupted attempt.
-      if (matches.length === 0 && branchExists) {
-        const recoverableWorktree = await this.git.worktreeIdentity(request.worktreePath);
-        if (!recoverableWorktree || !sameIdentity(recoverableWorktree, workspace)) {
-          throw new WorkspaceError("workspace-conflict", "The canonical feature branch exists without an attributable linked worktree.");
-        }
-        if (await this.git.branchHead(request.repositoryPath, request.branch) !== provenance.startProductSha) {
-          throw new WorkspaceError("workspace-conflict", "The canonical feature branch does not match durable delivery provenance.");
-        }
       }
       try {
         if (existing === undefined) await this.ledger.transact({ expectedHead: snapshot.head, writes: [{ path: request.initialLedgerPath, contents: JSON.stringify(provenance) }], message: `initialize ${request.deliveryId}` });
@@ -130,7 +121,7 @@ export class WorkspaceService {
    */
   async cleanup(repositoryPath: string, deliveryId: string): Promise<void> {
     const actualCommonDirectory = await this.git.commonDirectory(repositoryPath);
-    await this.withLock(actualCommonDirectory, async () => {
+    await this.withLocks(actualCommonDirectory, async () => {
       const document = await this.registry.read();
       const workspace = document?.workspaces.find((candidate) => candidate.deliveryId === deliveryId);
       if (!document || !workspace) return;
@@ -184,10 +175,18 @@ export class WorkspaceService {
     }
   }
 
-  private async withLock<T>(commonDirectory: string, operation: () => Promise<T>): Promise<T> {
-    const lock = await this.locks.acquire(`${commonDirectory}/shipyard-workspace.lock`, commonDirectory, "workspace");
-    try { return await operation(); }
-    finally { await lock.release(); }
+  /**
+   * The global nested-lock order is registry, then Git common-directory.
+   * Tracking takes only the latter, so it cannot form an inverse lock cycle.
+   */
+  private async withLocks<T>(commonDirectory: string, operation: () => Promise<T>): Promise<T> {
+    const registry = this.registry.lockScope();
+    const registryLock = await this.locks.acquire(registry.path, registry.scope, "workspace-registry");
+    try {
+      const workspaceLock = await this.locks.acquire(`${commonDirectory}/shipyard-workspace.lock`, commonDirectory, "workspace");
+      try { return await operation(); }
+      finally { await workspaceLock.release(); }
+    } finally { await registryLock.release(); }
   }
 }
 

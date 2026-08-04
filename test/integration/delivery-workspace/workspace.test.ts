@@ -120,6 +120,36 @@ test("serializes concurrent creators, preserves both registry entries after retr
   } finally { await dispose(value); }
 });
 
+test("serializes different Git common directories that share one registry without losing either entry", async () => {
+  const left = await fixture();
+  const right = await fixture();
+  try {
+    assert.notEqual(left.commonDirectory, right.commonDirectory);
+    const leftRequest = left.request("d-shared-left");
+    const rightRequest = right.request("d-shared-right");
+    const entered = Promise.withResolvers<void>(); const release = Promise.withResolvers<void>();
+    let blockOnce = true;
+    const blockingLedger = {
+      async snapshot(paths: readonly string[]) {
+        if (blockOnce) { blockOnce = false; entered.resolve(); await release.promise; }
+        return left.ledger.snapshot(paths);
+      },
+      transact: left.ledger.transact.bind(left.ledger),
+    };
+    const leftService = new WorkspaceService(left.registry, blockingLedger, nodeWorkspaceGit, new MutationLockService(nodeFilesystem, nodeProcess));
+    const rightService = new WorkspaceService(left.registry, right.ledger, nodeWorkspaceGit, new MutationLockService(nodeFilesystem, nodeProcess));
+
+    const first = leftService.createOrResume(leftRequest);
+    await entered.promise;
+    await assert.rejects(rightService.createOrResume(rightRequest), (error: unknown) => error instanceof MutationLockError && error.code === "lock-held");
+    release.resolve();
+    await first;
+    await rightService.createOrResume(rightRequest);
+
+    assert.deepEqual((await left.registry.read())?.workspaces.map((workspace) => workspace.deliveryId).sort(), ["d-shared-left", "d-shared-right"]);
+  } finally { await dispose(left); await dispose(right); }
+});
+
 test("hands off a present registered worktree for manual cleanup, then removes absent-worktree registry state while retaining ledger history", async () => {
   const value = await fixture();
   try {
@@ -143,6 +173,7 @@ test("does not delete a foreign replacement during cleanup's adversarial path sw
   let registryWrites = 0;
   let foreignReplacementExists = true;
   const registry = {
+    lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; },
     async read() { return { schemaVersion: 1 as const, workspaces: [{ schemaVersion: 1 as const, deliveryId: request.deliveryId, commonDirectory: request.commonDirectory, branch: request.branch, worktreePath: request.worktreePath }] }; },
     async write() { registryWrites += 1; },
   };
@@ -190,7 +221,7 @@ test("rejects a foreign canonical feature branch before creating ledger or workt
   } finally { await dispose(value); }
 });
 
-test("resumes deterministically after faults following each durable creation boundary", async () => {
+test("only ledger-before-Git interruptions retry automatically; unregistered Git state requires manual cleanup", async () => {
   const value = await fixture();
   try {
     const afterLedger = value.request("d-ledger");
@@ -205,13 +236,19 @@ test("resumes deterministically after faults following each durable creation bou
     const gitFault = { ...nodeWorkspaceGit, async ensureWorktree(repositoryPath: string, branch: string, path: string, intent: WorktreeEnsureIntent) { const created = await nodeWorkspaceGit.ensureWorktree(repositoryPath, branch, path, intent); if (failWorktree) { failWorktree = false; throw new Error("after-worktree"); } return created; } };
     await assert.rejects(new WorkspaceService(value.registry, value.ledger, gitFault, new MutationLockService(nodeFilesystem, nodeProcess)).createOrResume(afterWorktree), /after-worktree/);
     assert.equal(await nodeWorkspaceGit.worktreeExists(afterWorktree.worktreePath), true);
+    await assert.rejects(value.service.createOrResume(afterWorktree), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
+    await git(value.repository, ["worktree", "remove", afterWorktree.worktreePath]);
+    await git(value.repository, ["branch", "-D", afterWorktree.branch]);
     await value.service.createOrResume(afterWorktree);
 
     const beforeRegistry = value.request("d-registry");
     let failRegistry = true;
-    const registryFault = { read: value.registry.read.bind(value.registry), async write(document: Parameters<JsonDeliveryRegistry["write"]>[0]) { if (failRegistry) { failRegistry = false; throw new Error("before-registry"); } return value.registry.write(document); } };
+    const registryFault = { lockScope: value.registry.lockScope.bind(value.registry), read: value.registry.read.bind(value.registry), async write(document: Parameters<JsonDeliveryRegistry["write"]>[0]) { if (failRegistry) { failRegistry = false; throw new Error("before-registry"); } return value.registry.write(document); } };
     await assert.rejects(new WorkspaceService(registryFault, value.ledger, nodeWorkspaceGit, new MutationLockService(nodeFilesystem, nodeProcess)).createOrResume(beforeRegistry), /before-registry/);
     assert.equal(await nodeWorkspaceGit.worktreeExists(beforeRegistry.worktreePath), true);
+    await assert.rejects(value.service.createOrResume(beforeRegistry), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
+    await git(value.repository, ["worktree", "remove", beforeRegistry.worktreePath]);
+    await git(value.repository, ["branch", "-D", beforeRegistry.branch]);
     await value.service.createOrResume(beforeRegistry);
     assert.deepEqual((await value.registry.read())?.workspaces.map((workspace) => workspace.deliveryId).sort(), ["d-ledger", "d-registry", "d-worktree"]);
   } finally { await dispose(value); }
@@ -274,7 +311,7 @@ test("create intent rejects a same-SHA foreign branch race without registry adop
   const startSha = "a".repeat(40); const foreignSha = startSha;
   const request = { repositoryPath: "/repository", commonDirectory: "/repository/.git", deliveryId: "d-1", branch: "shipyard/d-1", worktreePath: "/worktrees/d-1", initialLedgerPath: "deliveries/d-1.json", initialLedgerContents: JSON.stringify({ deliveryId: "d-1" }) };
   let registryWrites = 0; let worktreeExists = false; let branchExists = false;
-  const registry = { async read() { return undefined; }, async write() { registryWrites += 1; } };
+  const registry = { lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; }, async read() { return undefined; }, async write() { registryWrites += 1; } };
   const records: Record<string, string> = {};
   const ledger = {
     async snapshot(paths: readonly string[]) { return { head: records[request.initialLedgerPath] ? "ledger" : undefined, records: Object.fromEntries(paths.flatMap((path) => records[path] === undefined ? [] : [[path, records[path]]])) }; },
@@ -299,20 +336,20 @@ test("create intent rejects a same-SHA foreign branch race without registry adop
   assert.equal(await git.branchHead(), foreignSha);
 });
 
-test("create intent rejects a matching foreign worktree that appears after branch preflight", async () => {
+test("rejects an unregistered matching worktree before writing the initial ledger record", async () => {
   const startSha = "a".repeat(40);
   const request = { repositoryPath: "/repository", commonDirectory: "/repository/.git", deliveryId: "d-1", branch: "shipyard/d-1", worktreePath: "/worktrees/d-1", initialLedgerPath: "deliveries/d-1.json", initialLedgerContents: JSON.stringify({ deliveryId: "d-1" }) };
   let registryWrites = 0; let ensureCalls = 0;
   const records: Record<string, string> = {};
-  const registry = { async read() { return undefined; }, async write() { registryWrites += 1; } };
+  const registry = { lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; }, async read() { return undefined; }, async write() { registryWrites += 1; } };
   const ledger = {
     async snapshot(paths: readonly string[]) { return { head: records[request.initialLedgerPath] ? "ledger" : undefined, records: Object.fromEntries(paths.flatMap((path) => records[path] === undefined ? [] : [[path, records[path]]])) }; },
     async transact(transaction: { writes: readonly { path: string; contents: string }[] }) { for (const write of transaction.writes) records[write.path] = write.contents; return "ledger"; },
   };
   const git = {
     async commonDirectory() { return request.commonDirectory; },
-    // branchExists was false during preflight; another actor then created an
-    // indistinguishable same-branch/same-SHA worktree before this exists check.
+    // Even an indistinguishable same-branch/same-SHA worktree is not
+    // attributable without a registry claim.
     async branchExists() { return false; }, async worktreeExists() { return true; },
     async worktreeIdentity() { assert.fail("create intent must not inspect then adopt an existing path"); },
     async productHead() { return startSha; }, async branchHead() { return startSha; },
@@ -323,7 +360,7 @@ test("create intent rejects a matching foreign worktree that appears after branc
   await assert.rejects(service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
   assert.equal(ensureCalls, 0);
   assert.equal(registryWrites, 0);
-  assert.ok(records[request.initialLedgerPath]);
+  assert.equal(records[request.initialLedgerPath], undefined);
 });
 
 test("rejects an unproven false worktree-creation result without adopting its path", async () => {
@@ -331,7 +368,7 @@ test("rejects an unproven false worktree-creation result without adopting its pa
   const request = { repositoryPath: "/repository", commonDirectory: "/repository/.git", deliveryId: "d-1", branch: "shipyard/d-1", worktreePath: "/worktrees/d-1", initialLedgerPath: "deliveries/d-1.json", initialLedgerContents: JSON.stringify({ deliveryId: "d-1" }) };
   let registryWrites = 0;
   const records: Record<string, string> = {};
-  const registry = { async read() { return undefined; }, async write() { registryWrites += 1; } };
+  const registry = { lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; }, async read() { return undefined; }, async write() { registryWrites += 1; } };
   const ledger = {
     async snapshot(paths: readonly string[]) { return { head: records[request.initialLedgerPath] ? "ledger" : undefined, records: Object.fromEntries(paths.flatMap((path) => records[path] === undefined ? [] : [[path, records[path]]])) }; },
     async transact(transaction: { writes: readonly { path: string; contents: string }[] }) { for (const write of transaction.writes) records[write.path] = write.contents; return "ledger"; },
@@ -353,7 +390,7 @@ test("does not remove a swapped path when the branch changes after created-workt
   const request = { repositoryPath: "/repository", commonDirectory: "/repository/.git", deliveryId: "d-1", branch: "shipyard/d-1", worktreePath: "/worktrees/d-1", initialLedgerPath: "deliveries/d-1.json", initialLedgerContents: JSON.stringify({ deliveryId: "d-1" }) };
   let registryWrites = 0; let createdPathExists = false; let foreignReplacementExists = false; let removalAttempts = 0;
   const records: Record<string, string> = {};
-  const registry = { async read() { return undefined; }, async write() { registryWrites += 1; } };
+  const registry = { lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; }, async read() { return undefined; }, async write() { registryWrites += 1; } };
   const ledger = {
     async snapshot(paths: readonly string[]) { return { head: records[request.initialLedgerPath] ? "ledger" : undefined, records: Object.fromEntries(paths.flatMap((path) => records[path] === undefined ? [] : [[path, records[path]]])) }; },
     async transact(transaction: { writes: readonly { path: string; contents: string }[] }) { for (const write of transaction.writes) records[write.path] = write.contents; return "ledger"; },

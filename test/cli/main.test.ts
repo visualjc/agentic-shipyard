@@ -172,7 +172,7 @@ test("status refuses actor-only and path-policy-only profile authority drift unt
   } finally { await fixture.dispose(); }
 });
 
-test("setup refuses unsafe stale-lock recovery with actionable owner guidance", async () => {
+test("setup reports manual stale-lock recovery guidance", async () => {
   const fixture = await createRepository();
   try {
     const runtime = createRuntime(fixture.home);
@@ -183,7 +183,7 @@ test("setup refuses unsafe stale-lock recovery with actionable owner guidance", 
     const setupArgs = ["--home", fixture.home, "--profile", "demo", "--topology", "staged-pair", "--development-name", "origin", "--development-url", fixture.origin, "--destination-name", "destination", "--destination-url", fixture.destination];
     const result = await run(setupArgs, "setup", fixture.main);
     assert.equal(result.code, 1);
-    assert.match(result.output, /cannot be recovered safely/);
+    assert.match(result.output, /requires manual recovery/);
     await assert.rejects(access(join(fixture.home, "bindings.json")));
   } finally { await fixture.dispose(); }
 });
