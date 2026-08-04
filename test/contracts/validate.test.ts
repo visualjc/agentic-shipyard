@@ -1,0 +1,38 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { CONTRACT_VERSION, ContractValidationError, validateBinding, validateLifecycleState, validateOperation, validatePathPolicy, validateProfile } from "../../src/index.js";
+
+const repository = { owner: "visualjc", name: "development", remoteUrl: "https://github.com/visualjc/development.git", defaultBranch: "main" };
+
+test("validates a versioned staged-pair profile without changing its topology", () => {
+  const profile = validateProfile({ schemaVersion: CONTRACT_VERSION, name: "local", actor: { login: "visualjc" }, topology: { kind: "staged-pair", development: repository, destination: { ...repository, name: "destination" } }, allowedOperations: ["setup", "status"] });
+  assert.equal(profile.topology.kind, "staged-pair");
+  assert.equal(profile.actor.login, "visualjc");
+});
+
+test("validates a single-repository binding", () => {
+  const binding = validateBinding({ schemaVersion: 1, profileName: "local", commonDirectory: "/repos/.git", topology: { kind: "single-repository", repository }, boundAt: "2026-08-04T03:00:00Z" });
+  assert.equal(binding.topology.kind, "single-repository");
+  assert.equal(binding.commonDirectory, "/repos/.git");
+});
+
+test("reports stable validation code and path for unsupported schema versions", () => {
+  assert.throws(() => validateProfile({ schemaVersion: 2 }), (error: unknown) => error instanceof ContractValidationError && error.code === "unsupported-schema-version" && error.path === "$.schemaVersion" && error.message === "unsupported-schema-version:$.schemaVersion: must equal 1");
+});
+
+test("rejects unknown fields and duplicate operations fail closed", () => {
+  assert.throws(() => validateProfile({ schemaVersion: 1, name: "x", actor: { login: "a" }, topology: { kind: "single-repository", repository }, allowedOperations: ["status", "status"], surprise: true }), (error: unknown) => error instanceof ContractValidationError && error.path === "$.surprise");
+  assert.throws(() => validateProfile({ schemaVersion: 1, name: "x", actor: { login: "a" }, topology: { kind: "single-repository", repository }, allowedOperations: ["status", "status"] }), (error: unknown) => error instanceof ContractValidationError && error.path === "$.allowedOperations");
+});
+
+test("validates path policy, operations, and lifecycle timestamps", () => {
+  const policy = validatePathPolicy({ schemaVersion: 1, rules: [{ owner: "product", pattern: "src/**" }, { owner: "scratch", pattern: ".tmp/**" }] });
+  assert.equal(policy.rules.length, 2);
+  assert.equal(validateOperation("review"), "review");
+  assert.equal(validateLifecycleState({ schemaVersion: 1, deliveryId: "D-1", phase: "awaiting-review", productSha: "abc", updatedAt: "2026-08-04T03:00:00Z" }).phase, "awaiting-review");
+});
+
+test("rejects unsafe policy and lifecycle documents", () => {
+  assert.throws(() => validatePathPolicy({ schemaVersion: 1, rules: [{ owner: "product", pattern: "src/**" }, { owner: "scratch", pattern: "src/**" }] }), (error: unknown) => error instanceof ContractValidationError && error.code === "invalid-path-policy");
+  assert.throws(() => validateLifecycleState({ schemaVersion: 1, deliveryId: "D-1", phase: "unknown", updatedAt: "not-a-date" }), (error: unknown) => error instanceof ContractValidationError && error.path === "$.phase");
+});
