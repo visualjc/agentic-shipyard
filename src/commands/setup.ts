@@ -1,5 +1,6 @@
 import type { BindingService, GitAdapter, MutationLockService } from "../index.js";
 import { requireMatchingTopology, requireProfileAuthorization, type ProfileReader, type TopologyRequest } from "../profile/policy.js";
+import { profileFingerprint } from "../profile/fingerprint.js";
 
 export class RepositoryIdentityError extends Error {
   readonly name = "RepositoryIdentityError";
@@ -37,6 +38,7 @@ export async function setup(dependencies: SetupDependencies, input: SetupInput) 
       return await dependencies.bindings.bind(input.repositoryPath, {
         profileName: profile.name,
         topology: profile.topology,
+        profileFingerprint: profileFingerprint(profile),
         boundAt: (input.now ?? (() => new Date()))().toISOString(),
       }, input.rebind);
     } finally { await storeLock.release(); }

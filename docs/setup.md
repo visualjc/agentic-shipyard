@@ -30,13 +30,20 @@ create profiles. The file is the canonical version 1 profile document:
       "defaultBranch": "main"
     }
   },
-  "allowedOperations": ["setup", "status", "help"]
+  "allowedOperations": ["setup", "status", "help"],
+  "pathPolicy": {
+    "schemaVersion": 1,
+    "rules": [{ "owner": "product", "pattern": "src/**" }]
+  }
 }
 ```
 
 The filename identifier, document `name`, topology kind, and named remote URLs
 must match the setup request exactly. Missing, malformed, mismatched, or
 setup-disallowing profiles block before the binding is written.
+
+`pathPolicy` is profile-owned authority. Operational path classification must
+consume this validated profile policy, never an unrelated local policy.
 
 Shipyard validates the named remotes and Git common directory, then writes its
 machine-local binding. It never provisions repositories or rewrites a remote.

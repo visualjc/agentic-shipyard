@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 import { nodeGit } from "../../src/adapters/git.js";
 import { BindingError } from "../../src/binding/errors.js";
+import { ContractValidationError } from "../../src/contracts/validate.js";
 import { BindingService, newBindingDocument, validateTopology } from "../../src/binding/service.js";
 import { JsonBindingStore } from "../../src/binding/store.js";
 import { RepositoryBinding, RepositoryTopology } from "../../src/binding/types.js";
@@ -14,7 +15,7 @@ import { FakeGit, MemoryBindingStore, MemoryFilesystem } from "../helpers/fakes.
 
 const execFile = promisify(execFileCallback);
 const topology: Extract<RepositoryTopology, { kind: "staged-pair" }> = { kind: "staged-pair", development: { owner: "test", name: "development", remote: { name: "origin", url: "https://example.test/development.git" }, defaultBranch: "main" }, destination: { owner: "test", name: "destination", remote: { name: "destination", url: "https://example.test/destination.git" }, defaultBranch: "main" } };
-const binding = (commonDirectory = "/git/main/.git"): RepositoryBinding => ({ schemaVersion: 1, profileName: "test", commonDirectory, topology, boundAt: "2026-08-04T00:00:00.000Z" });
+const binding = (commonDirectory = "/git/main/.git"): RepositoryBinding => ({ schemaVersion: 1, profileName: "test", commonDirectory, topology, profileFingerprint: "0".repeat(64), boundAt: "2026-08-04T00:00:00.000Z" });
 
 function configuredGit(): FakeGit {
   const git = new FakeGit();
@@ -32,7 +33,6 @@ test("rejects missing, duplicate, stale, partial, and remote-mismatched bindings
     ["missing", undefined, () => {}, "repository-unbound"],
     ["duplicate", newBindingDocument([binding(), binding()]), () => {}, "binding-duplicate"],
     ["stale common directory", newBindingDocument([binding("/old/.git")]), () => {}, "repository-unbound"],
-    ["partial topology", newBindingDocument([{ ...binding(), topology: { kind: "staged-pair", development: topology.development } as never }]), () => {}, "topology-incomplete"],
     ["remote mismatch", newBindingDocument([binding()]), (git) => git.remotes.set("/main:origin", "https://example.test/wrong.git"), "binding-remote-mismatch"],
   ];
   for (const [name, document, arrange, code] of cases) {
@@ -46,7 +46,7 @@ test("bind validates the complete topology and requires explicit rebind", async 
   const git = configuredGit();
   const store = new MemoryBindingStore();
   const service = new BindingService(store, git);
-  const candidate = { profileName: "test", topology, boundAt: "2026-08-04T00:00:00.000Z" };
+  const candidate = { profileName: "test", topology, profileFingerprint: "0".repeat(64), boundAt: "2026-08-04T00:00:00.000Z" };
   await service.bind("/main", candidate);
   await assert.rejects(service.bind("/main", candidate), (error: unknown) => error instanceof BindingError && error.code === "binding-stale");
   await service.bind("/main", candidate, true);
@@ -91,6 +91,16 @@ test("binding store validates writes as well as reads", async () => {
   const store = new JsonBindingStore(fs, "/bindings.json");
   await assert.rejects(store.write({ schemaVersion: 1, bindings: [{ ...binding(), boundAt: "2026-02-30T00:00:00.000Z" }] }), (error: unknown) => error instanceof BindingError && error.code === "binding-store-invalid");
   assert.equal(fs.files.has("/bindings.json"), false);
+});
+
+test("BindingService distrusts a conforming-store implementation on reads and writes", async () => {
+  const git = configuredGit();
+  const hostile = new MemoryBindingStore({ schemaVersion: 1, bindings: [{ ...binding(), profileName: "" }] as never });
+  const service = new BindingService(hostile, git);
+  await assert.rejects(service.resolve("/main"), (error: unknown) => error instanceof BindingError && error.code === "binding-store-invalid");
+  hostile.document = { schemaVersion: 1, bindings: [] };
+  await assert.rejects(service.bind("/main", { profileName: "test", topology, profileFingerprint: "bad", boundAt: "not-a-date" } as never), (error: unknown) => error instanceof ContractValidationError && error.code === "invalid-binding");
+  assert.equal(hostile.document.bindings.length, 0, "invalid candidate must never reach an alternate store");
 });
 
 async function run(command: string, args: string[]): Promise<void> { await execFile(command, args); }

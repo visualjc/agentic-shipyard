@@ -150,10 +150,25 @@ test("status revalidates the named profile, topology, and status authorization w
     await writeProfile(fixture, "demo", { destinationUrl: "https://example.test/changed-profile.git" });
     const changed = await run(["--home", fixture.home], "status", fixture.main);
     assert.equal(changed.code, 1); assert.match(changed.output, /--rebind/);
-    const denied = { schemaVersion: 1, name: "demo", actor: { login: "shipyard-test" }, topology: { kind: "staged-pair", development: { owner: "test", name: "development", remote: { name: "origin", url: fixture.origin }, defaultBranch: "main" }, destination: { owner: "test", name: "destination", remote: { name: "destination", url: fixture.destination }, defaultBranch: "main" } }, allowedOperations: ["setup"] };
+    const denied = { schemaVersion: 1, name: "demo", actor: { login: "shipyard-test" }, topology: { kind: "staged-pair", development: { owner: "test", name: "development", remote: { name: "origin", url: fixture.origin }, defaultBranch: "main" }, destination: { owner: "test", name: "destination", remote: { name: "destination", url: fixture.destination }, defaultBranch: "main" } }, allowedOperations: ["setup"], pathPolicy: policy() };
     await writeFile(join(fixture.home, "profiles", "demo.json"), JSON.stringify(denied));
     const unauthorized = await run(["--home", fixture.home], "status", fixture.main);
     assert.equal(unauthorized.code, 1); assert.match(unauthorized.output, /does not authorize/);
+  } finally { await fixture.dispose(); }
+});
+
+test("status refuses actor-only and path-policy-only profile authority drift until rebind", async () => {
+  const fixture = await createRepository();
+  try {
+    const args = ["--home", fixture.home, "--profile", "demo", "--topology", "staged-pair", "--development-name", "origin", "--development-url", fixture.origin, "--destination-name", "destination", "--destination-url", fixture.destination];
+    assert.equal((await run(args, "setup", fixture.main)).code, 0);
+    await writeProfile(fixture, "demo", { actor: "changed-actor" });
+    const actor = await run(["--home", fixture.home], "status", fixture.main);
+    assert.equal(actor.code, 1); assert.match(actor.output, /authority has changed.*--rebind/i);
+    assert.equal((await run([...args, "--rebind"], "setup", fixture.main)).code, 0);
+    await writeProfile(fixture, "demo", { pathPolicy: { schemaVersion: 1, rules: [{ owner: "scratch", pattern: "src/**" }] } });
+    const policyDrift = await run(["--home", fixture.home], "status", fixture.main);
+    assert.equal(policyDrift.code, 1); assert.match(policyDrift.output, /authority has changed.*--rebind/i);
   } finally { await fixture.dispose(); }
 });
 
@@ -209,20 +224,21 @@ async function createRepository(withProfile = true) {
 async function writeProfile(
   fixture: { home: string; origin: string; destination: string },
   fileName: string,
-  options: { malformed?: boolean; declaredName?: string; destinationUrl?: string } = {},
+  options: { malformed?: boolean; declaredName?: string; destinationUrl?: string; actor?: string; pathPolicy?: ReturnType<typeof policy> } = {},
 ): Promise<void> {
   const directory = join(fixture.home, "profiles");
   await mkdir(directory, { recursive: true });
   const document: unknown = options.malformed ? { schemaVersion: 99 } : {
     schemaVersion: 1,
     name: options.declaredName ?? fileName,
-    actor: { login: "shipyard-test" },
+    actor: { login: options.actor ?? "shipyard-test" },
     topology: {
       kind: "staged-pair",
       development: { owner: "test", name: "development", remote: { name: "origin", url: fixture.origin }, defaultBranch: "main" },
       destination: { owner: "test", name: "destination", remote: { name: "destination", url: options.destinationUrl ?? fixture.destination }, defaultBranch: "main" },
     },
     allowedOperations: ["setup", "status", "help"],
+    pathPolicy: options.pathPolicy ?? policy(),
   };
   await writeFile(join(directory, `${fileName}.json`), `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600 });
 }
@@ -242,6 +258,9 @@ async function writeSingleRepositoryProfile(
       repository: { owner: "test", name: "product", remote: { name: "origin", url: fixture.origin }, defaultBranch: "main" },
     },
     allowedOperations: ["setup", "status", "help"],
+    pathPolicy: policy(),
   };
   await writeFile(join(directory, `${fileName}.json`), `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600 });
 }
+
+function policy() { return { schemaVersion: 1, rules: [{ owner: "product", pattern: "src/**" }] }; }

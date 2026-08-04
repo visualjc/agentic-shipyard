@@ -28,6 +28,7 @@ match the complete requested remote topology, and authorize setup. Setup takes
 the common-directory lock first and then one Shipyard-home binding-store lock,
 so concurrent setup in different repositories cannot lose a binding update.
 
-Focused Codex skills are in `skills/shipyard*`; see [setup](docs/setup.md),
+Focused Codex skills are in `skills/shipyard*` and are discovered in this repo
+through `.agents/skills` symlinks; see [skills](docs/skills.md), [setup](docs/setup.md),
 [status](docs/status.md), [help](docs/help.md), and
 [metadata ownership](docs/metadata-ownership.md).

@@ -19,6 +19,7 @@
     "dist/src",
     "bin",
     "skills",
+    ".agents",
     "docs",
     "README.md"
   ],

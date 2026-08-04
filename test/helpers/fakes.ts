@@ -51,7 +51,7 @@ export class FakeProcess implements ProcessAdapter {
 }
 
 export class MemoryBindingStore {
-  constructor(private document?: BindingDocument) {}
+  constructor(public document?: BindingDocument) {}
   async read(): Promise<BindingDocument | undefined> { return this.document; }
   async write(document: BindingDocument): Promise<void> { this.document = document; }
 }

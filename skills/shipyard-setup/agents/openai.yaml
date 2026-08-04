@@ -1,0 +1,4 @@
+display_name: Shipyard Setup
+short_description: Bind an existing repository to a named Shipyard profile safely.
+default_prompt: Run setup only with an explicit profile and complete existing remote topology.
+invocation_policy: explicit

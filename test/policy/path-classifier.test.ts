@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ContractValidationError } from "../../src/contracts/errors.js";
-import { PathPolicy } from "../../src/contracts/types.js";
-import { PathPolicyError, classifyPath } from "../../src/policy/path-classifier.js";
+import { PathPolicy, Profile } from "../../src/contracts/types.js";
+import { PathPolicyError, classifyPath, classifyProfilePath } from "../../src/policy/path-classifier.js";
 
 const policy: PathPolicy = { schemaVersion: 1, rules: [
   { owner: "product", pattern: "src/**" },
@@ -39,4 +39,10 @@ test("validates the canonical path-policy contract at the enforcement seam", () 
   for (const candidate of hostile) {
     assert.throws(() => classifyPath(candidate as PathPolicy, "src/index.ts"), (error: unknown) => error instanceof ContractValidationError && error.code === "invalid-path-policy");
   }
+});
+
+test("operational classification takes authority from the profile-owned policy", () => {
+  const profile: Profile = { schemaVersion: 1, name: "profile", actor: { login: "actor" }, topology: { kind: "single-repository", repository: { owner: "owner", name: "repo", remote: { name: "origin", url: "https://example.test/repo.git" }, defaultBranch: "main" } }, allowedOperations: ["status"], pathPolicy: policy };
+  assert.equal(classifyProfilePath(profile, "src/index.ts"), "product");
+  assert.throws(() => classifyProfilePath({ ...profile, pathPolicy: undefined as never }, "src/index.ts"), ContractValidationError);
 });

@@ -26,6 +26,8 @@ export type Profile = {
   actor: GitHubActor;
   topology: Topology;
   allowedOperations: readonly Operation[];
+  /** This profile owns the only path-authority policy Shipyard may use. */
+  pathPolicy: PathPolicy;
 };
 
 /** A binding belongs to the Git common directory, not a particular worktree. */
@@ -34,6 +36,8 @@ export type Binding = {
   profileName: string;
   commonDirectory: string;
   topology: Topology;
+  /** SHA-256 of the canonical, fully validated profile (see profile/fingerprint). */
+  profileFingerprint: string;
   boundAt: string;
 };
 

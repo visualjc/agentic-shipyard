@@ -1,5 +1,6 @@
 import { validatePathPolicy } from "../contracts/validate.js";
-import type { PathOwner, PathPolicy } from "../contracts/types.js";
+import type { PathOwner, PathPolicy, Profile } from "../contracts/types.js";
+import { validateProfile } from "../contracts/validate.js";
 
 export type { PathOwner, PathPolicy, PathRule } from "../contracts/types.js";
 export class PathPolicyError extends Error {
@@ -15,6 +16,10 @@ export function classifyPath(policy: PathPolicy, path: string): PathOwner {
 export function classifyPaths(policy: PathPolicy, paths: readonly string[]): Map<string, PathOwner> {
   const validated = validatePathPolicy(policy);
   return new Map(paths.map((path) => [path, classifyValidated(validated, path)]));
+}
+/** Operational callers must take authority from the validated profile, never a side policy. */
+export function classifyProfilePath(profile: Profile, path: string): PathOwner {
+  return classifyPath(validateProfile(profile).pathPolicy, path);
 }
 
 function classifyValidated(policy: PathPolicy, path: string): PathOwner {

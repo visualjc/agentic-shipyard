@@ -54,17 +54,22 @@ function date(value: unknown, path: string, code: "invalid-binding" | "invalid-l
 }
 export function validateProfile(value: unknown): Profile {
   if (!isRecord(value)) invalid("invalid-profile", "$", "must be an object");
-  exactKeys(value, ["schemaVersion", "name", "actor", "topology", "allowedOperations"], "$", "invalid-profile"); version(value, "$", "invalid-profile");
+  exactKeys(value, ["schemaVersion", "name", "actor", "topology", "allowedOperations", "pathPolicy"], "$", "invalid-profile"); version(value, "$", "invalid-profile");
   if (!isRecord(value.actor)) invalid("invalid-profile", "$.actor", "must be an object"); exactKeys(value.actor, ["login"], "$.actor", "invalid-profile");
   if (!Array.isArray(value.allowedOperations) || value.allowedOperations.length === 0) invalid("invalid-profile", "$.allowedOperations", "must be a non-empty array");
   const allowedOperations = value.allowedOperations.map((operation, index) => validateOperation(operation, `$.allowedOperations[${index}]`));
   if (new Set(allowedOperations).size !== allowedOperations.length) invalid("invalid-profile", "$.allowedOperations", "must not contain duplicates");
-  return { schemaVersion: CONTRACT_VERSION, name: nonEmpty(value.name, "$.name", "invalid-profile"), actor: { login: nonEmpty(value.actor.login, "$.actor.login", "invalid-profile") }, topology: topology(value.topology, "$.topology", "invalid-profile"), allowedOperations };
+  let pathPolicy: PathPolicy;
+  try { pathPolicy = validatePathPolicy(value.pathPolicy); }
+  catch { invalid("invalid-profile", "$.pathPolicy", "must be a valid canonical path policy"); }
+  return { schemaVersion: CONTRACT_VERSION, name: nonEmpty(value.name, "$.name", "invalid-profile"), actor: { login: nonEmpty(value.actor.login, "$.actor.login", "invalid-profile") }, topology: topology(value.topology, "$.topology", "invalid-profile"), allowedOperations, pathPolicy };
 }
 export function validateBinding(value: unknown): Binding {
   if (!isRecord(value)) invalid("invalid-binding", "$", "must be an object");
-  exactKeys(value, ["schemaVersion", "profileName", "commonDirectory", "topology", "boundAt"], "$", "invalid-binding"); version(value, "$", "invalid-binding");
-  return { schemaVersion: CONTRACT_VERSION, profileName: nonEmpty(value.profileName, "$.profileName", "invalid-binding"), commonDirectory: nonEmpty(value.commonDirectory, "$.commonDirectory", "invalid-binding"), topology: topology(value.topology, "$.topology", "invalid-binding"), boundAt: date(value.boundAt, "$.boundAt", "invalid-binding") };
+  exactKeys(value, ["schemaVersion", "profileName", "commonDirectory", "topology", "profileFingerprint", "boundAt"], "$", "invalid-binding"); version(value, "$", "invalid-binding");
+  const profileFingerprint = nonEmpty(value.profileFingerprint, "$.profileFingerprint", "invalid-binding");
+  if (!/^[a-f0-9]{64}$/.test(profileFingerprint)) invalid("invalid-binding", "$.profileFingerprint", "must be a lowercase SHA-256 digest");
+  return { schemaVersion: CONTRACT_VERSION, profileName: nonEmpty(value.profileName, "$.profileName", "invalid-binding"), commonDirectory: nonEmpty(value.commonDirectory, "$.commonDirectory", "invalid-binding"), topology: topology(value.topology, "$.topology", "invalid-binding"), profileFingerprint, boundAt: date(value.boundAt, "$.boundAt", "invalid-binding") };
 }
 export function validatePathPolicy(value: unknown): PathPolicy {
   if (!isRecord(value)) invalid("invalid-path-policy", "$", "must be an object"); exactKeys(value, ["schemaVersion", "rules"], "$", "invalid-path-policy"); version(value, "$", "invalid-path-policy");

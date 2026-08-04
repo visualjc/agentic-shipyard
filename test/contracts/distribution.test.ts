@@ -47,10 +47,15 @@ test("packed package contains runnable public API, commands, skills, and focused
     "skills/shipyard-setup/SKILL.md",
     "skills/shipyard-status/SKILL.md",
     "skills/shipyard-help/SKILL.md",
+    "skills/shipyard/agents/openai.yaml",
+    "skills/shipyard-setup/agents/openai.yaml",
+    "skills/shipyard-status/agents/openai.yaml",
+    "skills/shipyard-help/agents/openai.yaml",
     "docs/setup.md",
     "docs/status.md",
     "docs/help.md",
     "docs/metadata-ownership.md",
+    "docs/skills.md",
   ];
   for (const path of expectedContent) assert.ok(entries.has(path), `missing package content ${path}`);
   assert.equal([...entries.keys()].some((path) => path.startsWith("src/") || path.startsWith("test/") || path.startsWith("dist/test/")), false);
