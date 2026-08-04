@@ -65,6 +65,9 @@ test("packed package contains runnable public API, commands, skills, and focused
     "docs/sync-recovery.md",
     "docs/help.md",
     "docs/review.md",
+    "docs/staged-promotion.md",
+    "docs/staged-finalization.md",
+    "docs/recovery.md",
     "docs/metadata-ownership.md",
     "docs/skills.md",
   ];
@@ -75,12 +78,14 @@ test("packed package contains runnable public API, commands, skills, and focused
 
 test("public package API excludes raw REST and credentialed Git runner bypasses", async () => {
   const api = await import("../../src/index.js");
-  for (const name of ["GitHubRestAdapter", "FetchGitHubRestTransport", "createNodeGitTransportCommandRunner", "nodeGitTransportCommandRunner", "DEFAULT_NODE_GIT_EXECUTABLE", "NodeSyncGit", "ReviewDispatcher", "TrustedReviewDispatcher", "CodexReviewAdapter", "nodeEphemeralProcessRunner", "AcceptanceReviewService", "evaluatePinnedEvidenceGate", "resolvePinnedEvidenceRefs", "persistEvidence"])
+  for (const name of ["GitHubRestAdapter", "FetchGitHubRestTransport", "createNodeGitTransportCommandRunner", "nodeGitTransportCommandRunner", "DEFAULT_NODE_GIT_EXECUTABLE", "NodeSyncGit", "NodeStagedPromotionGit", "GitHubStagedProviderAuthority", "NodeFinalizationGitAuthority", "RegistryOwnedWorkspaceCleanup", "ReviewDispatcher", "TrustedReviewDispatcher", "CodexReviewAdapter", "nodeEphemeralProcessRunner", "AcceptanceReviewService", "evaluatePinnedEvidenceGate", "resolvePinnedEvidenceRefs", "persistEvidence"])
     assert.equal(name in api, false, `${name} must remain internal`);
   assert.equal("GitTransportService" in api, true);
   assert.equal("createTrustedCodexReviewOperation" in api, true);
   assert.equal("createTrustedAcceptanceGate" in api, true);
   assert.equal("createTrustedFindingResolutionWriter" in api, true);
+  assert.equal("createTrustedStagedPromotionOperation" in api, true);
+  assert.equal("createTrustedStagedFinalizationOperation" in api, true);
 });
 
 test("public type surface lets a consumer implement the workspace Git port", async () => {

@@ -28,7 +28,9 @@ function fixture(entries:readonly ReturnType<typeof entry>[],overrides:Readonly<
 test("authority-bound gate derives an arbitrary pinned manifest and rejects per-call authority forgery",async()=>{
   const configured=fixture(baseline(entry("review-request-r-1.json",request("r-1"),3),entry("review-result-r-1.json",result("r-1"),4))),alternate=fixture([]);
   assert.equal((await configured.gate.evaluate()).promotionEligible,true);
+  const receipt=await configured.gate.evaluateReceipt();assert.equal(receipt.productSha,productSha);assert.equal(receipt.ledgerSha,head);assert.equal(receipt.reviewId,"r-1");assert.equal(receipt.decision.promotionEligible,true);assert.ok(Object.isFrozen(receipt)&&Object.isFrozen(receipt.decision));
   for(const forged of [{manifest:{issueId:"6",items:[]}},{ledgerSha:"0".repeat(40)},{ledger:alternate.ledger},{priorResults:[]}])await assert.rejects((configured.gate.evaluate as any)(forged));
+  await assert.rejects((configured.gate.evaluateReceipt as any)({productSha:"0".repeat(40)}));
   assert.equal(alternate.inventoryReads(),0);
 });
 

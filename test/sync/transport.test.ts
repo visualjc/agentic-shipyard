@@ -23,4 +23,5 @@ test("actor mismatch blocks before a token-bearing child", async () => { const c
 test("transport redacts failures and publication boundary rejects refspec and payload source refs", async () => {
   const commands: GitTransportCommand[] = []; await assert.rejects(subject(commands, "actor", true).stage("/product", "main", "main"), error => error instanceof Error && !error.message.includes("github_pat_transport_secret") && error.message.includes("[REDACTED]"));
   assert.throws(() => requireSourceFreePublication({ refspecs: ["refs/heads/main:refs/shipyard/source/x"] })); assert.throws(() => requireSourceFreePublication({ refspecs: ["refs/heads/main"], payload: { ref: "refs/shipyard/source/x" } })); assert.doesNotThrow(() => requireSourceFreePublication({ refspecs: ["refs/heads/main:refs/heads/main"], payload: { ref: "refs/heads/main" } }));
+  assert.doesNotThrow(() => requireSourceFreePublication({ refspecs: [":refs/heads/shipyard/delivery"] })); assert.throws(() => requireSourceFreePublication({ refspecs: [":refs/heads/shipyard-ledger"] }));
 });

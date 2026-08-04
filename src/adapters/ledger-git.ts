@@ -152,8 +152,10 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader, LedgerIn
     const separator = normalized.indexOf(":");
     const source = separator < 0 ? normalized : normalized.slice(0, separator);
     const destination = separator < 0 ? source : normalized.slice(separator + 1);
-    if (!source || !destination) return false;
-    return !protectedRefspecPattern(source, this.ref) && !protectedRefspecPattern(destination, this.ref);
+    if (!destination) return false;
+    // An empty source is Git's ordinary deletion form. The destination still
+    // has to be a product ref; protected ledger/internal refs remain denied.
+    return (source === "" || !protectedRefspecPattern(source, this.ref)) && !protectedRefspecPattern(destination, this.ref);
   }
 
   /**

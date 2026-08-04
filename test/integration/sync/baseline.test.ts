@@ -29,6 +29,25 @@ for (const format of ["sha1", "sha256"]) test(`concrete adapter fast-forwards an
   try { const adapter = new NodeSyncGit(); const before = await adapter.observe(f.repo, "upstream", "main", "main"); assert.equal(before.ancestry, "behind"); await adapter.fastForward(f.repo, before.destinationSha, mutationProof(before)); const after = await adapter.observe(f.repo, "upstream", "main", "main"); assert.equal(after.ancestry, "equal"); assert.equal(after.developmentSha, before.destinationSha); assert.equal(after.clean, true); assert.equal(await (await import("node:fs/promises")).readFile(join(f.repo, "app.ts"), "utf8"), "two\n"); } finally { await rm(f.root, { recursive: true, force: true }); }
 });
 
+test("finalization-owned under-lock seam advances only an exact clean checked-out main", async () => {
+  const f = await fixture();
+  try {
+    const adapter = new NodeSyncGit(); const before = await adapter.observe(f.repo, "upstream", "main", "main");
+    await adapter.fastForwardMainUnderLock(f.repo, { developmentBranch: "main", expectedDevelopmentSha: before.developmentSha, targetDestinationSha: before.destinationSha, objectFormat: before.objectFormat });
+    assert.equal(await command(f.repo, ["rev-parse", "main"]), before.destinationSha); assert.equal(await command(f.repo, ["status", "--porcelain"]), "");
+    await adapter.fastForwardMainUnderLock(f.repo, { developmentBranch: "main", expectedDevelopmentSha: before.developmentSha, targetDestinationSha: before.destinationSha, objectFormat: before.objectFormat });
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
+test("finalization-owned under-lock seam refuses dirty main without moving its ref", async () => {
+  const f = await fixture();
+  try {
+    const adapter = new NodeSyncGit(); const before = await adapter.observe(f.repo, "upstream", "main", "main"); await writeFile(join(f.repo, "dirty.txt"), "user work\n");
+    await assert.rejects(adapter.fastForwardMainUnderLock(f.repo, { developmentBranch: "main", expectedDevelopmentSha: before.developmentSha, targetDestinationSha: before.destinationSha, objectFormat: before.objectFormat }), /proof changed/i);
+    assert.equal(await command(f.repo, ["rev-parse", "main"]), before.developmentSha);
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
 test("concrete adapter imports an exact staged source without moving main", async () => {
   const f = await fixture();
   try {

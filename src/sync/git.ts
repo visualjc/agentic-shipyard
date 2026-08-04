@@ -23,6 +23,12 @@ export type SyncMutationProof = Readonly<{
   objectFormat: GitObjectFormat;
 }>;
 
+/** Owner-compatible #5 seam used only while a caller already holds the shared repository mutation lock. */
+export type UnderLockMainFastForwardProof = Readonly<{
+  developmentBranch:string;expectedDevelopmentSha:string;targetDestinationSha:string;objectFormat:GitObjectFormat;
+}>;
+export interface UnderLockMainSyncGit { fastForwardMainUnderLock(repositoryPath:string,proof:UnderLockMainFastForwardProof):Promise<void>; }
+
 /** Narrow mutable Git seam. Implementations must never rebase, reset, merge, or push. */
 export interface SyncGit {
   observe(repositoryPath: string, destinationRemote: string, developmentBranch: string, destinationBranch: string): Promise<BaselineObservation>;

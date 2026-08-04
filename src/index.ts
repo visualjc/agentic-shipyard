@@ -81,7 +81,7 @@ export { createTrustedCodexReviewOperation } from "./review/factory.js";
 export type { TrustedCodexReviewConfig, TrustedCodexReviewOperation, TrustedCodexReviewOperationDependencies } from "./review/factory.js";
 export { ReviewError } from "./review/errors.js";
 export { createTrustedAcceptanceGate } from "./acceptance/gate.js";
-export type { EvidenceClock, TrustedAcceptanceGate, TrustedAcceptanceGateDependencies } from "./acceptance/gate.js";
+export type { EvidenceClock, TrustedAcceptanceGate, TrustedAcceptanceGateDependencies, TrustedAcceptanceReceipt } from "./acceptance/gate.js";
 export { createTrustedFindingResolutionWriter } from "./acceptance/resolution.js";
 export type { FindingResolutionInput, TrustedFindingResolutionDependencies, TrustedFindingResolutionWriter } from "./acceptance/resolution.js";
 export { evidencePath } from "./acceptance/ledger.js";
@@ -106,10 +106,31 @@ export type { GitTransportCredential, GitTransportResult } from "./github/git-tr
 // Narrow baseline synchronization and read-only source-import contracts.
 export { SyncError, SyncService, canonicalSourceRef } from "./sync/service.js";
 export type { SyncErrorCode } from "./sync/errors.js";
-export type { BaselineObservation, SyncGit, SyncMutationProof } from "./sync/git.js";
+export type { BaselineObservation, SyncGit, SyncMutationProof, UnderLockMainFastForwardProof, UnderLockMainSyncGit } from "./sync/git.js";
 export type { SourceProvenance, SyncOutcome, SyncRequest } from "./sync/types.js";
 export { syncStatusContributor } from "./sync/status.js";
 export type { SyncStatus, SyncStatusReader, SyncStatusReadRequest } from "./sync/status.js";
 export { DestinationSyncTransport, assertNoSourcePublication, requireSourceFreePublication } from "./sync/transport.js";
 export type { GitTransportCredentialResolver, PublicationRequest, StagedDestination, SyncDestinationTransport, VerifiedGitTransportCredential } from "./sync/transport.js";
 export { validateSourceProvenance } from "./sync/provenance.js";
+
+// Trusted staged-pair promotion and human-merge finalization.
+export { PromotionError } from "./promotion/errors.js";
+export { createPayloadPlan, isProhibitedDestinationPath, projectedEntries } from "./promotion/payload.js";
+export { appendJournalEntry, promotionJournalContents, promotionManifestContents, validatePromotionJournal, validatePromotionManifest } from "./promotion/schema.js";
+export { PromotionLedger, promotionJournalPath, promotionManifestDigest, promotionManifestPath } from "./promotion/manifest.js";
+export { destinationDossier, destinationMarker } from "./promotion/provider.js";
+export { createTrustedStagedPromotionOperation } from "./promotion/service.js";
+export type { TrustedStagedPromotionDependencies, TrustedStagedPromotionOperation } from "./promotion/service.js";
+export type { StagedPromotionGit, StagedPromotionObservation, StagedPromotionSession, StagedPublicationReceipt } from "./promotion/git.js";
+export type { DevelopmentRecordObservation, StagedProviderAuthority, StagedProviderSession } from "./promotion/provider.js";
+export type { ClassifiedTreeEntry, DestinationPullRequest, GitTreeEntry, GitTreeMode, PayloadPlan, PromotionEvidencePin, PromotionJournal, PromotionJournalEntry, PromotionJournalStep, PromotionManifest, PromotionMapping, PromotionStatus } from "./promotion/types.js";
+export { FinalizationError } from "./finalization/errors.js";
+export { FinalizationLedger, finalizationIntentPath, finalizationReceiptPath } from "./finalization/ledger.js";
+export type { FinalizationLedgerStore } from "./finalization/ledger.js";
+export { verifyDestinationMerge } from "./finalization/merge-policy.js";
+export { finalizationIntentContents, finalizationReceiptContents, validateFinalizationIntent, validateFinalizationReceipt } from "./finalization/schema.js";
+export { createTrustedStagedFinalizationOperation } from "./finalization/service.js";
+export type { DestinationMergePolicyResolver, TrustedStagedFinalizationDependencies, TrustedStagedFinalizationOperation } from "./finalization/service.js";
+export type { FinalizationGitAuthority, FinalizationGitSession, OwnedWorkspaceCleanup } from "./finalization/git.js";
+export type { DestinationMergePolicy, FinalizationIntent, FinalizationReceipt, FinalizationStatus, MergeObservation } from "./finalization/types.js";

@@ -2,7 +2,7 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { canonicalGitExecutable, DEFAULT_NODE_GIT_EXECUTABLE, sanitizedGitEnvironment } from "./git-transport.js";
 import { redactGitTransportDiagnostic } from "../github/git-transport.js";
-import type { BaselineObservation, SyncGit, SyncMutationProof } from "../sync/git.js";
+import type { BaselineObservation, SyncGit, SyncMutationProof, UnderLockMainFastForwardProof, UnderLockMainSyncGit } from "../sync/git.js";
 
 const exec = promisify(execFile);
 export type NodeSyncGitOptions = Readonly<{
@@ -15,7 +15,7 @@ export type NodeSyncGitOptions = Readonly<{
 type TransactionLimits = Readonly<{ transactionTimeoutMs: number; transactionMaxOutputBytes: number; transactionSpawner?: typeof spawn }>;
 
 /** Local Git mutation adapter. It has no push/rebase/reset or merge-commit capability. */
-export class NodeSyncGit implements SyncGit {
+export class NodeSyncGit implements SyncGit, UnderLockMainSyncGit {
   private readonly executable: string;
   private readonly transaction: TransactionLimits;
   private readonly command: Readonly<{ timeoutMs: number; maxOutputBytes: number }>;
@@ -78,6 +78,7 @@ export class NodeSyncGit implements SyncGit {
       throw error;
     }
   }
+  async fastForwardMainUnderLock(repo:string,proof:UnderLockMainFastForwardProof):Promise<void>{const ref=`refs/heads/${proof.developmentBranch}`,[dirty,branch,current,format]=await Promise.all([this.required(repo,["status","--porcelain"]),this.required(repo,["symbolic-ref","--short","HEAD"]),this.required(repo,["rev-parse",ref]),this.required(repo,["rev-parse","--show-object-format"])]);if(current===proof.targetDestinationSha){if(dirty!==""||branch!==proof.developmentBranch||format!==proof.objectFormat)throw new Error("Finalization main already advanced but its checked-out worktree proof is unsafe.");return;}if(dirty!==""||branch!==proof.developmentBranch||current!==proof.expectedDevelopmentSha||format!==proof.objectFormat||!await this.ancestor(repo,current,proof.targetDestinationSha))throw new Error("Under-lock main fast-forward proof changed; no mutation was permitted.");let treeApplied=false;try{await this.required(repo,["read-tree","-u","-m",current,proof.targetDestinationSha]);treeApplied=true;await this.required(repo,["update-ref",ref,proof.targetDestinationSha,current]);const [after,afterDirty]=await Promise.all([this.required(repo,["rev-parse",ref]),this.required(repo,["status","--porcelain"])]);if(after!==proof.targetDestinationSha||afterDirty!=="")throw new Error("Under-lock main fast-forward verification failed.");}catch(error){const now=await this.optional(repo,ref);if(now===current&&treeApplied)await this.required(repo,["read-tree","-u","-m",proof.targetDestinationSha,current]);throw error;}}
   async importStaged(repo: string, staged: string, stagedRef: string, localRef: string, expectedSha: string, proof: SyncMutationProof): Promise<string> {
     const sourcePrefix = `refs/shipyard/source/${proof.destinationRemote}/`;
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(proof.destinationRemote) || stagedRef !== "refs/shipyard/staged-source" || !localRef.startsWith(sourcePrefix) || !/^[a-f0-9]{64}$/.test(localRef.slice(sourcePrefix.length))) throw new Error("Staged source import refs are not canonical; no mutation was permitted.");
