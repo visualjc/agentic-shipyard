@@ -7,6 +7,7 @@ export class MemoryFilesystem implements FilesystemAdapter {
   readonly files = new Map<string, string>();
   readonly directories = new Set<string>();
   onRead?: (path: string, contents: string | undefined) => Promise<void>;
+  onRemove?: (path: string) => Promise<void>;
   async readText(path: string): Promise<string | undefined> {
     const contents = this.files.get(path);
     const hook = this.onRead;
@@ -20,7 +21,11 @@ export class MemoryFilesystem implements FilesystemAdapter {
     this.files.set(path, contents);
     return true;
   }
-  async remove(path: string): Promise<void> { this.files.delete(path); }
+  async remove(path: string): Promise<void> {
+    this.files.delete(path);
+    const hook = this.onRemove;
+    if (hook) await hook(path);
+  }
   async removeEmptyDirectory(path: string): Promise<boolean> {
     if (!this.directories.has(path)) return false;
     if ([...this.files.keys()].some((file) => file.startsWith(`${path}/`))) return false;
@@ -31,7 +36,13 @@ export class MemoryFilesystem implements FilesystemAdapter {
     if (this.directories.has(path)) return { acquired: false } as const;
     this.directories.add(path);
     try { return { acquired: true, value: await operation() } as const; }
-    finally { this.directories.delete(path); }
+    finally {
+      if (!this.directories.delete(path)) {
+        const error = new Error(`ENOENT: ${path}`) as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        throw error;
+      }
+    }
   }
 }
 

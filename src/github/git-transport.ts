@@ -1,4 +1,6 @@
 import { DEFAULT_NODE_GIT_EXECUTABLE, GitTransportCommand, GitTransportCommandRunner, GitTransportCommandResult, nodeGitTransportCommandRunner } from "../adapters/git-transport.js";
+import type { BoundProfileAuthorityResolver } from "../profile/bound-authority.js";
+import type { GitAdapter } from "../adapters/git.js";
 
 /** Separate from API credentials: this value may be used only in one Git child environment. */
 export type GitTransportCredential = { readonly token: string };
@@ -26,7 +28,7 @@ export function redactGitTransportDiagnostic(diagnostic: string, secretValues: r
     .replace(/(https?:\/\/)[^\s/@]+(?::[^\s/@]*)?@/gi, "$1[REDACTED]@");
 }
 
-function commandFor(repositoryPath: string, args: readonly string[], credential: GitTransportCredential): GitTransportCommand {
+function commandFor(repositoryPath: string, args: readonly string[], credential: GitTransportCredential, expectedUrl: string): GitTransportCommand {
   if (!repositoryPath.trim()) throw new GitTransportError("Git transport requires a repository path.");
   if (!credential.token.trim()) throw new GitTransportError("Git transport credential is unavailable.");
   if (args.some((arg) => arg.includes(credential.token) || /https?:\/\/[^/\s]*@/i.test(arg))) {
@@ -49,7 +51,7 @@ function commandFor(repositoryPath: string, args: readonly string[], credential:
       GIT_CONFIG_VALUE_1: `AUTHORIZATION: bearer ${credential.token}`,
       GIT_TERMINAL_PROMPT: "0",
     },
-    isolatedRemote: { repositoryPath, remote: args[1]! },
+    isolatedRemote: { repositoryPath, remote: args[1]!, expectedUrl },
   };
 }
 
@@ -78,10 +80,19 @@ function safeRef(value: string): boolean {
 
 /** Executes an authenticated Git command without changing the active gh identity. */
 export class GitTransportService {
-  constructor(private readonly runner: GitTransportCommandRunner = nodeGitTransportCommandRunner) {}
+  constructor(private readonly authority: BoundProfileAuthorityResolver, private readonly git: GitAdapter, private readonly runner: GitTransportCommandRunner = nodeGitTransportCommandRunner) {}
 
-  async run(repositoryPath: string, args: readonly string[], credential: GitTransportCredential): Promise<GitTransportResult> {
-    const result = await this.runner.run(commandFor(repositoryPath, args, credential));
+  /** The only public authenticated operation; remote/URL come from active authority. */
+  async run(repositoryPath: string, operation: "fetch" | "ls-remote", ref: string | undefined, credential: GitTransportCredential): Promise<GitTransportResult> {
+    const bound = await this.authority.resolve(repositoryPath, "sync");
+    const repository = bound.topology.kind === "staged-pair" ? bound.topology.development : bound.topology.repository;
+    const actual = await this.git.remoteUrl(repositoryPath, repository.remote.name);
+    if (actual !== repository.remote.url || !exactGitHubUrl(actual, repository.owner, repository.name)) throw new GitTransportError("Authenticated Git remote no longer matches the active bound development repository.");
+    return this.execute(repositoryPath, ref === undefined ? [operation, repository.remote.name] : [operation, repository.remote.name, ref], credential, repository.remote.url);
+  }
+
+  private async execute(repositoryPath: string, args: readonly string[], credential: GitTransportCredential, expectedUrl: string): Promise<GitTransportResult> {
+    const result = await this.runner.run(commandFor(repositoryPath, args, credential, expectedUrl));
     const stdout = redactGitTransportDiagnostic(result.stdout, [credential.token]);
     const stderr = redactGitTransportDiagnostic(result.stderr, [credential.token]);
     if (result.exitCode !== 0) {
@@ -90,4 +101,6 @@ export class GitTransportService {
     }
     return { stdout, stderr };
   }
+
 }
+function exactGitHubUrl(value: string | undefined, owner: string, name: string): boolean { return value === `https://github.com/${owner}/${name}.git` || value === `https://github.com/${owner}/${name}`; }

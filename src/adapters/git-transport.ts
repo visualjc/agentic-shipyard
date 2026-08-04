@@ -36,7 +36,7 @@ export type GitTransportCommand = {
   /** Values exist only for this child process; callers must not persist or log them. */
   env: Readonly<Record<string, string>>;
   /** A named remote resolved into a temporary, config-isolated Git directory. */
-  isolatedRemote?: Readonly<{ repositoryPath: string; remote: string }>;
+  isolatedRemote?: Readonly<{ repositoryPath: string; remote: string; expectedUrl: string }>;
 };
 
 export type GitTransportCommandResult = {
@@ -84,11 +84,13 @@ export function createNodeGitTransportCommandRunner(executable = DEFAULT_NODE_GI
  * exactly that remote. This prevents repository config from supplying helper,
  * proxy, extra-header, or url.*.insteadOf behavior to the authenticated child.
  */
-async function isolatedRemoteGitDirectory(executable: string, remote: Readonly<{ repositoryPath: string; remote: string }>): Promise<string> {
+async function isolatedRemoteGitDirectory(executable: string, remote: Readonly<{ repositoryPath: string; remote: string; expectedUrl: string }>): Promise<string> {
   const { stdout } = await execFileAsync(executable, ["-C", remote.repositoryPath, "config", "--local", "--no-includes", "--get", `remote.${remote.remote}.url`], {
     encoding: "utf8", env: sanitizedGitEnvironment(),
   });
-  const url = trustedGitHubRemoteUrl(stdout.trim());
+  const rawUrl = stdout.trim();
+  if (rawUrl !== remote.expectedUrl) throw new Error("Authenticated Git remote changed after authority validation.");
+  const url = trustedGitHubRemoteUrl(remote.expectedUrl);
   const directory = await mkdtemp(join(tmpdir(), "shipyard-git-remote-"));
   try {
     await writeFile(join(directory, "config"), `[core]\n\tbare = true\n[remote \"${remote.remote}\"]\n\turl = ${url}\n`, { encoding: "utf8", mode: 0o600 });

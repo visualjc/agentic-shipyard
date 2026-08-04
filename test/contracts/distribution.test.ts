@@ -64,6 +64,13 @@ test("packed package contains runnable public API, commands, skills, and focused
   assert.equal([...entries.keys()].some((path) => path.startsWith(".agents/")), false, "npm must not claim to ship source-checkout symlinks");
 });
 
+test("public package API excludes raw REST and credentialed Git runner bypasses", async () => {
+  const api = await import("../../src/index.js");
+  for (const name of ["GitHubRestAdapter", "FetchGitHubRestTransport", "createNodeGitTransportCommandRunner", "nodeGitTransportCommandRunner", "DEFAULT_NODE_GIT_EXECUTABLE"])
+    assert.equal(name in api, false, `${name} must remain internal`);
+  assert.equal("GitTransportService" in api, true);
+});
+
 test("packaged skill installer creates only exact canonical discovery symlinks", async () => {
   const sandbox = await mkdtemp(join(tmpdir(), "shipyard-pack-"));
   try {

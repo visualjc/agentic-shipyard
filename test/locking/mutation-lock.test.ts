@@ -145,3 +145,54 @@ test("two recoverers cannot remove a replacement lifecycle owner", async () => {
   assert.equal(JSON.parse(fs.files.get("/locks/repo")!).operation, "winner");
   await winner.release();
 });
+
+test("transition mutex blocks concurrent lifecycle recovery without a filesystem race", async () => {
+  const fs = new MemoryFilesystem(); const process = new FakeProcess();
+  fs.directories.add("/locks/repo.lifecycle");
+  fs.files.set("/locks/repo.lifecycle/owner.json", JSON.stringify({ version: 1, host: "test-host", processId: 22, token: "dead", acquiredAt: "2026-08-03T00:00:00.000Z" }));
+  let contenderBlocked = false;
+  fs.onRead = async (path) => {
+    if (path === "/locks/repo.lifecycle/owner.json") {
+      await assert.rejects(new MutationLockService(fs, process).acquire("/locks/repo", "/git/repo", "contender"), (error: unknown) => error instanceof MutationLockError && error.code === "lock-held");
+      assert.ok(fs.files.has("/locks/repo.transition"), "the transition record must serialize lifecycle recovery");
+      contenderBlocked = true;
+    }
+  };
+  const winner = await new MutationLockService(fs, process).acquire("/locks/repo", "/git/repo", "winner");
+  assert.equal(contenderBlocked, true);
+  await winner.release();
+});
+
+test("a stale lifecycle finalizer cannot race recovery and replacement", async () => {
+  const fs = new MemoryFilesystem(); const process = new FakeProcess();
+  const service = new MutationLockService(fs, process, 1_000);
+  const held = await service.acquire("/locks/repo", "/git/repo", "old");
+  let blocked = false;
+  fs.onRemove = async path => {
+    if (path !== "/locks/repo.lifecycle/owner.json") return;
+    fs.onRemove = undefined;
+    // This is the old finalizer's vulnerable interval: the owner is gone but
+    // its directory-finalizer has not run. A recoverer must not delete that
+    // directory and publish a replacement under it.
+    await assert.rejects(
+      new MutationLockService(fs, process).acquire("/locks/repo", "/git/repo", "replacement"),
+      (error: unknown) => error instanceof MutationLockError && error.code === "lock-held",
+    );
+    blocked = true;
+  };
+  await held.release();
+  assert.equal(blocked, true);
+  const replacement = await service.acquire("/locks/repo", "/git/repo", "replacement");
+  assert.equal(JSON.parse(fs.files.get("/locks/repo")!).operation, "replacement");
+  await replacement.release();
+});
+
+test("never auto-recovers a crashed transition record", async () => {
+  const fs = new MemoryFilesystem(); const process = new FakeProcess();
+  fs.files.set("/locks/repo.transition", JSON.stringify({ version: 1, host: "test-host", processId: 22, token: "crashed", acquiredAt: "2026-08-03T00:00:00.000Z" }));
+  await assert.rejects(
+    new MutationLockService(fs, process).acquire("/locks/repo", "/git/repo", "sync"),
+    (error: unknown) => error instanceof MutationLockError && error.code === "lock-unsafe-recovery",
+  );
+  assert.ok(fs.files.has("/locks/repo.transition"));
+});

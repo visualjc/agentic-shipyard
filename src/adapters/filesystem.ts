@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 export type ExclusiveDirectoryResult<T> =
@@ -39,12 +39,20 @@ export const nodeFilesystem: FilesystemAdapter = {
   },
   async createTextExclusive(path, contents) {
     await mkdir(dirname(path), { recursive: true });
+    // `open(..., "wx")` publishes an empty file before its contents are
+    // written. A competing process can then parse a partial transition owner.
+    // Linking a fully written sibling is atomic and still gives O_EXCL-like
+    // refusal when the destination already exists.
+    const temporary = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
     try {
-      await writeFile(path, contents, { encoding: "utf8", mode: 0o600, flag: "wx" });
+      await writeFile(temporary, contents, { encoding: "utf8", mode: 0o600, flag: "wx" });
+      await link(temporary, path);
       return true;
     } catch (error: unknown) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
       throw error;
+    } finally {
+      await rm(temporary, { force: true });
     }
   },
   async remove(path) {

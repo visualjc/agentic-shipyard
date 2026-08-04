@@ -10,14 +10,16 @@ class FailingRunner implements GitTransportCommandRunner {
     return { exitCode: 128, stdout: "remote https://x-access-token:github_pat_example_secret@github.com/acme/private.git", stderr: "Authorization: bearer github_pat_example_secret" };
   }
 }
+const topology = { kind: "single-repository" as const, repository: { owner: "acme", name: "repository", remote: { name: "origin", url: "https://github.com/acme/repository.git" }, defaultBranch: "main" } };
+function transport(runner: GitTransportCommandRunner) { return new GitTransportService({ resolve: async () => ({ profileName: "p", commonDirectory: "/workspace/.git", profileFingerprint: "0".repeat(64), actorLogin: "actor", topology }) }, { remoteUrl: async () => topology.repository.remote.url, commonDirectory: async () => "/workspace/.git" }, runner); }
 
 test("failed authenticated Git diagnostics redact credential values from output and errors", async () => {
   const runner = new FailingRunner();
   const token = "github_pat_example_secret";
-  const transport = new GitTransportService(runner);
+  const service = transport(runner);
 
   await assert.rejects(
-    transport.run("/workspace/repository", ["fetch", "origin"], { token }),
+    service.run("/workspace/repository", "fetch", undefined, { token }),
     (error: unknown) => error instanceof GitTransportError
       && !error.message.includes(token)
       && !error.message.includes("x-access-token:")
@@ -40,7 +42,7 @@ test("successful command output is also safe for callers to display", async () =
   const runner: GitTransportCommandRunner = {
     async run() { return { exitCode: 0, stdout: `Authorization: bearer ${token}`, stderr: "" }; },
   };
-  const result = await new GitTransportService(runner).run("/workspace/repository", ["fetch", "origin"], { token });
+  const result = await transport(runner).run("/workspace/repository", "fetch", undefined, { token });
   assert.equal(result.stdout.includes(token), false);
   assert.match(result.stdout, /\[REDACTED\]/);
 });

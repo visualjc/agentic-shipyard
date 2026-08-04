@@ -25,6 +25,12 @@ second process cannot race discovery and creation. If profile, fingerprint,
 topology, workspace, or head changed while waiting to resume, Shipyard stops
 before the first provider request; do not recover by substituting caller input.
 
+Authenticated Git sync uses the active bound development repository only. It
+derives the configured remote name and exact URL from the live profile/binding,
+then rechecks the raw local remote immediately before launching Git. A changed,
+destination, normalized, or caller-selected alternate remote blocks before a
+credentialed child process starts.
+
 ## Private disposable tracker fixture
 
 The executable private fixture is skipped unless

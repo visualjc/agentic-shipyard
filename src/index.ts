@@ -67,5 +67,3 @@ export { githubTrackerStatusContributor } from "./github/status.js";
 export type { GitHubTrackerStatus } from "./github/status.js";
 export { GitTransportError, GitTransportService, redactGitTransportDiagnostic } from "./github/git-transport.js";
 export type { GitTransportCredential, GitTransportResult } from "./github/git-transport.js";
-export { createNodeGitTransportCommandRunner, DEFAULT_NODE_GIT_EXECUTABLE, nodeGitTransportCommandRunner } from "./adapters/git-transport.js";
-export type { GitTransportCommand, GitTransportCommandResult, GitTransportCommandRunner } from "./adapters/git-transport.js";

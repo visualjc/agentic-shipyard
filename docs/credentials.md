@@ -52,11 +52,13 @@ error instead of forwarding resolver diagnostics. HTTP, transport, client
 factory, and actor-verification failures redact the exact resolved credential
 value, including values that do not look like conventional GitHub tokens.
 
-## Private synthetic fixture
+## Private disposable tracker fixture
 
 The private GitHub fixture is opt-in and must use an approved disposable
 development repository and a least-privileged test credential supplied by the
-operator's credential store. It is not part of the deterministic test suite.
+operator's credential store. It exercises the real tracker: creates a marked
+development issue and PR, confirms a second call discovers the same IDs, then
+closes both in cleanup. It is not part of the deterministic test suite.
 It has no `NativeInteractive` configuration path and must not make a real
 GitHub call unless an operator explicitly performs the approved fixture run.
 Before and after a fixture run, an operator may inspect `gh auth status`; the
@@ -66,10 +68,11 @@ fixture evidence.
 
 The executable fixture harness is enabled only with
 `SHIPYARD_PRIVATE_GITHUB_FIXTURE=1` plus an explicit disposable
-`SHIPYARD_PRIVATE_GITHUB_REPOSITORY=owner/name`,
-`SHIPYARD_PRIVATE_GITHUB_TOKEN`, and `SHIPYARD_PRIVATE_GITHUB_ACTOR`. It uses
-the production REST transport to verify `/user`, creates one UUID-marked issue
-in that exact repository, validates its ID/URL, and closes it in `finally`.
-It is skipped by the normal test command, makes zero default-suite network
-calls, never invokes `gh`, and refuses any repository value containing a
-credential or URL.
+repository that exactly matches `SHIPYARD_PRIVATE_GITHUB_REPOSITORY` and
+`SHIPYARD_PRIVATE_GITHUB_APPROVED_REPOSITORY`, the documented mutation
+acknowledgement, token, expected actor, existing head/base refs, and exact
+40-hex head SHA. It uses the production REST transport and guarded tracker to
+verify `/user`, create the marked issue/PR pair, and prove idempotent discovery
+before cleanup. It is skipped by the normal test command, makes zero
+default-suite network calls, never invokes `gh`, and refuses NativeInteractive
+or any repository value containing a credential or URL.

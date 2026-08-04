@@ -52,4 +52,9 @@ outside Shipyard. Setup takes the common-directory mutation lock and then the
 single Shipyard-home binding-store mutation lock for every read-modify-write.
 A live lock blocks another writer;
 stale recovery uses the lock's host/process ownership rules and fails closed
-when ownership cannot be proven. See [metadata ownership](metadata-ownership.md).
+if ownership cannot be proven. Lifecycle creation, release, and recovery use a
+short sibling transition record so finalization cannot remove a replacement.
+That transition record is never auto-recovered: a crashed transition requires
+manual inspection before removal, while ordinary stale primary/lifecycle locks
+remain recoverable only after same-host process validation. See
+[metadata ownership](metadata-ownership.md).
