@@ -116,7 +116,13 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader, ObjectFo
       const commit = await this.gitInput(commitArgs, transaction.message ?? "shipyard ledger checkpoint");
       await this.assertIsolatedHistory(commit, current.head);
       await this.updateRefCas(commit, current.head);
-      await this.assertIsolatedHistory(commit, commit);
+      try { await this.assertIsolatedHistory(commit, commit); }
+      catch (error) {
+        try { await this.restoreRefCas(commit, current.head); }
+        catch (recoveryError) { throw new LedgerError("ledger-unavailable", `Ledger isolation recovery could not be proven; manual ref repair is required. Original failure: ${safeLedgerError(error)} Recovery failure: ${safeLedgerError(recoveryError)}`); }
+        if (await this.optionalRef(GitLedgerStore.ref) !== current.head) throw new LedgerError("ledger-unavailable", `Ledger isolation recovery could not be proven; manual ref repair is required. Original failure: ${safeLedgerError(error)}`);
+        throw error;
+      }
       return commit;
     } finally { await rm(indexDirectory, { recursive: true, force: true }); }
   }
@@ -170,6 +176,11 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader, ObjectFo
     if (result.code === 0) return;
     if (staleRefUpdate(result.stderr)) throw new LedgerError("ledger-stale-head", "The ledger advanced; re-read its head before retrying.");
     throw unavailable(result.stderr);
+  }
+
+  private async restoreRefCas(candidate: string, previous: string | undefined): Promise<void> {
+    const result = await this.run(previous === undefined ? ["update-ref", "-d", GitLedgerStore.ref, candidate] : ["update-ref", GitLedgerStore.ref, previous, candidate]);
+    if (result.code !== 0) throw unavailable(result.stderr);
   }
 
   private async isAncestor(commit: string, head: string): Promise<boolean> {
@@ -311,6 +322,7 @@ function boundedLedgerFailure(error: unknown): LedgerError {
     : failure.killed || failure.signal ? "Git ledger operation timed out and was killed." : "Git ledger operation could not be started.";
   return new LedgerError("ledger-unavailable", message);
 }
+function safeLedgerError(error: unknown): string { return error instanceof LedgerError ? `${error.code}: ${boundedDiagnostic(error.message)}` : "unknown ledger failure"; }
 function missingTreePath(stderr: string): boolean {
   return /path ['”]?.+['”]? does not exist in|exists on disk, but not in|not a valid object name/i.test(stderr);
 }

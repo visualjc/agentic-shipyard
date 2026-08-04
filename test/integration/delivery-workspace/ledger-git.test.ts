@@ -113,6 +113,18 @@ test("rechecks isolation against local, remote-tracking, and tag product refs on
   } finally { await rm(path, { recursive: true, force: true }); }
 });
 
+test("a product ref race after ledger CAS rejects and restores the prior ledger head", async () => {
+  const path = await repository(); const wrapper = join(path, "git-ledger-isolation-race"); const marker = join(path, "race-fired");
+  try {
+    const first = await new GitLedgerStore(path).transact({ expectedHead: undefined, writes: [{ path: "records/first", contents: "first" }] });
+    await writeFile(wrapper, `#!/bin/sh\ncase "$*" in *"update-ref ${GitLedgerStore.ref}"*) /usr/bin/git "$@"; result=$?; if [ $result -eq 0 ] && [ ! -f '${marker}' ]; then touch '${marker}'; /usr/bin/git -C '${path}' update-ref refs/heads/raced-ledger "$5"; fi; exit $result;; esac\nexec /usr/bin/git "$@"\n`); await chmod(wrapper, 0o700);
+    const raced = new GitLedgerStore(path, { gitExecutable: wrapper });
+    await assert.rejects(raced.transact({ expectedHead: first, writes: [{ path: "records/second", contents: "second" }] }), (error: unknown) => error instanceof LedgerError && error.code === "ledger-invalid-record");
+    assert.equal(await git(path, ["rev-parse", GitLedgerStore.ref]), first);
+    assert.notEqual(await git(path, ["rev-parse", "refs/heads/raced-ledger"]), first, "the product race is preserved for explicit repair");
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
 test("uses the repository object format for null-OID CAS and isolation", async (context) => {
   const path = await mkdtemp(join(tmpdir(), "shipyard-ledger-sha256-"));
   try {

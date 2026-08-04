@@ -4,7 +4,7 @@ import { RepositoryIdentityError } from "../commands/setup.js";
 import { ProfileStoreError } from "./profile-store.js";
 import { SyncError } from "../sync/errors.js";
 
-export function setupGuidance(error: unknown): string {
+export function commandGuidance(error: unknown, command: string): string {
   if (error instanceof SyncError) return error.message;
   if (error instanceof BindingError) {
     switch (error.code) {
@@ -30,12 +30,17 @@ export function setupGuidance(error: unknown): string {
     }
   }
   if (error instanceof MutationLockError) {
+    const retry = command === "sync" ? "shipyard-sync" : "shipyard-setup";
+    const operation = command === "sync" ? "Sync" : "Setup";
     switch (error.code) {
-      case "lock-held": return "Setup is blocked by another repository mutation. Wait for that owner to finish, then rerun shipyard-status before retrying shipyard-setup.";
-      case "lock-invalid": return "The repository mutation lock is malformed or names another identity. Inspect it manually; Shipyard will not remove it automatically.";
-      case "lock-unsafe-recovery": return "The repository mutation lock requires manual recovery. Verify that its recorded owner is no longer active in every checkout or container sharing this path, remove only that record, then rerun shipyard-setup.";
+      case "lock-held": return `${operation} is blocked by another repository mutation. Wait for that owner to finish, then rerun shipyard-status before retrying ${retry}.`;
+      case "lock-invalid": return `The repository mutation lock is malformed or names another identity. Inspect it manually; Shipyard will not remove it automatically. Rerun shipyard-status before retrying ${retry}.`;
+      case "lock-unsafe-recovery": return `The repository mutation lock requires manual recovery. Verify that its recorded owner is no longer active in every checkout or container sharing this path, remove only that record, then rerun shipyard-status before retrying ${retry}.`;
     }
   }
   if (error instanceof RepositoryIdentityError) return "Repository identity could not be established. Run shipyard-setup from an existing Git repository and verify its common directory.";
   return error instanceof Error ? error.message : "Shipyard could not safely resolve this command.";
 }
+
+/** Backward-compatible setup-scoped mapper for source consumers. */
+export function setupGuidance(error: unknown): string { return commandGuidance(error, "setup"); }

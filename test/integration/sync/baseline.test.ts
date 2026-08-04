@@ -29,14 +29,32 @@ for (const format of ["sha1", "sha256"]) test(`concrete adapter fast-forwards an
   try { const adapter = new NodeSyncGit(); const before = await adapter.observe(f.repo, "upstream", "main", "main"); assert.equal(before.ancestry, "behind"); await adapter.fastForward(f.repo, before.destinationSha, mutationProof(before)); const after = await adapter.observe(f.repo, "upstream", "main", "main"); assert.equal(after.ancestry, "equal"); assert.equal(after.developmentSha, before.destinationSha); assert.equal(after.clean, true); assert.equal(await (await import("node:fs/promises")).readFile(join(f.repo, "app.ts"), "utf8"), "two\n"); } finally { await rm(f.root, { recursive: true, force: true }); }
 });
 
-test("concrete adapter imports an exact named tag without moving main", async () => {
+test("concrete adapter imports an exact staged source without moving main", async () => {
   const f = await fixture();
   try {
-    await command(f.repo, ["tag", "v1"]); await command(f.repo, ["push", "upstream", "refs/tags/v1"]);
-    const adapter = new NodeSyncGit(); const before = await command(f.repo, ["rev-parse", "main"]);
-    const local = "refs/shipyard/source/upstream/test"; const imported = await adapter.importSource(f.repo, "upstream", "refs/tags/v1", local);
-    assert.equal(await command(f.repo, ["rev-parse", "main"]), before); assert.equal(await command(f.repo, ["rev-parse", local]), imported); assert.equal(await adapter.resolveSource(f.repo, "upstream", "refs/tags/v1"), imported);
+    await command(f.repo, ["update-ref", "refs/shipyard/staged-development", "refs/heads/main"]); await command(f.repo, ["update-ref", "refs/shipyard/staged-destination", "refs/remotes/upstream/main"]); await command(f.repo, ["update-ref", "refs/shipyard/staged-source", "refs/remotes/upstream/main"]);
+    const adapter = new NodeSyncGit(); const observation = await adapter.observe(f.repo, "upstream", "main", "main"); const before = await command(f.repo, ["rev-parse", "main"]);
+    const local = canonicalSourceRef("upstream", "refs/tags/v1"); const imported = await adapter.importStaged(f.repo, f.repo, "refs/shipyard/staged-source", local, observation.destinationSha, mutationProof(observation));
+    assert.equal(await command(f.repo, ["rev-parse", "main"]), before); assert.equal(await command(f.repo, ["rev-parse", local]), imported);
   } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
+test("direct staged import rejects refspec and arbitrary-local-ref bypasses without mutation", async (t) => {
+  for (const mode of ["refspec", "arbitrary-local", "overwrite", "staged-proof"] as const) await t.test(mode, async () => {
+    const f = await fixture();
+    try {
+      await command(f.repo, ["update-ref", "refs/shipyard/staged-development", "refs/heads/main"]); await command(f.repo, ["update-ref", "refs/shipyard/staged-destination", "refs/remotes/upstream/main"]); await command(f.repo, ["update-ref", "refs/shipyard/staged-source", "refs/remotes/upstream/main"]);
+      const adapter = new NodeSyncGit(); const observation = await adapter.observe(f.repo, "upstream", "main", "main"); const before = await exactState(f.repo);
+      const stagedRef = mode === "refspec" ? "+refs/shipyard/staged-source" : "refs/shipyard/staged-source";
+      const localRef = mode === "arbitrary-local" ? "refs/heads/hostile-feature" : canonicalSourceRef("upstream", "refs/tags/v1");
+      if (mode === "overwrite") await command(f.repo, ["update-ref", localRef, observation.developmentSha]);
+      if (mode === "staged-proof") await command(f.repo, ["update-ref", "refs/shipyard/staged-development", observation.destinationSha]);
+      const protectedState = await exactState(f.repo);
+      await assert.rejects(adapter.importStaged(f.repo, f.repo, stagedRef, localRef, observation.destinationSha, mutationProof(observation)));
+      assert.deepEqual(await exactState(f.repo), protectedState);
+      if (mode !== "overwrite" && mode !== "staged-proof") assert.deepEqual(protectedState, before);
+    } finally { await rm(f.root, { recursive: true, force: true }); }
+  });
 });
 
 test("a failing status observation is never reported as a clean worktree", async () => {
@@ -136,6 +154,19 @@ test("post-read-tree proof drift aborts the prepared transaction before either r
   });
 });
 
+test("a tracked edit during ref commit rejects and atomically restores both refs without discarding the edit", async () => {
+  const f = await fixture(); const wrapper = join(f.root, "git-commit-edit-race"); const marker = join(f.root, "commit-race-fired");
+  try {
+    const initial = await new NodeSyncGit().observe(f.repo, "upstream", "main", "main");
+    const script = `#!/bin/sh\nif [ "$*" = "-C ${f.repo} update-ref --stdin" ] && [ ! -f '${marker}' ]; then\nwhile IFS= read -r line; do case "$line" in start) echo 'start: ok';; prepare) echo 'prepare: ok';; commit) /usr/bin/git -C '${f.repo}' update-ref refs/heads/main '${initial.destinationSha}' '${initial.developmentSha}'; /usr/bin/git -C '${f.repo}' update-ref refs/remotes/upstream/main '${initial.destinationSha}' '${initial.destinationSha}'; printf 'concurrent edit\\n' > '${join(f.repo, "app.ts")}'; touch '${marker}'; exit 0;; abort) exit 0;; esac; done\nfi\nexec /usr/bin/git "$@"\n`;
+    await writeFile(wrapper, script); await chmod(wrapper, 0o700); const adapter = new NodeSyncGit(wrapper);
+    await assert.rejects(adapter.fastForward(f.repo, initial.destinationSha, mutationProof(initial)), /proof changed|recovery/i);
+    assert.equal(await command(f.repo, ["rev-parse", "refs/heads/main"]), initial.developmentSha);
+    assert.equal(await command(f.repo, ["rev-parse", "refs/remotes/upstream/main"]), initial.destinationSha);
+    assert.equal(await readFile(join(f.repo, "app.ts"), "utf8"), "concurrent edit\n");
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
 test("hung, flooding, early-closing, and spawn-failing ref transaction children terminate safely", async (t) => {
   for (const mode of ["hang", "flood", "early"] as const) await t.test(mode, async () => {
     const f = await fixture(); const wrapper = join(f.root, `git-${mode}`);
@@ -166,13 +197,14 @@ test("ref transaction diagnostics redact credentials and remain bounded", async 
 });
 
 test("staged object materialization never creates a temporary ref, including fetch and verification failures", async (t) => {
-  for (const mode of ["success", "fetch", "verify", "delete-trap"] as const) await t.test(mode, async () => {
+  for (const mode of ["success", "fetch", "verify", "delete-trap", "refspec"] as const) await t.test(mode, async () => {
     const f = await fixture(); const wrapper = join(f.root, `git-materialize-${mode}`);
     try {
-      await command(f.repo, ["update-ref", "refs/shipyard/staged-destination", "refs/remotes/upstream/main"]); const destinationSha = await command(f.repo, ["rev-parse", "refs/shipyard/staged-destination"]);
+      await command(f.repo, ["update-ref", "refs/shipyard/staged-development", "refs/heads/main"]); await command(f.repo, ["update-ref", "refs/shipyard/staged-destination", "refs/remotes/upstream/main"]); const destinationSha = await command(f.repo, ["rev-parse", "refs/shipyard/staged-destination"]);
       const guard = mode === "fetch" ? `case "$*" in *"fetch --no-tags --no-write-fetch-head"*) exit 7;; esac` : mode === "delete-trap" ? `case "$*" in *"update-ref -d refs/shipyard/staged-import"*) exit 8;; esac` : "";
       await writeFile(wrapper, `#!/bin/sh\n${guard}\nexec /usr/bin/git "$@"\n`); await chmod(wrapper, 0o700); const adapter = new NodeSyncGit(wrapper); const observation = await adapter.observe(f.repo, "upstream", "main", "main"); const before = await exactState(f.repo); const expected = mode === "verify" ? "f".repeat(40) : destinationSha;
-      if (mode === "fetch" || mode === "verify") await assert.rejects(adapter.materializeStaged(f.repo, f.repo, "refs/shipyard/staged-destination", expected, mutationProof(observation))); else await adapter.materializeStaged(f.repo, f.repo, "refs/shipyard/staged-destination", expected, mutationProof(observation));
+      const stagedRef = mode === "refspec" ? "+refs/shipyard/staged-destination" : "refs/shipyard/staged-destination";
+      if (mode === "fetch" || mode === "verify" || mode === "refspec") await assert.rejects(adapter.materializeStaged(f.repo, f.repo, stagedRef, expected, mutationProof(observation))); else await adapter.materializeStaged(f.repo, f.repo, stagedRef, expected, mutationProof(observation));
       assert.deepEqual(await exactState(f.repo), before); assert.equal(await command(f.repo, ["for-each-ref", "--format=%(refname)", "refs/shipyard/staged-import"]), "");
     } finally { await rm(f.root, { recursive: true, force: true }); }
   });

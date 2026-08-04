@@ -52,7 +52,9 @@ export class NodeSyncGit implements SyncGit {
     return { clean: dirty === "", checkedOutBranch: branch, developmentSha, destinationSha, ancestry, remoteUrl, changedPaths: paths, objectFormat: format };
   }
   async materializeStaged(repo: string, staged: string, stagedRef: string, expectedSha: string, proof: SyncMutationProof): Promise<void> {
+    if (stagedRef !== "refs/shipyard/staged-destination") throw new Error("Staged destination ref is not canonical; no mutation was permitted.");
     await this.assertMutationProof(repo, proof);
+    await this.assertStagedProof(staged, proof, stagedRef, expectedSha, "commit");
     await this.required(repo, ["fetch", "--no-tags", "--no-write-fetch-head", staged, stagedRef]);
     if (await this.required(repo, ["rev-parse", "--verify", `${expectedSha}^{commit}`]) !== expectedSha) throw new Error("Staged object materialization did not preserve its exact object ID.");
   }
@@ -64,21 +66,28 @@ export class NodeSyncGit implements SyncGit {
     const trackingRef = `refs/remotes/${remote}/${destinationBranch}`;
     const transaction = await prepareRefTransaction(this.executable, repo, [{ ref: `refs/heads/${branch}`, next: destination, previous: expected }, { ref: trackingRef, next: destination, previous: trackingBefore }], this.transaction);
     let applied = false;
-    try { await this.assertMutationProof(repo, proof); await this.required(repo, ["read-tree", "-u", "-m", expected, destination]); applied = true; await this.assertPostReadTreeProof(repo, destination, proof); await transaction.commit(); }
+    try {
+      await this.assertMutationProof(repo, proof); await this.required(repo, ["read-tree", "-u", "-m", expected, destination]); applied = true;
+      await this.assertPostReadTreeProof(repo, destination, proof); await transaction.commit(); await this.assertCommittedProof(repo, destination, proof);
+    }
     catch (error) {
       await transaction.abort();
-      const mainNow = await this.optional(repo, `refs/heads/${branch}`); const trackingNow = await this.optional(repo, trackingRef);
-      if (applied && mainNow === expected && trackingNow === trackingBefore && await this.treeAndWorktreeEqual(repo, destination)) await this.required(repo, ["read-tree", "-u", "-m", destination, expected]);
+      try { await this.restoreFastForwardRefs(repo, branch, trackingRef, expected, trackingBefore, destination); }
+      catch (recoveryError) { throw new Error("Fast-forward ref recovery could not be proven; inspect main and destination tracking refs manually before any retry.", { cause: new AggregateError([error, recoveryError]) }); }
+      if (applied && await this.treeAndWorktreeEqual(repo, destination) && await this.required(repo, ["ls-files", "--others", "--exclude-standard"]) === "") await this.required(repo, ["read-tree", "-u", "-m", destination, expected]);
       throw error;
     }
   }
-  async importSource(repo: string, remote: string, source: string, local: string): Promise<string> { await this.required(repo, ["fetch", "--no-tags", remote, `${source}:${local}`]); return this.required(repo, ["rev-parse", local]); }
   async importStaged(repo: string, staged: string, stagedRef: string, localRef: string, expectedSha: string, proof: SyncMutationProof): Promise<string> {
+    const sourcePrefix = `refs/shipyard/source/${proof.destinationRemote}/`;
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(proof.destinationRemote) || stagedRef !== "refs/shipyard/staged-source" || !localRef.startsWith(sourcePrefix) || !/^[a-f0-9]{64}$/.test(localRef.slice(sourcePrefix.length))) throw new Error("Staged source import refs are not canonical; no mutation was permitted.");
     await this.assertMutationProof(repo, proof);
+    await this.assertStagedProof(staged, proof, stagedRef, expectedSha, "object");
     await this.required(repo, ["fetch", "--no-tags", "--no-write-fetch-head", staged, stagedRef]);
     const resolved = await this.required(repo, ["rev-parse", "--verify", `${expectedSha}^{object}`]); if (resolved !== expectedSha) throw new Error("Staged import did not resolve to its expected exact object.");
     await this.assertMutationProof(repo, proof);
-    const current = await this.optional(repo, localRef); if (localRef.startsWith("refs/shipyard/source/") && current !== undefined && current !== resolved) throw new Error("Existing source ref differs; policy-read-only source refs are never overwritten.");
+    await this.assertStagedProof(staged, proof, stagedRef, expectedSha, "object");
+    const current = await this.optional(repo, localRef); if (current !== undefined && current !== resolved) throw new Error("Existing source ref differs; policy-read-only source refs are never overwritten.");
     if (current !== resolved) await this.required(repo, ["update-ref", localRef, resolved, current ?? await this.nullObject(repo)]);
     return resolved;
   }
@@ -112,6 +121,29 @@ export class NodeSyncGit implements SyncGit {
       this.required(repo, ["rev-parse", `refs/remotes/${proof.destinationRemote}/${proof.destinationBranch}`]), this.required(repo, ["remote", "get-url", proof.destinationRemote]), this.required(repo, ["rev-parse", "--show-object-format"]),
     ]);
     if (!worktreeClean || !indexMatchesDestination || untracked !== "" || branch !== proof.developmentBranch || development !== proof.expectedDevelopmentSha || tracking !== proof.expectedDestinationTrackingSha || remoteUrl !== proof.expectedRemoteUrl || objectFormat !== proof.objectFormat) throw new Error("Local Git mutation proof changed; no mutation was permitted.");
+  }
+  private async assertCommittedProof(repo: string, destination: string, proof: SyncMutationProof): Promise<void> {
+    const [dirty, branch, development, tracking, remoteUrl, objectFormat] = await Promise.all([
+      this.required(repo, ["status", "--porcelain"]), this.required(repo, ["symbolic-ref", "--short", "HEAD"]), this.required(repo, ["rev-parse", `refs/heads/${proof.developmentBranch}`]),
+      this.required(repo, ["rev-parse", `refs/remotes/${proof.destinationRemote}/${proof.destinationBranch}`]), this.required(repo, ["remote", "get-url", proof.destinationRemote]), this.required(repo, ["rev-parse", "--show-object-format"]),
+    ]);
+    if (dirty !== "" || branch !== proof.developmentBranch || development !== destination || tracking !== destination || remoteUrl !== proof.expectedRemoteUrl || objectFormat !== proof.objectFormat) throw new Error("Local Git mutation proof changed during ref commit; recovery was required.");
+  }
+  private async assertStagedProof(staged: string, proof: SyncMutationProof, stagedRef: string, expectedSha: string, kind: "commit" | "object"): Promise<void> {
+    const [development, destination, format, selected] = await Promise.all([
+      this.required(staged, ["rev-parse", "refs/shipyard/staged-development"]), this.required(staged, ["rev-parse", "refs/shipyard/staged-destination"]),
+      this.required(staged, ["rev-parse", "--show-object-format"]), this.required(staged, ["rev-parse", "--verify", `${stagedRef}^{${kind}}`]),
+    ]);
+    if (development !== proof.expectedDevelopmentSha || destination !== proof.expectedDestinationTrackingSha || format !== proof.objectFormat || selected !== expectedSha) throw new Error("Staged Git mutation proof changed; no mutation was permitted.");
+  }
+  private async restoreFastForwardRefs(repo: string, branch: string, trackingRef: string, expected: string, trackingBefore: string, destination: string): Promise<void> {
+    let mainNow = await this.optional(repo, `refs/heads/${branch}`); let trackingNow = await this.optional(repo, trackingRef);
+    if (mainNow === destination && trackingNow === destination) {
+      const rollback = await prepareRefTransaction(this.executable, repo, [{ ref: `refs/heads/${branch}`, next: expected, previous: destination }, { ref: trackingRef, next: trackingBefore, previous: destination }], this.transaction);
+      try { await rollback.commit(); } catch (error) { await rollback.abort(); mainNow = await this.optional(repo, `refs/heads/${branch}`); trackingNow = await this.optional(repo, trackingRef); if (mainNow !== expected || trackingNow !== trackingBefore) throw error; }
+    }
+    mainNow = await this.optional(repo, `refs/heads/${branch}`); trackingNow = await this.optional(repo, trackingRef);
+    if (mainNow !== expected || trackingNow !== trackingBefore) throw new Error("Fast-forward refs no longer match either exact pre-commit or committed state.");
   }
   private async noDiff(repo: string, args: string[]): Promise<boolean> { try { await this.required(repo, args); return true; } catch { return false; } }
   private async treeAndWorktreeEqual(repo: string, commit: string): Promise<boolean> { try { return await this.required(repo, ["write-tree"]) === await this.required(repo, ["rev-parse", `${commit}^{tree}`]) && await this.required(repo, ["diff", "--quiet"]) === ""; } catch { return false; } }

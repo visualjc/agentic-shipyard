@@ -4,15 +4,17 @@ import { status } from "../commands/status.js";
 import { sync } from "../commands/sync.js";
 import type { TopologyRequest } from "../profile/policy.js";
 import { explicitOptionalOption, optionalOption, parseArguments, requiredOption, requireExactCommandShape } from "./arguments.js";
-import { setupGuidance } from "./guidance.js";
+import { commandGuidance } from "./guidance.js";
 import { createRuntime } from "./runtime.js";
 import { NodeSyncStatusReader } from "../adapters/sync-status.js";
 
 export type CommandName = "shipyard" | "setup" | "status" | "sync" | "help";
 export async function run(argv: readonly string[], invokedAs: CommandName = "shipyard", cwd = process.cwd()): Promise<{ code: number; output: string }> {
+  let activeCommand: string = invokedAs;
   try {
     const parsed = parseArguments(argv);
     const command = invokedAs === "shipyard" ? (parsed.positionals.shift() ?? "help") : invokedAs;
+    activeCommand = command;
     if (command === "sync") requireExactCommandShape(parsed, "shipyard-sync", ["home", "repo", "source-ref"]);
     const home = optionalOption(parsed, "home");
     const runtime = createRuntime(home);
@@ -34,6 +36,6 @@ export async function run(argv: readonly string[], invokedAs: CommandName = "shi
     }
     return { code: 2, output: `${help("shipyard")}\n` };
   } catch (error) {
-    return { code: 1, output: `${setupGuidance(error)}\n` };
+    return { code: 1, output: `${commandGuidance(error, activeCommand)}\n` };
   }
 }

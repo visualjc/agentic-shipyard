@@ -78,7 +78,6 @@ export type { BaselineObservation, SyncGit, SyncMutationProof } from "./sync/git
 export type { SourceProvenance, SyncOutcome, SyncRequest } from "./sync/types.js";
 export { syncStatusContributor } from "./sync/status.js";
 export type { SyncStatus, SyncStatusReader, SyncStatusReadRequest } from "./sync/status.js";
-export { NodeSyncGit } from "./adapters/sync-git.js";
 export { DestinationSyncTransport, assertNoSourcePublication, requireSourceFreePublication } from "./sync/transport.js";
 export type { GitTransportCredentialResolver, PublicationRequest, StagedDestination, SyncDestinationTransport, VerifiedGitTransportCredential } from "./sync/transport.js";
 export { validateSourceProvenance } from "./sync/provenance.js";
