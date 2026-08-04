@@ -71,9 +71,16 @@ The executable fixture harness is enabled only with
 repository that exactly matches `SHIPYARD_PRIVATE_GITHUB_REPOSITORY` and
 `SHIPYARD_PRIVATE_GITHUB_APPROVED_REPOSITORY`, the documented mutation
 acknowledgement, token, expected actor, existing head/base refs, and exact
-canonical lowercase 40- or 64-hex head SHA. It uses the production REST
+canonical lowercase 40- or 64-hex head SHA. The existing head ref must be
+exactly `shipyard/<stable-delivery-id>`; the fixture derives its delivery ID
+and record marker from that operator-created branch so the branch and tracker
+authority cannot diverge. Use a fresh uniquely named branch for each fresh
+fixture marker. It uses the production REST
 transport and guarded tracker to
 verify `/user`, create the marked issue/PR pair, and prove idempotent discovery
-before cleanup. It is skipped by the normal test command, makes zero
-default-suite network calls, never invokes `gh`, and refuses NativeInteractive
-or any repository value containing a credential or URL.
+before cleanup. Cleanup binds one credential-scoped client, freshly verifies
+the configured actor, and permits only exact close requests for those created
+records in the separately approved repository. It is skipped by the normal
+test command, makes zero default-suite network calls, never invokes `gh`, and
+refuses NativeInteractive or any repository value containing a credential or
+URL.

@@ -53,12 +53,16 @@ The executable private fixture is skipped unless
 `SHIPYARD_PRIVATE_GITHUB_APPROVED_REPOSITORY`, the acknowledgement
 `SHIPYARD_PRIVATE_GITHUB_MUTATION_ACKNOWLEDGEMENT=I_ACKNOWLEDGE_DISPOSABLE_GITHUB_MUTATIONS`,
 token, expected actor, existing head ref, base ref, and canonical lowercase
-40- or 64-hex head SHA.
+40- or 64-hex head SHA. The head ref must be exactly
+`shipyard/<stable-delivery-id>` and is the fixture's sole delivery identity;
+use a fresh uniquely named pre-created branch when a fresh marker is required.
 `NativeInteractive/*` is always rejected. The approved disposable repository
 must already contain that head branch at that SHA. In its controlled serial
 run, the fixture creates one marked development issue/PR through
 `trackDevelopmentRecords`, proves the second call discovers the same provider
-IDs, then closes both records in `finally`; normal tests remain network-free.
+IDs, then freshly verifies the configured actor on one credential-bound client
+before issuing only the two exact record-close requests in `finally`; normal
+tests remain network-free.
 
 The tracker identifies its records only by its exact marker on a standalone
 body line. It excludes pull requests from GitHub's `/issues` listing and stores
