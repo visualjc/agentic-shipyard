@@ -144,13 +144,20 @@ export class WorkspaceService {
 
   private async ensureExpectedWorktree(request: CreateOrResumeDelivery, commonDirectory: string, intent: WorktreeEnsureIntent): Promise<void> {
     const exists = await this.git.worktreeExists(request.worktreePath);
+    // A create intent cannot adopt a path that appeared after the branch
+    // preflight. Even matching branch/common-directory data cannot attribute
+    // that worktree to this invocation.
+    if (exists && intent.mode === "create") {
+      throw new WorkspaceError("workspace-conflict", "The requested worktree path appeared during creation; refusing to adopt it.");
+    }
     let identity = exists ? await this.git.worktreeIdentity(request.worktreePath) : undefined;
     if (exists && (!identity || identity.commonDirectory !== commonDirectory || identity.branch !== request.branch)) {
       throw new WorkspaceError("workspace-identity-mismatch", "The requested worktree path exists but is not this delivery’s Git worktree.");
     }
     if (!exists) {
+      let created: boolean;
       try {
-        await this.git.ensureWorktree(request.repositoryPath, request.branch, request.worktreePath, intent);
+        created = await this.git.ensureWorktree(request.repositoryPath, request.branch, request.worktreePath, intent);
       } catch (error: unknown) {
         // A create-mode failure with the branch now present and no worktree at
         // our path is the external same-SHA race. Do not remove anything: Git
@@ -159,6 +166,9 @@ export class WorkspaceService {
           throw new WorkspaceError("workspace-conflict", "The canonical feature branch appeared during worktree creation; refusing to adopt it.");
         }
         throw error;
+      }
+      if (!created) {
+        throw new WorkspaceError("workspace-conflict", "Git did not confirm this invocation created the requested worktree; refusing to adopt it.");
       }
       identity = await this.git.worktreeIdentity(request.worktreePath);
       if (!identity || identity.commonDirectory !== commonDirectory || identity.branch !== request.branch) {

@@ -80,15 +80,15 @@ test("rejects a registered delivery whose removed linked worktree also lost its 
   } finally { await dispose(value); }
 });
 
-test("refuses an arbitrary existing directory or a mismatched linked-worktree identity", async () => {
+test("create intent refuses any pre-existing path, including arbitrary and mismatched worktrees", async () => {
   const value = await fixture();
   try {
     const request = value.request("d-1");
     await mkdir(request.worktreePath);
-    await assert.rejects(value.service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-identity-mismatch");
+    await assert.rejects(value.service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
     await rm(request.worktreePath, { recursive: true });
     await git(value.repository, ["worktree", "add", "-b", "shipyard/other", request.worktreePath]);
-    await assert.rejects(value.service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-identity-mismatch");
+    await assert.rejects(value.service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
   } finally { await dispose(value); }
 });
 
@@ -297,6 +297,55 @@ test("create intent rejects a same-SHA foreign branch race without registry adop
   assert.equal(registryWrites, 0);
   assert.equal(worktreeExists, false);
   assert.equal(await git.branchHead(), foreignSha);
+});
+
+test("create intent rejects a matching foreign worktree that appears after branch preflight", async () => {
+  const startSha = "a".repeat(40);
+  const request = { repositoryPath: "/repository", commonDirectory: "/repository/.git", deliveryId: "d-1", branch: "shipyard/d-1", worktreePath: "/worktrees/d-1", initialLedgerPath: "deliveries/d-1.json", initialLedgerContents: JSON.stringify({ deliveryId: "d-1" }) };
+  let registryWrites = 0; let ensureCalls = 0;
+  const records: Record<string, string> = {};
+  const registry = { async read() { return undefined; }, async write() { registryWrites += 1; } };
+  const ledger = {
+    async snapshot(paths: readonly string[]) { return { head: records[request.initialLedgerPath] ? "ledger" : undefined, records: Object.fromEntries(paths.flatMap((path) => records[path] === undefined ? [] : [[path, records[path]]])) }; },
+    async transact(transaction: { writes: readonly { path: string; contents: string }[] }) { for (const write of transaction.writes) records[write.path] = write.contents; return "ledger"; },
+  };
+  const git = {
+    async commonDirectory() { return request.commonDirectory; },
+    // branchExists was false during preflight; another actor then created an
+    // indistinguishable same-branch/same-SHA worktree before this exists check.
+    async branchExists() { return false; }, async worktreeExists() { return true; },
+    async worktreeIdentity() { assert.fail("create intent must not inspect then adopt an existing path"); },
+    async productHead() { return startSha; }, async branchHead() { return startSha; },
+    async ensureWorktree() { ensureCalls += 1; return true; },
+  };
+  const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
+
+  await assert.rejects(service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
+  assert.equal(ensureCalls, 0);
+  assert.equal(registryWrites, 0);
+  assert.ok(records[request.initialLedgerPath]);
+});
+
+test("rejects an unproven false worktree-creation result without adopting its path", async () => {
+  const startSha = "a".repeat(40);
+  const request = { repositoryPath: "/repository", commonDirectory: "/repository/.git", deliveryId: "d-1", branch: "shipyard/d-1", worktreePath: "/worktrees/d-1", initialLedgerPath: "deliveries/d-1.json", initialLedgerContents: JSON.stringify({ deliveryId: "d-1" }) };
+  let registryWrites = 0;
+  const records: Record<string, string> = {};
+  const registry = { async read() { return undefined; }, async write() { registryWrites += 1; } };
+  const ledger = {
+    async snapshot(paths: readonly string[]) { return { head: records[request.initialLedgerPath] ? "ledger" : undefined, records: Object.fromEntries(paths.flatMap((path) => records[path] === undefined ? [] : [[path, records[path]]])) }; },
+    async transact(transaction: { writes: readonly { path: string; contents: string }[] }) { for (const write of transaction.writes) records[write.path] = write.contents; return "ledger"; },
+  };
+  const git = {
+    async commonDirectory() { return request.commonDirectory; }, async branchExists() { return false; }, async worktreeExists() { return false; },
+    async worktreeIdentity() { assert.fail("an unproven creation result must not be inspected or adopted"); },
+    async productHead() { return startSha; }, async branchHead() { return startSha; }, async ensureWorktree() { return false; },
+  };
+  const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
+
+  await assert.rejects(service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
+  assert.equal(registryWrites, 0);
+  assert.ok(records[request.initialLedgerPath]);
 });
 
 test("does not remove a swapped path when the branch changes after created-worktree identity verification", async () => {
