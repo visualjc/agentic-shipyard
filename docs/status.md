@@ -17,3 +17,9 @@ unconditional placeholder.
 Status never fetches, imports, acquires a mutation lock, moves a ref, changes
 the index or worktree, writes or advances ledger history, dispatches delivery
 work, or calls a provider. All local Git reads are time- and output-bounded.
+
+The optional graph lane contributes only a read-only experimental status field:
+its enabled flag, pinned adapter receipt, fresh/stale/unavailable/invalid/
+blocked/failed state, reason, and `inspect-source-directly` fallback. Status
+never runs a graph command, acquires a graph lock, creates a cache, or installs
+a dependency. A graph is never delivery authority.

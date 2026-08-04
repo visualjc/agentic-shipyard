@@ -1,4 +1,5 @@
 import type { DeliveryPhase } from "../contracts/types.js";
+import type { GraphDecision, GraphState } from "../graph/types.js";
 
 export type StatusBlocker = { code: string; message: string };
 export type StatusProjection = Readonly<{
@@ -11,7 +12,8 @@ export type StatusProjection = Readonly<{
   acceptanceFresh?: boolean;
   providerRefs?: Readonly<Record<string, string>>;
   locks?: Readonly<Record<string, "free" | "held" | "stale">>;
-  graphFreshness?: "fresh" | "stale" | "unavailable";
+  graphFreshness?: GraphState;
+  graph?: Readonly<{ enabled: boolean; adapter?: string; receipt?: string; state: GraphState; reason: string; nextAction: "inspect-source-directly" }>;
   blockers: readonly StatusBlocker[];
   nextSafeAction: string;
 }>;

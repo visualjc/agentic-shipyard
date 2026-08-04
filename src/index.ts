@@ -4,6 +4,22 @@ export { ContractValidationError, validateBinding, validateLifecycleState, valid
 export type { ContractErrorCode } from "./contracts/errors.js";
 export { composeStatus, createStatusProjection } from "./status/projection.js";
 export type { StatusBlocker, StatusContributor, StatusProjection } from "./status/projection.js";
+export { graphStatusContributor } from "./graph/status.js";
+export { graphFingerprint, snapshotGraphSource } from "./graph/fingerprint.js";
+export { graphCacheIdentity, graphDecision, graphLockPath, evaluateGraphFreshness, evaluateGraphLock, validateGraphBaseline, validateGraphDescriptor } from "./graph/freshness.js";
+export { graphPathContains, isGraphSha, validateGraphDescriptor as validateGraphDescriptorValue, validateGraphLock, validateGraphRuntime, validateGraphSource } from "./graph/validation.js";
+export { refreshGraph } from "./graph/adapter.js";
+export { GraphLockService } from "./graph/lock.js";
+export type { GraphLockStore } from "./graph/lock.js";
+export { canonicalExecutable, commandFailure, GRAPH_COMMAND_MAX_BYTES, snapshotGraphCommandResult } from "./graph/command.js";
+export type { GraphCommandResult } from "./graph/command.js";
+export { GRAPH_FALLBACK_ACTION, GRAPH_FINGERPRINT_VERSION, GRAPH_STATES } from "./graph/types.js";
+export type { GraphAdapter, GraphBaseline, GraphCacheLock, GraphDecision, GraphDescriptor, GraphResult, GraphRuntime, GraphSource, GraphState } from "./graph/types.js";
+export type { GraphSourceReader } from "./graph/fingerprint.js";
+export { GRAPHIFY_RECEIPT, refreshGraphify, seedGraphify } from "./adapters/graphify.js";
+export type { GraphifyFiles, GraphifyOptions, LocalGraphCommand } from "./adapters/graphify.js";
+export { CODEGRAPH_RECEIPT, refreshCodeGraph, seedCodeGraph } from "./adapters/codegraph.js";
+export type { CodeGraphFiles, CodeGraphOptions } from "./adapters/codegraph.js";
 
 // Binding/core adapters are deliberately exported by interface, not by module internals.
 export { nodeFilesystem } from "./adapters/filesystem.js";

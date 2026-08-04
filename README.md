@@ -32,4 +32,14 @@ so concurrent setup in different repositories cannot lose a binding update.
 Focused Codex skills are in `skills/shipyard*` and are discovered in this repo
 through source-checkout `.agents/skills` symlinks (npm users run the packaged installer); see [skills](docs/skills.md), [setup](docs/setup.md),
 [status](docs/status.md), [help](docs/help.md), and
-[metadata ownership](docs/metadata-ownership.md), and [synchronization](docs/synchronization.md).
+[metadata ownership](docs/metadata-ownership.md), and
+[synchronization](docs/synchronization.md).
+
+## Experimental graph acceleration
+
+Graphify and CodeGraph adapters are disabled by default and are never source or
+delivery authority. They require explicit local-only approval, a reviewed tool
+receipt, exact commit plus working-tree-fingerprint freshness, and otherwise
+instruct the operator to inspect source directly. See the experimental
+[Graphify](docs/graphify-experimental.md) and [CodeGraph](docs/codegraph-experimental.md)
+guides.
