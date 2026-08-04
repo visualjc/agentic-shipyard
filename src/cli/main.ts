@@ -15,7 +15,7 @@ export async function run(argv: readonly string[], invokedAs: CommandName = "shi
     const runtime = createRuntime(home);
     const repositoryPath = optionalOption(parsed, "repo") ?? cwd;
     if (command === "help") return { code: 0, output: `${help(parsed.positionals[0])}\n` };
-    if (command === "status") return { code: 0, output: `${JSON.stringify(await status(runtime.bindings, repositoryPath), null, 2)}\n` };
+    if (command === "status") return { code: 0, output: `${JSON.stringify(await status(runtime.bindings, runtime.git, repositoryPath), null, 2)}\n` };
     if (command === "setup") {
       const kind = requiredOption(parsed, "topology");
       if (kind !== "staged-pair" && kind !== "single-repository") throw new Error("--topology must be staged-pair or single-repository.");
@@ -25,7 +25,7 @@ export async function run(argv: readonly string[], invokedAs: CommandName = "shi
       const topology: RepositoryTopology = kind === "staged-pair"
         ? { kind, development, destination: { name: destinationName ?? "", url: destinationUrl ?? "" } }
         : { kind, development };
-      const binding = await setup(runtime.bindings, { repositoryPath, profile: requiredOption(parsed, "profile"), topology, rebind: parsed.values.get("rebind") === true });
+      const binding = await setup(runtime, { repositoryPath, profile: requiredOption(parsed, "profile"), topology, rebind: parsed.values.get("rebind") === true });
       return { code: 0, output: `Bound ${binding.profile} to ${binding.commonDirectory}.\n` };
     }
     return { code: 2, output: `${help("shipyard")}\n` };

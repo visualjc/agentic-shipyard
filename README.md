@@ -22,7 +22,10 @@ node bin/shipyard-status
 Bindings are machine-local (`$SHIPYARD_HOME/bindings.json`, defaulting to
 `~/.shipyard`) and keyed by Git's common directory, so a linked worktree shares
 the main clone's identity. Setup validates existing remotes but never provisions
-or rewrites them; replacing an existing binding requires `--rebind`.
+or rewrites them; replacing an existing binding requires `--rebind`. The named
+version 1 profile must already exist in `$SHIPYARD_HOME/profiles/<name>.json`,
+match the complete requested remote topology, and authorize setup. Setup holds
+a mutation lock keyed by common-directory identity for the binding transaction.
 
 Focused Codex skills are in `skills/shipyard*`; see [setup](docs/setup.md),
 [status](docs/status.md), [help](docs/help.md), and

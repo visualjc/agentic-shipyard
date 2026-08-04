@@ -1,4 +1,6 @@
-import { BindingError } from "../index.js";
+import { BindingError, MutationLockError } from "../index.js";
+import { RepositoryIdentityError } from "../commands/setup.js";
+import { ProfileStoreError } from "./profile-store.js";
 
 export function setupGuidance(error: unknown): string {
   if (error instanceof BindingError) {
@@ -12,5 +14,23 @@ export function setupGuidance(error: unknown): string {
       case "binding-store-invalid": return "The local binding store is invalid. Restore or repair it before running shipyard-setup --rebind.";
     }
   }
+  if (error instanceof ProfileStoreError) {
+    switch (error.code) {
+      case "profile-missing": return "The named global profile is missing. Create and review its version 1 JSON document under $SHIPYARD_HOME/profiles, then rerun shipyard-setup.";
+      case "profile-invalid": return "The named global profile is malformed. Repair its version 1 schema before rerunning shipyard-setup; Shipyard will not create it automatically.";
+      case "profile-name-invalid": return "The profile name is unsafe. Use its exact global profile identifier with shipyard-setup.";
+      case "profile-name-mismatch": return "The global profile file and its declared name differ. Correct the profile document before rerunning shipyard-setup.";
+      case "profile-topology-mismatch": return "The requested repository topology does not match the named global profile. Verify the profile and CLI remote identity before rerunning shipyard-setup.";
+      case "profile-operation-denied": return "The named global profile does not authorize setup. Update and review its allowed operations before rerunning shipyard-setup.";
+    }
+  }
+  if (error instanceof MutationLockError) {
+    switch (error.code) {
+      case "lock-held": return "Setup is blocked by another repository mutation. Wait for that owner to finish, then rerun shipyard-status before retrying shipyard-setup.";
+      case "lock-invalid": return "The repository mutation lock is malformed or names another identity. Inspect it manually; Shipyard will not remove it automatically.";
+      case "lock-unsafe-recovery": return "The repository mutation lock cannot be recovered safely on this host. Verify its owner process and host before retrying shipyard-setup.";
+    }
+  }
+  if (error instanceof RepositoryIdentityError) return "Repository identity could not be established. Run shipyard-setup from an existing Git repository and verify its common directory.";
   return error instanceof Error ? error.message : "Shipyard could not safely resolve this command.";
 }

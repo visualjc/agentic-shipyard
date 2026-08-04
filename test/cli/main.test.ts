@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 import { run } from "../../src/cli/main.js";
+import { createRuntime } from "../../src/cli/runtime.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -40,9 +41,9 @@ test("remote mismatch and incomplete topology return deterministic corrective gu
     const mismatch = await run(["--home", fixture.home], "status", fixture.main);
     assert.equal(mismatch.code, 1);
     assert.match(mismatch.output, /will not rewrite remotes/);
-    const incomplete = await run(["--home", fixture.home, "--profile", "x", "--topology", "staged-pair", "--development-name", "origin", "--development-url", fixture.origin], "setup", fixture.main);
+    const incomplete = await run(["--home", fixture.home, "--profile", "demo", "--topology", "staged-pair", "--development-name", "origin", "--development-url", fixture.origin], "setup", fixture.main);
     assert.equal(incomplete.code, 1);
-    assert.match(incomplete.output, /topology is incomplete/i);
+    assert.match(incomplete.output, /does not match the named global profile/i);
   } finally { await fixture.dispose(); }
 });
 
@@ -58,7 +59,98 @@ test("a linked worktree resolves the binding stored for its main clone", async (
   } finally { await fixture.dispose(); }
 });
 
-async function createRepository() {
+test("setup requires a valid named global profile whose identity matches the request", async () => {
+  const fixture = await createRepository(false);
+  try {
+    const arguments_ = ["--home", fixture.home, "--profile", "demo", "--topology", "staged-pair", "--development-name", "origin", "--development-url", fixture.origin, "--destination-name", "destination", "--destination-url", fixture.destination];
+    const missing = await run(arguments_, "setup", fixture.main);
+    assert.equal(missing.code, 1);
+    assert.match(missing.output, /global profile is missing/);
+    await assert.rejects(access(join(fixture.home, "bindings.json")));
+
+    await writeProfile(fixture, "demo", { malformed: true });
+    const malformed = await run(arguments_, "setup", fixture.main);
+    assert.equal(malformed.code, 1);
+    assert.match(malformed.output, /profile is malformed/);
+    await assert.rejects(access(join(fixture.home, "bindings.json")));
+
+    await writeProfile(fixture, "other", { declaredName: "different" });
+    const nameMismatch = await run(arguments_.map((value) => value === "demo" ? "other" : value), "setup", fixture.main);
+    assert.equal(nameMismatch.code, 1);
+    assert.match(nameMismatch.output, /file and its declared name differ/);
+
+    await writeProfile(fixture, "demo", { destinationUrl: "https://example.test/not-the-destination.git" });
+    const topologyMismatch = await run(arguments_, "setup", fixture.main);
+    assert.equal(topologyMismatch.code, 1);
+    assert.match(topologyMismatch.output, /topology does not match/);
+    await assert.rejects(access(join(fixture.home, "bindings.json")));
+  } finally { await fixture.dispose(); }
+});
+
+test("single-repository setup derives the development binding identity from its profile", async () => {
+  const fixture = await createRepository(false);
+  try {
+    await writeSingleRepositoryProfile(fixture, "single");
+    const result = await run(["--home", fixture.home, "--profile", "single", "--topology", "single-repository", "--development-name", "origin", "--development-url", fixture.origin], "setup", fixture.main);
+    assert.equal(result.code, 0);
+    const binding = JSON.parse(await readFile(join(fixture.home, "bindings.json"), "utf8"));
+    assert.equal(binding.bindings[0].topology.kind, "single-repository");
+    assert.deepEqual(binding.bindings[0].topology.development, { name: "origin", url: fixture.origin });
+  } finally { await fixture.dispose(); }
+});
+
+test("a concurrent setup lock prevents a rebind writer from overwriting binding identity", async () => {
+  const fixture = await createRepository();
+  try {
+    await writeProfile(fixture, "alternate");
+    const setupArgs = ["--home", fixture.home, "--profile", "demo", "--topology", "staged-pair", "--development-name", "origin", "--development-url", fixture.origin, "--destination-name", "destination", "--destination-url", fixture.destination];
+    assert.equal((await run(setupArgs, "setup", fixture.main)).code, 0);
+    const bindingPath = join(fixture.home, "bindings.json");
+    const before = await readFile(bindingPath, "utf8");
+    const runtime = createRuntime(fixture.home);
+    const commonDirectory = await runtime.git.commonDirectory(fixture.main);
+    const held = await runtime.locks.acquire(runtime.setupLockPath(commonDirectory), commonDirectory, "setup");
+    try {
+      const attempt = await run(setupArgs.map((value) => value === "demo" ? "alternate" : value).concat("--rebind"), "setup", fixture.main);
+      assert.equal(attempt.code, 1);
+      assert.match(attempt.output, /blocked by another repository mutation/);
+      assert.equal(await readFile(bindingPath, "utf8"), before);
+    } finally { await held.release(); }
+  } finally { await fixture.dispose(); }
+});
+
+test("setup refuses unsafe stale-lock recovery with actionable owner guidance", async () => {
+  const fixture = await createRepository();
+  try {
+    const runtime = createRuntime(fixture.home);
+    const commonDirectory = await runtime.git.commonDirectory(fixture.main);
+    const lockPath = runtime.setupLockPath(commonDirectory);
+    await mkdir(join(fixture.home, "locks"), { recursive: true });
+    await writeFile(lockPath, JSON.stringify({ version: 1, repository: commonDirectory, operation: "setup", processId: 987654, host: "another-host", acquiredAt: "2000-01-01T00:00:00.000Z" }));
+    const setupArgs = ["--home", fixture.home, "--profile", "demo", "--topology", "staged-pair", "--development-name", "origin", "--development-url", fixture.origin, "--destination-name", "destination", "--destination-url", fixture.destination];
+    const result = await run(setupArgs, "setup", fixture.main);
+    assert.equal(result.code, 1);
+    assert.match(result.output, /cannot be recovered safely/);
+    await assert.rejects(access(join(fixture.home, "bindings.json")));
+  } finally { await fixture.dispose(); }
+});
+
+test("non-Git setup and status return actionable repository identity guidance", async () => {
+  const fixture = await createRepository();
+  try {
+    const notRepository = join(fixture.root, "not-a-repository");
+    await mkdir(notRepository);
+    const setupArgs = ["--home", fixture.home, "--profile", "demo", "--topology", "staged-pair", "--development-name", "origin", "--development-url", fixture.origin, "--destination-name", "destination", "--destination-url", fixture.destination, "--repo", notRepository];
+    const setupResult = await run(setupArgs, "setup", fixture.main);
+    assert.equal(setupResult.code, 1);
+    assert.match(setupResult.output, /existing Git repository/);
+    const statusResult = await run(["--home", fixture.home, "--repo", notRepository], "status", fixture.main);
+    assert.equal(statusResult.code, 1);
+    assert.match(statusResult.output, /existing Git repository/);
+  } finally { await fixture.dispose(); }
+});
+
+async function createRepository(withProfile = true) {
   const root = await mkdtemp(join(tmpdir(), "shipyard-cli-"));
   const main = join(root, "main");
   const home = join(root, "home");
@@ -71,5 +163,47 @@ async function createRepository() {
   await execFile("git", ["-C", main, "commit", "--allow-empty", "-m", "initial"]);
   await execFile("git", ["-C", main, "remote", "add", "origin", origin]);
   await execFile("git", ["-C", main, "remote", "add", "destination", destination]);
-  return { main, home, linked, origin, destination, dispose: () => rm(root, { recursive: true, force: true }) };
+  const fixture = { root, main, home, linked, origin, destination, dispose: () => rm(root, { recursive: true, force: true }) };
+  if (withProfile) await writeProfile(fixture, "demo");
+  return fixture;
+}
+
+async function writeProfile(
+  fixture: { home: string; origin: string; destination: string },
+  fileName: string,
+  options: { malformed?: boolean; declaredName?: string; destinationUrl?: string } = {},
+): Promise<void> {
+  const directory = join(fixture.home, "profiles");
+  await mkdir(directory, { recursive: true });
+  const document: unknown = options.malformed ? { schemaVersion: 99 } : {
+    schemaVersion: 1,
+    name: options.declaredName ?? fileName,
+    actor: { login: "shipyard-test" },
+    topology: {
+      kind: "staged-pair",
+      development: { owner: "test", name: "development", remote: { name: "origin", url: fixture.origin }, defaultBranch: "main" },
+      destination: { owner: "test", name: "destination", remote: { name: "destination", url: options.destinationUrl ?? fixture.destination }, defaultBranch: "main" },
+    },
+    allowedOperations: ["setup", "status", "help"],
+  };
+  await writeFile(join(directory, `${fileName}.json`), `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600 });
+}
+
+async function writeSingleRepositoryProfile(
+  fixture: { home: string; origin: string },
+  fileName: string,
+): Promise<void> {
+  const directory = join(fixture.home, "profiles");
+  await mkdir(directory, { recursive: true });
+  const document = {
+    schemaVersion: 1,
+    name: fileName,
+    actor: { login: "shipyard-test" },
+    topology: {
+      kind: "single-repository",
+      repository: { owner: "test", name: "product", remote: { name: "origin", url: fixture.origin }, defaultBranch: "main" },
+    },
+    allowedOperations: ["setup", "status", "help"],
+  };
+  await writeFile(join(directory, `${fileName}.json`), `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600 });
 }

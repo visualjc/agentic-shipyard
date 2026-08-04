@@ -7,8 +7,9 @@ metadata:
 
 # Shipyard setup
 
-Validate the repository and every declared remote before writing the local
-binding. Rebinding is destructive to identity and requires explicit
-`--rebind` after the operator verifies the topology.
+Load and validate the named global profile, then validate the repository and
+every declared remote before writing the local binding under its mutation lock.
+Rebinding is destructive to identity and requires explicit `--rebind` after
+the operator verifies the topology.
 
 Read [the setup reference](references/setup.md).
