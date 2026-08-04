@@ -1,26 +1,26 @@
 ---
 issue: 5
-updated: 2026-08-04T00:00:00Z
-status: planned
-progress: 0%
+updated: 2026-08-04T11:11:27Z
+status: completed
+progress: 100%
 ---
 
 # Execution Record: Issue #5
 
-Implementation has not started. `../../5-analysis.md` is the controlling
-three-stream plan: A owns pure sync authority/provenance/status contracts; B
-owns the sole locked Git baseline/source-ref mutation service; C performs the
-delayed command, read-only-status, docs, and public-surface handoff.
+Implementation and remediation are complete at exact integrated product SHA
+`3fd4858fbb007233cc93ad6fb93282d55fa11cad`. The controlling three-stream
+plan was implemented as a narrow sync boundary: pure provenance/status
+contracts, the sole locked baseline/source mutation service, and delayed CLI,
+read-only status, documentation, skill, and public-surface integration.
 
-Before any stream starts, it must record its actual exclusive files, published
-API inventory, exact test command/results, and handoff in this directory.
-The shared classifier and mutation lock are mandatory. Sync must retain
-command-scoped `visualjc` authority, never mutate `NativeInteractive`, never
-switch ambient `gh` identity, and never automatically rebase, repair, promote,
-or finalize. Source refs remain policy-read-only, provenance-checked objects
-under `refs/shipyard/source/...`, excluded from product refspecs/payloads.
+The accepted implementation uses the shared classifier and mutation lock,
+retains command-scoped authority, never switches ambient `gh` identity, and
+does not rebase, repair, promote, finalize, or mutate a provider record. Source
+refs are policy-read-only, proof-bound objects under
+`refs/shipyard/source/...`; publication boundaries reject them.
 
-No stream may claim acceptance or independent-review completion. Those require
-the final exact product SHA, AC-005/AC-006 evidence, the adversarial
-SHA-1/SHA-256 local-Git matrix, a read-only status probe, and separate
-independent review.
+The exact-SHA gate passed with a clean tree, typecheck, 301-test deterministic
+suite, package dry run, local Git baseline/source matrices, read-only status
+checks, and two independent Terra-high reviews. See
+`../../evidence/issue-5-3fd4858.md` and
+`../../reviews/issue-5-3fd4858.md`.
