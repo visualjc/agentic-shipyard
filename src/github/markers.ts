@@ -9,6 +9,8 @@ export function stableShipyardMarker(deliveryId: string): string {
 export type GitHubTrackerErrorCode =
   | "invalid-delivery-id"
   | "invalid-head-sha"
+  | "noncanonical-ref"
+  | "authority-mismatch"
   | "invalid-record"
   | "ambiguous-record"
   | "resume-mismatch"

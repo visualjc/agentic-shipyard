@@ -25,10 +25,13 @@ test("authenticated Git disables inherited credential helpers and keeps the toke
   assert.equal(result.stdout, "fetched");
   assert.equal(runner.commands.length, 1);
   const [command] = runner.commands;
-  assert.deepEqual(command.argv, ["-C", "/workspace/repository", "-c", "credential.helper=", "fetch", "origin", "main"]);
-  assert.equal(command.env.GIT_CONFIG_COUNT, "1");
+  assert.deepEqual(command.argv, ["-C", "/workspace/repository", "fetch", "origin", "main"]);
+  assert.deepEqual(command.isolatedRemote, { repositoryPath: "/workspace/repository", remote: "origin" });
+  assert.equal(command.env.GIT_CONFIG_COUNT, "2");
   assert.equal(command.env.GIT_CONFIG_KEY_0, "http.https://github.com/.extraheader");
-  assert.equal(command.env.GIT_CONFIG_VALUE_0, `AUTHORIZATION: bearer ${token}`);
+  assert.equal(command.env.GIT_CONFIG_VALUE_0, "");
+  assert.equal(command.env.GIT_CONFIG_KEY_1, "http.https://github.com/.extraheader");
+  assert.equal(command.env.GIT_CONFIG_VALUE_1, `AUTHORIZATION: bearer ${token}`);
   assert.equal(command.env.GIT_TERMINAL_PROMPT, "0");
   assert.equal(command.argv.some((value) => value.includes(token)), false);
   assert.equal(command.argv.some((value) => value.includes("https://x-access-token:")), false);
@@ -123,4 +126,30 @@ test("production Git runner is PATH-independent and an explicitly injected execu
 test("configured Git executable must be an absolute existing regular file", () => {
   assert.throws(() => createNodeGitTransportCommandRunner("git"), /absolute path/i);
   assert.throws(() => createNodeGitTransportCommandRunner("/definitely/not/git"), /existing regular file/i);
+});
+
+test("authenticated runner isolates a named remote from hostile Git config and developer-tool selection", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "shipyard-isolated-git-"));
+  const executable = join(directory, "trusted-git");
+  const inherited = Object.fromEntries(["DEVELOPER_DIR", "SDKROOT", "TOOLCHAINS", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM"].map((key) => [key, process.env[key]]));
+  try {
+    await writeFile(executable, "#!/bin/sh\nif [ \"$3\" = config ]; then printf '%s\\n' 'https://github.com/acme/widget.git'; exit 0; fi\nprintf '%s\\n' '--CONFIG--'; cat \"$GIT_DIR/config\"; printf '%s\\n' '--ENV--'; printenv\n", { mode: 0o700 });
+    await chmod(executable, 0o700);
+    process.env.DEVELOPER_DIR = "/hostile/developer"; process.env.SDKROOT = "/hostile/sdk"; process.env.TOOLCHAINS = "hostile"; process.env.GIT_CONFIG_GLOBAL = "/hostile/config";
+    const runner = createNodeGitTransportCommandRunner(executable);
+    const result = await runner.run({
+      executable, argv: ["-C", "/repository", "fetch", "origin", "main"],
+      env: { GIT_CONFIG_COUNT: "2", GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader", GIT_CONFIG_VALUE_0: "", GIT_CONFIG_KEY_1: "http.https://github.com/.extraheader", GIT_CONFIG_VALUE_1: "AUTHORIZATION: bearer ephemeral-token" },
+      isolatedRemote: { repositoryPath: "/repository", remote: "origin" },
+    });
+    assert.equal(result.exitCode, 0);
+    assert.match(result.stdout, /url = https:\/\/github\.com\/acme\/widget\.git/);
+    assert.equal(result.stdout.includes("hostile"), false);
+    assert.equal(result.stdout.includes("GIT_CONFIG_GLOBAL=/hostile/config"), false);
+    assert.match(result.stdout, /GIT_CONFIG_NOSYSTEM=1/);
+    assert.match(result.stdout, /AUTHORIZATION: bearer ephemeral-token/);
+  } finally {
+    for (const [key, value] of Object.entries(inherited)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    await rm(directory, { recursive: true, force: true });
+  }
 });

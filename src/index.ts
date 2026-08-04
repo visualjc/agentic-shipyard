@@ -55,13 +55,15 @@ export type { ContextAdapterRequest, ContextAuthorityResolver, ContextDispatchEx
 // Command-scoped GitHub API and Git-transport boundaries.
 export { GitHubAuthorityError, redactGitHubCredential } from "./github/errors.js";
 export type { GitHubAuthorityErrorCode } from "./github/errors.js";
-export { verifyGitHubActor } from "./github/authority.js";
-export { GitHubRestAdapter } from "./adapters/github-rest.js";
-export type { GitHubApiCredential, GitHubApiCredentialResolver, GitHubRestClient, GitHubRestClientFactory, GitHubRestMethod, GitHubRestRequest, GitHubRestTransport, GitHubRestTransportRequest, GitHubRestTransportResponse, VerifiedGitHubSession } from "./github/types.js";
+export { FetchGitHubRestTransport, GitHubRestAdapter } from "./adapters/github-rest.js";
+export type { GitHubApiCredential, GitHubApiCredentialResolver, GitHubRestClient, GitHubRestClientFactory, GitHubRestMethod, GitHubRestRequest, GitHubRestTransport, GitHubRestTransportRequest, GitHubRestTransportResponse } from "./github/types.js";
 export { GitHubTrackerError, stableShipyardMarker } from "./github/markers.js";
 export type { GitHubTrackerErrorCode } from "./github/markers.js";
 export { trackDevelopmentRecords } from "./github/tracker.js";
-export type { DevelopmentIssueCheckpoint, DevelopmentIssueRequest, DevelopmentPullRequestCheckpoint, DevelopmentPullRequestRequest, DevelopmentRecordAuthority, DevelopmentRecordMutationGuard, DevelopmentRecordRequest, DevelopmentRecordResume, DevelopmentRecordsCheckpoint } from "./github/tracker.js";
+export type { DevelopmentIssueCheckpoint, DevelopmentIssueRequest, DevelopmentPullRequestCheckpoint, DevelopmentPullRequestRequest, DevelopmentRecordAuthority, DevelopmentRecordRequest, DevelopmentRecordResume, DevelopmentRecordsCheckpoint } from "./github/tracker.js";
+export { DevelopmentRecordGuard } from "./github/tracking-guard.js";
+export { ActiveDevelopmentTrackingAuthorityResolver } from "./github/tracking-authority.js";
+export type { DevelopmentTrackingAuthority, DevelopmentTrackingAuthorityResolver } from "./github/tracking-authority.js";
 export { githubTrackerStatusContributor } from "./github/status.js";
 export type { GitHubTrackerStatus } from "./github/status.js";
 export { GitTransportError, GitTransportService, redactGitTransportDiagnostic } from "./github/git-transport.js";

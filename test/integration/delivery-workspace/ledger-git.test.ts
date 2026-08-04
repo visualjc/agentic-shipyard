@@ -79,10 +79,11 @@ test("preserves record bytes, atomically rejects a concurrent stale writer, and 
 
 test("ignores hostile inherited Git repository-control environment", async () => {
   const primary = await repository(); const redirected = await repository();
-  const inherited = Object.fromEntries(["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"].map((key) => [key, process.env[key]]));
+  const inherited = Object.fromEntries(["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "DEVELOPER_DIR", "SDKROOT", "TOOLCHAINS"].map((key) => [key, process.env[key]]));
   try {
     process.env.GIT_DIR = join(redirected, ".git"); process.env.GIT_WORK_TREE = redirected; process.env.GIT_INDEX_FILE = join(redirected, "index");
     process.env.GIT_OBJECT_DIRECTORY = join(redirected, ".git", "objects"); process.env.GIT_CONFIG_GLOBAL = join(redirected, "config"); process.env.GIT_CONFIG_COUNT = "1"; process.env.GIT_CONFIG_KEY_0 = "core.bare"; process.env.GIT_CONFIG_VALUE_0 = "true";
+    process.env.DEVELOPER_DIR = "/definitely-not-a-developer-directory"; process.env.SDKROOT = "/definitely-not-an-sdk"; process.env.TOOLCHAINS = "hostile-toolchain";
     const ledger = new GitLedgerStore(primary);
     await ledger.transact({ expectedHead: undefined, writes: [{ path: "records/safe", contents: "safe" }] });
     for (const key of Object.keys(inherited)) delete process.env[key];

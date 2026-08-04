@@ -6,17 +6,30 @@ a Git transport credential is accepted only by the Git transport service.
 Neither credential belongs in a profile, binding, remote URL, command argument,
 ledger, status projection, or diagnostic.
 
-For each authenticated Git child process, Shipyard disables inherited
-`credential.helper` configuration with command-scoped Git configuration. The
-transport token is supplied through that child process's environment as a
-scoped Git HTTP authorization header, with terminal prompting disabled. The
-runner removes inherited `GIT_*`, `GH_*`, and `GITHUB_*` variables before it
-starts Git, so those variables cannot supplement this credential boundary. The
-environment is not persisted and Shipyard does not run `gh auth`, `gh auth
-switch`, or any other command that changes the global GitHub CLI account.
+For each authenticated Git child process, Shipyard first reads the named
+remote's raw local URL with includes disabled and no credential present. It
+requires a credential-free `https://github.com/<owner>/<repo>[.git]` URL, then
+places only that URL in a disposable bare Git directory. The credentialed
+process uses that directory as its Git directory, so repository, system, and
+global configuration cannot provide helpers, proxies, URL rewrites, upload-pack
+commands, or extra headers. The transport token is supplied only through that
+child process's environment as a scoped Git HTTP authorization header, with an
+empty preceding header value that resets lower-priority multi-valued headers
+and terminal prompting disabled.
+
+Every production Git child receives a minimal allowlisted environment: it does
+not inherit `GIT_*`, `GH_*`, `GITHUB_*`, `DEVELOPER_DIR`, `SDKROOT`, or
+`TOOLCHAINS`. That matters on macOS, where `/usr/bin/git` is an xcrun shim and
+developer-tool variables could otherwise select another executable. System and
+global Git configuration are explicitly disabled. The environment is not
+persisted and Shipyard does not run `gh auth`, `gh auth switch`, or any other
+command that changes the global GitHub CLI account.
 
 The Node runner invokes a canonical absolute Git executable (`/usr/bin/git` by
-default), never a bare `git` looked up through `PATH`. Deployments and tests
+default), never a bare `git` looked up through `PATH`. On macOS Shipyard relies
+on the platform-default developer toolchain after clearing developer selection
+variables; deployments that require a non-default Git should pass its final,
+existing absolute executable explicitly. Deployments and tests
 that use another executable must provide its existing absolute path to the
 runner factory; relative paths and command names are rejected.
 
@@ -41,3 +54,13 @@ Before and after a fixture run, an operator may inspect `gh auth status`; the
 fixture must not switch or otherwise mutate its active account. Never record
 the credential, raw command environment, or a remote containing credentials in
 fixture evidence.
+
+The executable fixture harness is enabled only with
+`SHIPYARD_PRIVATE_GITHUB_FIXTURE=1` plus an explicit disposable
+`SHIPYARD_PRIVATE_GITHUB_REPOSITORY=owner/name`,
+`SHIPYARD_PRIVATE_GITHUB_TOKEN`, and `SHIPYARD_PRIVATE_GITHUB_ACTOR`. It uses
+the production REST transport to verify `/user`, creates one UUID-marked issue
+in that exact repository, validates its ID/URL, and closes it in `finally`.
+It is skipped by the normal test command, makes zero default-suite network
+calls, never invokes `gh`, and refuses any repository value containing a
+credential or URL.

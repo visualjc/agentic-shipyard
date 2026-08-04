@@ -35,15 +35,21 @@ function commandFor(repositoryPath: string, args: readonly string[], credential:
   assertSafeNetworkCommand(args);
   return {
     executable: DEFAULT_NODE_GIT_EXECUTABLE,
-    // -c has command scope, so a global/system/local helper cannot win.
-    argv: ["-C", repositoryPath, "-c", "credential.helper=", ...args],
+    // The runner resolves this named remote into a disposable Git directory,
+    // so no repository/system/global configuration reaches the credentialed
+    // child. Its config contains only this remote URL.
+    argv: ["-C", repositoryPath, ...args],
     env: {
-      // This scoped header is consumed by Git only in this child process.
-      GIT_CONFIG_COUNT: "1",
+      // An empty value resets all lower-priority extraheaders before this
+      // one scoped authorization header is applied.
+      GIT_CONFIG_COUNT: "2",
       GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
-      GIT_CONFIG_VALUE_0: `AUTHORIZATION: bearer ${credential.token}`,
+      GIT_CONFIG_VALUE_0: "",
+      GIT_CONFIG_KEY_1: "http.https://github.com/.extraheader",
+      GIT_CONFIG_VALUE_1: `AUTHORIZATION: bearer ${credential.token}`,
       GIT_TERMINAL_PROMPT: "0",
     },
+    isolatedRemote: { repositoryPath, remote: args[1]! },
   };
 }
 

@@ -7,7 +7,7 @@ import { LedgerError } from "../ledger/errors.js";
 import { applyLedgerTransaction, validLedgerPath } from "../ledger/transaction.js";
 import type { LedgerSnapshot, LedgerStore, LedgerTransaction } from "../ledger/types.js";
 import type { PinnedLedgerReader } from "../context/types.js";
-import { canonicalGitExecutable } from "./git-transport.js";
+import { canonicalGitExecutable, sanitizedGitEnvironment } from "./git-transport.js";
 
 const execFileAsync = promisify(execFile);
 const zeroOid = "0".repeat(40);
@@ -157,9 +157,7 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
 
 /** Git repository selection must come only from the explicit -C argument. */
 function gitEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = { ...process.env };
-  for (const key of Object.keys(environment)) if (key.startsWith("GIT_")) delete environment[key];
-  return { ...environment, ...extra, GIT_AUTHOR_NAME: "shipyard", GIT_AUTHOR_EMAIL: "shipyard@local", GIT_COMMITTER_NAME: "shipyard", GIT_COMMITTER_EMAIL: "shipyard@local" };
+  return sanitizedGitEnvironment({ ...extra, GIT_AUTHOR_NAME: "shipyard", GIT_AUTHOR_EMAIL: "shipyard@local", GIT_COMMITTER_NAME: "shipyard", GIT_COMMITTER_EMAIL: "shipyard@local" });
 }
 
 function unavailable(stderr: string): LedgerError { return new LedgerError("ledger-unavailable", `Git ledger operation failed${stderr ? `: ${stderr.trim()}` : ""}`); }

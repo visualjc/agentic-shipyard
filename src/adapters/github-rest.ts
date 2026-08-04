@@ -1,6 +1,18 @@
 import { GitHubAuthorityError, redactGitHubCredential } from "../github/errors.js";
 import type { GitHubApiCredential, GitHubApiCredentialResolver, GitHubRestClient, GitHubRestClientFactory, GitHubRestRequest, GitHubRestTransport } from "../github/types.js";
 
+/** Production fetch transport; default tests inject fakes and never call it. */
+export class FetchGitHubRestTransport implements GitHubRestTransport {
+  constructor(private readonly baseUrl = "https://api.github.com") {}
+  async request(request: import("../github/types.js").GitHubRestTransportRequest) {
+    const headers = request.body === undefined ? request.headers : { ...request.headers, "content-type": "application/json" };
+    const response = await fetch(`${this.baseUrl}${request.path}`, { method: request.method, headers, body: request.body === undefined ? undefined : JSON.stringify(request.body) });
+    let body: unknown;
+    try { body = await response.json(); } catch { body = undefined; }
+    return { status: response.status, body };
+  }
+}
+
 /** Credential-scoped REST adapter. It deliberately has no dependency on the gh CLI. */
 export class GitHubRestAdapter implements GitHubRestClient, GitHubRestClientFactory {
   constructor(

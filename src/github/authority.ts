@@ -1,5 +1,5 @@
 import { GitHubAuthorityError } from "./errors.js";
-import type { GitHubApiCredential, GitHubApiCredentialResolver, GitHubRestClient, GitHubRestClientFactory, GitHubRestRequest, VerifiedGitHubSession } from "./types.js";
+import type { GitHubApiCredential, GitHubApiCredentialResolver, GitHubRestClient, GitHubRestClientFactory, GitHubRestRequest, GitHubTrackerSession, VerifiedGitHubSession } from "./types.js";
 
 type GitHubViewer = { login?: unknown };
 
@@ -12,6 +12,11 @@ export async function verifyGitHubActor(
   credentials: GitHubApiCredentialResolver,
   client: GitHubRestClientFactory,
 ): Promise<VerifiedGitHubSession> {
+  const scopedClient = await verifiedClient(expectedActorLogin, credentials, client);
+  return { actorLogin: expectedActorLogin, request: <T>(request: GitHubRestRequest & { method: "GET" }) => scopedClient.request<T>(request) };
+}
+
+async function verifiedClient(expectedActorLogin: string, credentials: GitHubApiCredentialResolver, client: GitHubRestClientFactory): Promise<GitHubRestClient> {
   let credential: GitHubApiCredential | undefined;
   try {
     credential = await credentials.resolve();
@@ -42,12 +47,16 @@ export async function verifyGitHubActor(
     throw new GitHubAuthorityError("actor-mismatch", "GitHub authenticated actor does not match the configured profile actor.");
   }
 
-  return {
-    actorLogin: expectedActorLogin,
-    request: <T>(request: GitHubRestRequest) => scopedClient.request<T>(request),
-    write: <T>(request: GitHubRestRequest) => {
-      if (request.method === "GET") throw new GitHubAuthorityError("request-failed", "GitHub writes must use a mutation method.");
-      return scopedClient.request<T>(request);
-    },
-  };
+  return scopedClient;
+}
+
+/** Internal tracker capability: repository is fixed when actor verification occurs. */
+export async function verifyTrackerActor(expected: string, repository: { owner: string; name: string }, credentials: GitHubApiCredentialResolver, client: GitHubRestClientFactory): Promise<GitHubTrackerSession> {
+  const scoped = await verifiedClient(expected, credentials, client);
+  const base = `/repos/${repository.owner}/${repository.name}`;
+  return { request: <T>(request: GitHubRestRequest) => {
+    const allowed = (request.method === "GET" && (request.path.startsWith(`${base}/issues?state=all&per_page=100&page=`) || request.path.startsWith(`${base}/pulls?state=all&per_page=100&page=`))) || (request.method === "POST" && (request.path === `${base}/issues` || request.path === `${base}/pulls`));
+    if (!allowed) throw new GitHubAuthorityError("request-failed", "GitHub tracker request is outside the verified development-repository policy.");
+    return scoped.request<T>(request);
+  } };
 }

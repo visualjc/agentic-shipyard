@@ -10,4 +10,6 @@ must call this boundary immediately before its Git transport invocation.
 
 Ledger and local workspace Git operations pin the same canonical, absolute Git
 executable as the authenticated transport runner. A PATH-prepended executable
-therefore cannot take control of a ledger update or worktree mutation.
+therefore cannot take control of a ledger update or worktree mutation. Their
+children also use the shared minimal environment, clearing developer-tool
+selection and system/global Git configuration before invoking the platform Git.

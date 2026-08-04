@@ -1,16 +1,13 @@
-import type { RepositoryRef, Topology } from "../contracts/types.js";
-import type { BoundProfileAuthorityResolver } from "../profile/bound-authority.js";
-import { verifyGitHubActor } from "./authority.js";
-import type { GitHubApiCredentialResolver, GitHubRestClientFactory, VerifiedGitHubSession } from "./types.js";
+import { verifyTrackerActor } from "./authority.js";
+import type { GitHubApiCredentialResolver, GitHubRestClientFactory, GitHubTrackerSession } from "./types.js";
 import { GitHubTrackerError, stableShipyardMarker } from "./markers.js";
+import type { DevelopmentTrackingAuthorityResolver } from "./tracking-authority.js";
+import { DevelopmentRecordGuard } from "./tracking-guard.js";
 
 export type DevelopmentIssueRequest = { title: string; body: string };
 export type DevelopmentPullRequestRequest = {
   title: string;
   body: string;
-  head: string;
-  base: string;
-  expectedHeadSha: string;
 };
 
 /** Optional persisted facts supplied by a caller that is resuming a prior run. */
@@ -27,15 +24,11 @@ export type DevelopmentRecordRequest = {
 export type DevelopmentRecordAuthority = {
   /** Local path is identity input only; the resolver chooses actor and repository. */
   repositoryPath: string;
-  boundAuthority: BoundProfileAuthorityResolver;
+  trackingAuthority: DevelopmentTrackingAuthorityResolver;
+  guard: DevelopmentRecordGuard;
   credentials: GitHubApiCredentialResolver;
   client: GitHubRestClientFactory;
 };
-
-/** Durable caller-owned serialization; tracking never mutates outside this seam. */
-export interface DevelopmentRecordMutationGuard {
-  exclusive<T>(repositoryPath: string, deliveryId: string, operation: () => Promise<T>): Promise<T>;
-}
 
 export type DevelopmentIssueCheckpoint = {
   state: "discovered" | "created";
@@ -61,7 +54,7 @@ type ProviderRecord = {
   html_url?: unknown;
   body?: unknown;
   pull_request?: unknown;
-  head?: { sha?: unknown; ref?: unknown };
+  head?: { sha?: unknown; ref?: unknown; repo?: unknown };
   base?: { ref?: unknown };
 };
 type LocatedRecord = { state: "discovered" | "created"; record: ProviderRecord };
@@ -73,60 +66,54 @@ const MAX_DISCOVERY_PAGES = 100;
  */
 export async function trackDevelopmentRecords(
   authority: DevelopmentRecordAuthority,
-  mutationGuard: DevelopmentRecordMutationGuard,
   request: DevelopmentRecordRequest,
 ): Promise<DevelopmentRecordsCheckpoint> {
-  return mutationGuard.exclusive(authority.repositoryPath, request.deliveryId, async () => {
-    assertExpectedHeadSha(request.pullRequest.expectedHeadSha);
+  return authority.guard.run(authority.repositoryPath, request.deliveryId, async () => {
     // Resolve inside the durable mutation boundary so resume/checkpoint writes
     // cannot reuse a profile or binding that changed while waiting for the lock.
-    const bound = await authority.boundAuthority.resolve(authority.repositoryPath, "review");
-    const session = await verifyGitHubActor(bound.actorLogin, authority.credentials, authority.client);
-    const repository = developmentRepository(bound.topology);
+    const trusted = await authority.trackingAuthority.resolve(authority.repositoryPath, request.deliveryId);
+    const repository = trusted.repository;
+    const tracker = await verifyTrackerActor(trusted.actorLogin, repository, authority.credentials, authority.client);
     const marker = stableShipyardMarker(request.deliveryId);
     const basePath = `/repos/${repository.owner}/${repository.name}`;
 
     // Fully discover and validate the pair before the first write. This prevents
     // an unsafe PR state from leaving a newly-created issue behind.
     const [foundIssue, foundPullRequest] = await Promise.all([
-      discover(session, `${basePath}/issues`, marker, request.resume?.issueId, "issue", isIssueRecord),
-      discover(session, `${basePath}/pulls`, marker, request.resume?.pullRequestId, "pull request", isProviderRecord),
+      discover(tracker, `${basePath}/issues`, marker, request.resume?.issueId, "issue", isIssueRecord),
+      discover(tracker, `${basePath}/pulls`, marker, request.resume?.pullRequestId, "pull request", isProviderRecord),
     ]);
-    if (foundPullRequest) assertPullRequestMatches(foundPullRequest, request.pullRequest);
+    if (foundPullRequest) assertPullRequestMatches(foundPullRequest, trusted);
     const issue = foundIssue
       ? { state: "discovered" as const, record: foundIssue }
-      : await createIssue(session, `${basePath}/issues`, marker, request.issue);
+      : await createIssue(tracker, `${basePath}/issues`, marker, request.issue);
     const pullRequest = foundPullRequest
       ? { state: "discovered" as const, record: foundPullRequest }
-      : await createPullRequest(session, `${basePath}/pulls`, marker, request.pullRequest);
-    assertPullRequestMatches(pullRequest.record, request.pullRequest);
+      : await createPullRequest(tracker, `${basePath}/pulls`, marker, request.pullRequest, trusted);
+    assertPullRequestMatches(pullRequest.record, trusted);
 
     return {
       marker,
-      actorLogin: session.actorLogin,
+      actorLogin: trusted.actorLogin,
       issue: checkpoint(issue),
-      pullRequest: { ...checkpoint(pullRequest), expectedHeadSha: request.pullRequest.expectedHeadSha },
+      pullRequest: { ...checkpoint(pullRequest), expectedHeadSha: trusted.expectedHeadSha },
     };
   });
 }
 
-function developmentRepository(topology: Topology): RepositoryRef {
-  return topology.kind === "staged-pair" ? topology.development : topology.repository;
-}
-
-async function createIssue(session: VerifiedGitHubSession, path: string, marker: string, input: DevelopmentIssueRequest): Promise<LocatedRecord> {
-  const record = await session.write<ProviderRecord>({ method: "POST", path, body: { title: input.title, body: withMarker(input.body, marker) } });
+async function createIssue(session: GitHubTrackerSession, path: string, marker: string, input: DevelopmentIssueRequest): Promise<LocatedRecord> {
+  const record = await session.request<ProviderRecord>({ method: "POST", path, body: { title: input.title, body: withMarker(input.body, marker) } });
   assertRecord(record, "issue");
   return { state: "created", record };
 }
 
-async function createPullRequest(session: VerifiedGitHubSession, path: string, marker: string, input: DevelopmentPullRequestRequest): Promise<LocatedRecord> {
-  const record = await session.write<ProviderRecord>({ method: "POST", path, body: { title: input.title, body: withMarker(input.body, marker), head: input.head, base: input.base } });
+async function createPullRequest(session: GitHubTrackerSession, path: string, marker: string, input: DevelopmentPullRequestRequest, trusted: Awaited<ReturnType<DevelopmentTrackingAuthorityResolver["resolve"]>>): Promise<LocatedRecord> {
+  const record = await session.request<ProviderRecord>({ method: "POST", path, body: { title: input.title, body: withMarker(input.body, marker), head: trusted.head, base: trusted.base } });
   assertRecord(record, "pull request");
   return { state: "created", record };
 }
 
-async function discover(session: VerifiedGitHubSession, path: string, marker: string, expectedId: string | undefined, label: string, accepts: (value: unknown) => value is ProviderRecord): Promise<ProviderRecord | undefined> {
+async function discover(session: GitHubTrackerSession, path: string, marker: string, expectedId: string | undefined, label: string, accepts: (value: unknown) => value is ProviderRecord): Promise<ProviderRecord | undefined> {
   let record: ProviderRecord | undefined;
   let exhausted = false;
   for (let page = 1; page <= MAX_DISCOVERY_PAGES; page += 1) {
@@ -183,11 +170,11 @@ function providerId(record: ProviderRecord): string | undefined {
   return undefined;
 }
 
-function assertPullRequestMatches(record: ProviderRecord, expected: DevelopmentPullRequestRequest): void {
+function assertPullRequestMatches(record: ProviderRecord, expected: Awaited<ReturnType<DevelopmentTrackingAuthorityResolver["resolve"]>>): void {
   if (typeof record.head?.sha !== "string" || record.head.sha !== expected.expectedHeadSha) {
     throw new GitHubTrackerError("head-sha-mismatch", "The development pull request head does not match the requested expected SHA.");
   }
-  if (typeof record.head?.ref !== "string" || record.head.ref !== expected.head) {
+  if (typeof record.head?.ref !== "string" || record.head.ref !== expected.head || !sameRepository(record.head.repo, expected.repository)) {
     throw new GitHubTrackerError("head-ref-mismatch", "The development pull request head ref does not match the requested head ref.");
   }
   if (typeof record.base?.ref !== "string" || record.base.ref !== expected.base) {
@@ -195,10 +182,10 @@ function assertPullRequestMatches(record: ProviderRecord, expected: DevelopmentP
   }
 }
 
-function assertExpectedHeadSha(expected: string): void {
-  if (!/^[0-9a-fA-F]{40}$/.test(expected)) {
-    throw new GitHubTrackerError("invalid-head-sha", "The requested expected head SHA must be an exact Git commit SHA.");
-  }
+function sameRepository(value: unknown, expected: { owner: string; name: string }): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const repo = value as { name?: unknown; full_name?: unknown; owner?: { login?: unknown } };
+  return repo.name === expected.name && repo.full_name === `${expected.owner}/${expected.name}` && repo.owner?.login === expected.owner;
 }
 
 function withMarker(body: string, marker: string): string { return `${body}\n\n${marker}`; }

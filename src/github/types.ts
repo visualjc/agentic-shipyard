@@ -39,6 +39,8 @@ export interface GitHubRestClientFactory {
 
 export type VerifiedGitHubSession = {
   actorLogin: string;
-  request<T>(request: GitHubRestRequest): Promise<T>;
-  write<T>(request: GitHubRestRequest): Promise<T>;
+  request<T>(request: GitHubRestRequest & { method: "GET" }): Promise<T>;
 };
+
+/** Narrow mutation capability created only after actor verification. */
+export type GitHubTrackerSession = { request<T>(request: GitHubRestRequest): Promise<T> };

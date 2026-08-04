@@ -188,9 +188,10 @@ test("does not adopt a foreign branch created after the durable initial record",
 test("workspace Git operations ignore hostile inherited repository-control variables", async () => {
   const value = await fixture();
   const redirected = await fixture();
-  const inherited = Object.fromEntries(["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_CONFIG_GLOBAL"].map((key) => [key, process.env[key]]));
+  const inherited = Object.fromEntries(["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_CONFIG_GLOBAL", "DEVELOPER_DIR", "SDKROOT", "TOOLCHAINS"].map((key) => [key, process.env[key]]));
   try {
     process.env.GIT_DIR = join(redirected.repository, ".git"); process.env.GIT_WORK_TREE = redirected.repository; process.env.GIT_INDEX_FILE = join(redirected.repository, "index"); process.env.GIT_OBJECT_DIRECTORY = join(redirected.repository, ".git", "objects"); process.env.GIT_CONFIG_GLOBAL = join(redirected.root, "config");
+    process.env.DEVELOPER_DIR = "/definitely-not-a-developer-directory"; process.env.SDKROOT = "/definitely-not-an-sdk"; process.env.TOOLCHAINS = "hostile-toolchain";
     const request = value.request("d-1"); await value.service.createOrResume(request);
     assert.equal((await nodeWorkspaceGit.worktreeIdentity(request.worktreePath))?.commonDirectory, value.commonDirectory);
     assert.equal(await nodeWorkspaceGit.branchExists(redirected.repository, request.branch), false);

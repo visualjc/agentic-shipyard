@@ -15,11 +15,15 @@ to repeat and requires manual review.
 
 Tracking resolves the active binding and its fingerprint-matched named profile
 *inside* the durable mutation guard. The caller supplies a local repository
-path and injectable credential/network seams, never an actor login or a target
-topology. The resolved profile selects both the command-scoped actor and the
-only development repository. If the profile, fingerprint, or topology changed
-while waiting to resume, Shipyard stops before the first provider request; do
-not recover by substituting a repository or actor in the caller.
+path and injectable credential/network seams, never an actor login, PR ref,
+SHA, or target topology. The active delivery workspace supplies the canonical
+`shipyard/<delivery-id>` head, its exact worktree SHA, and the bound
+development repository default branch. Returned PR heads must name that same
+development repository; fork-qualified or noncanonical refs stop before a
+repeat. The guard is a common-directory/delivery-keyed durable lock, so a
+second process cannot race discovery and creation. If profile, fingerprint,
+topology, workspace, or head changed while waiting to resume, Shipyard stops
+before the first provider request; do not recover by substituting caller input.
 
 The tracker identifies its records only by its exact marker on a standalone
 body line. It excludes pull requests from GitHub's `/issues` listing and stores

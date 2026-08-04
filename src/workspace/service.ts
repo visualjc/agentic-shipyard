@@ -9,7 +9,7 @@ import { LedgerError } from "../ledger/errors.js";
 import type { LedgerStore } from "../ledger/types.js";
 import { MutationLockService } from "../locking/mutation-lock.js";
 import { WorkspaceError } from "./errors.js";
-import { canonicalGitExecutable } from "../adapters/git-transport.js";
+import { canonicalGitExecutable, sanitizedGitEnvironment } from "../adapters/git-transport.js";
 
 const execFileAsync = promisify(execFile);
 // Never allow a worktree mutation to resolve a bare `git` through PATH.
@@ -207,9 +207,7 @@ function sameProvenance(record: InitialDeliveryLedgerRecord, request: CreateOrRe
   return record.deliveryId === request.deliveryId && record.commonDirectory === commonDirectory && record.branch === request.branch && record.payload === request.initialLedgerContents;
 }
 function workspaceGitEnvironment(): NodeJS.ProcessEnv {
-  const environment: NodeJS.ProcessEnv = { ...process.env };
-  for (const key of Object.keys(environment)) if (key.startsWith("GIT_")) delete environment[key];
-  return environment;
+  return sanitizedGitEnvironment();
 }
 async function gitRequired(repositoryPath: string, args: string[]): Promise<string> {
   const result = await git(repositoryPath, args);
