@@ -12,7 +12,7 @@ let prompt = "";
 for await (const chunk of process.stdin) prompt += chunk;
 const bundlePath = /sealed Shipyard bundle at (.+?\.json)\./.exec(prompt)?.[1];
 const bundle = JSON.parse(await readFile(bundlePath, "utf8"));
-const envelopePath = bundle.envelope.adapter.envelopePath;
+const envelopePath = bundle.envelope?.adapter?.envelopePath;
 const request = bundle.request;
 if(race)execFileSync("/usr/bin/git",["-C",race.source,"checkout","--detach","--force",race.returnSha],{stdio:"ignore"});
 let reviewTarget;try{reviewTarget=await readFile(join(process.cwd(),"review-target.txt"),"utf8");}catch{}
