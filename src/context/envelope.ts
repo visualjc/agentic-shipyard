@@ -2,10 +2,10 @@ import { CANONICAL_LEDGER_REF, CONTEXT_ROLES, type ContextEnvelope, type Context
 import type { RepositoryRef, Topology } from "../contracts/types.js";
 import { ContextError } from "./errors.js";
 
-const allowedRecords: Readonly<Record<ContextRole, readonly string[]>> = {
-  implementer: ["contract.md", "assigned-task.md"],
-  reviewer: ["intent.md", "acceptance.json", "review.json"],
-  status: [],
+const allowedRecords: Readonly<Record<ContextRole, (deliveryId:string)=>readonly string[]>> = {
+  implementer: deliveryId=>[`deliveries/${deliveryId}/contract.md`,`deliveries/${deliveryId}/assigned-task.md`],
+  reviewer: deliveryId=>[`deliveries/${deliveryId}/intent.md`,`deliveries/${deliveryId}/evidence/manifest.json`,`deliveries/${deliveryId}/evidence/acceptance.json`,`deliveries/${deliveryId}/review.json`],
+  status: ()=>[],
 };
 
 /** Creates a canonical envelope; callers cannot choose or supplement a role's records. */
@@ -28,6 +28,7 @@ export function createEnvelope(input: ContextEnvelopeInput): ContextEnvelope {
     productSha: snapshot.productSha,
     ledgerRef: snapshot.ledgerRef,
     ledgerSha: snapshot.ledgerSha,
+    evidenceManifestDigest:snapshot.evidenceManifestDigest,
     objectFormat: snapshot.objectFormat,
     records: [...records],
     adapter: { host: snapshot.host, role: snapshot.role, envelopePath: snapshot.envelopePath, repoRoot: snapshot.repoRoot },
@@ -41,7 +42,7 @@ export function createEnvelope(input: ContextEnvelopeInput): ContextEnvelope {
 export function validateContextEnvelope(value: unknown): ContextEnvelope {
   try {
     const root = snapshotObject(value);
-    requireExactKeys(root, ["schemaVersion", "profile", "topology", "repository", "deliveryId", "host", "role", "productBranch", "productSha", "ledgerRef", "ledgerSha", "objectFormat", "records", "adapter"]);
+    requireExactKeys(root, ["schemaVersion", "profile", "topology", "repository", "deliveryId", "host", "role", "productBranch", "productSha", "ledgerRef", "ledgerSha", "evidenceManifestDigest", "objectFormat", "records", "adapter"]);
     const schemaVersion = root.get("schemaVersion");
     const role = root.get("role");
     const adapter = snapshotObject(root.get("adapter"));
@@ -50,7 +51,7 @@ export function validateContextEnvelope(value: unknown): ContextEnvelope {
     if (schemaVersion !== 1 || !CONTEXT_ROLES.includes(role as ContextRole) || !exactKeys(adapter, ["host", "role", "envelopePath", "repoRoot"]) || adapter.get("host") !== host || adapter.get("role") !== role) invalid();
     return createEnvelope({
       profile: text(root.get("profile")), topology: root.get("topology") as ContextEnvelope["topology"], repository: root.get("repository") as ContextEnvelope["repository"],
-      deliveryId: text(root.get("deliveryId")), host: text(host), role: role as ContextRole, productBranch: text(root.get("productBranch")), productSha: text(root.get("productSha")), ledgerRef: text(root.get("ledgerRef")), ledgerSha: text(root.get("ledgerSha")), objectFormat: objectFormat(root.get("objectFormat")),
+      deliveryId: text(root.get("deliveryId")), host: text(host), role: role as ContextRole, productBranch: text(root.get("productBranch")), productSha: text(root.get("productSha")), ledgerRef: text(root.get("ledgerRef")), ledgerSha: text(root.get("ledgerSha")), evidenceManifestDigest:text(root.get("evidenceManifestDigest")), objectFormat: objectFormat(root.get("objectFormat")),
       envelopePath: text(adapter.get("envelopePath")), repoRoot: text(adapter.get("repoRoot")), records: recordsSnapshot(records),
     });
   } catch (error) {
@@ -64,12 +65,12 @@ export function allowedRecordPaths(deliveryId: string, role: ContextRole): reado
   return Object.freeze(recordsFor(deliveryId, role));
 }
 
-function recordsFor(deliveryId: string, role: ContextRole): string[] { return allowedRecords[role].map((name) => `deliveries/${deliveryId}/${name}`); }
+function recordsFor(deliveryId: string, role: ContextRole): string[] { return [...allowedRecords[role](deliveryId)]; }
 function sameRecords(actual: readonly string[], expected: readonly string[]): boolean { return actual.length === expected.length && actual.every((path, index) => path === expected[index]); }
-type InputSnapshot = Readonly<{ profile: string; topology: Topology; repository: RepositoryRef; deliveryId: string; host: string; role: ContextRole; productBranch: string; productSha: string; ledgerRef: string; ledgerSha: string; objectFormat: "sha1" | "sha256"; envelopePath: string; repoRoot: string; records?: readonly string[] }>;
+type InputSnapshot = Readonly<{ profile: string; topology: Topology; repository: RepositoryRef; deliveryId: string; host: string; role: ContextRole; productBranch: string; productSha: string; ledgerRef: string; ledgerSha: string; evidenceManifestDigest:string; objectFormat: "sha1" | "sha256"; envelopePath: string; repoRoot: string; records?: readonly string[] }>;
 function validateInput(input: ContextEnvelopeInput): InputSnapshot {
   const root = snapshotObject(input);
-  requireExactKeys(root, ["profile", "topology", "repository", "deliveryId", "host", "role", "productBranch", "productSha", "ledgerRef", "ledgerSha", "objectFormat", "envelopePath", "repoRoot", "records"], ["records"]);
+  requireExactKeys(root, ["profile", "topology", "repository", "deliveryId", "host", "role", "productBranch", "productSha", "ledgerRef", "ledgerSha", "evidenceManifestDigest", "objectFormat", "envelopePath", "repoRoot", "records"], ["records"]);
   const profile = text(root.get("profile"));
   const topologySnapshot = topology(root.get("topology"));
   const repositorySnapshot = repository(root.get("repository"));
@@ -80,6 +81,7 @@ function validateInput(input: ContextEnvelopeInput): InputSnapshot {
   const productSha = text(root.get("productSha"));
   const ledgerRef = text(root.get("ledgerRef"));
   const ledgerSha = text(root.get("ledgerSha"));
+  const evidenceManifestDigest=text(root.get("evidenceManifestDigest"));
   const envelopePath = text(root.get("envelopePath"));
   const repoRoot = text(root.get("repoRoot"));
   const format = objectFormat(root.get("objectFormat"));
@@ -90,8 +92,8 @@ function validateInput(input: ContextEnvelopeInput): InputSnapshot {
   if (!sameRepository(repositorySnapshot, deliveryRepository(topologySnapshot))) {
     throw new ContextError("context-repository-mismatch", "The envelope repository must be the delivery repository selected by its topology.");
   }
-  if (!fullObjectId(format, productSha) || !fullObjectId(format, ledgerSha) || ledgerRef !== CANONICAL_LEDGER_REF) invalid();
-  return deepFreeze({ profile, topology: topologySnapshot, repository: repositorySnapshot, deliveryId, host, role, productBranch, productSha, ledgerRef, ledgerSha, objectFormat: format, envelopePath, repoRoot, records });
+  if (!fullObjectId(format, productSha) || !fullObjectId(format, ledgerSha) || !/^[a-f0-9]{64}$/.test(evidenceManifestDigest) || ledgerRef !== CANONICAL_LEDGER_REF) invalid();
+  return deepFreeze({ profile, topology: topologySnapshot, repository: repositorySnapshot, deliveryId, host, role, productBranch, productSha, ledgerRef, ledgerSha, evidenceManifestDigest, objectFormat: format, envelopePath, repoRoot, records });
 }
 function exactKeys(value: ReadonlyMap<string, unknown>, keys: readonly string[]): boolean { return value.size === keys.length && [...value.keys()].every((key) => keys.includes(key)); }
 function text(value: unknown): string { if (!textOk(value)) invalid(); return value; }

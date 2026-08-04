@@ -14,7 +14,7 @@ development repository for a staged pair), and its ledger ref is always
 | Role | Exact paths for delivery `<id>` |
 | --- | --- |
 | Implementer | `deliveries/<id>/contract.md`, `deliveries/<id>/assigned-task.md` |
-| Reviewer | `deliveries/<id>/intent.md`, `deliveries/<id>/acceptance.json`, `deliveries/<id>/review.json` |
+| Reviewer | `deliveries/<id>/intent.md`, `deliveries/<id>/evidence/manifest.json`, `deliveries/<id>/evidence/acceptance.json`, `deliveries/<id>/review.json` |
 | Status | none |
 
 The allowlist is constructed by Shipyard. Callers cannot add paths, and an
@@ -48,6 +48,14 @@ pinned-read seam:
 ```ts
 reader.read(envelope.ledgerSha, envelope.records)
 ```
+
+The capability and envelope also bind the SHA-256 digest of the delivery's
+canonical evidence manifest. Planning/delivery code persists that manifest
+once at `deliveries/<id>/evidence/manifest.json`; it is immutable, versioned,
+and may describe any issue ID rather than a compiled issue registry. Reviewer
+context is rejected unless the exact pinned manifest bytes are canonical and
+match the bound digest. Each context record is limited to 1,000,000 UTF-8 bytes
+and the complete role context to 2,000,000 bytes before it is copied or sealed.
 
 This preserves auditability even after later ledger checkpoints. `GitLedgerStore`
 implements the narrow `PinnedLedgerReader` interface by resolving the supplied

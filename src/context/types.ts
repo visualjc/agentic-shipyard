@@ -24,6 +24,7 @@ export type ContextDispatchExpectation = Readonly<{
   productSha: string;
   ledgerRef: string;
   ledgerSha: string;
+  evidenceManifestDigest: string;
   objectFormat: GitObjectFormat;
 }>;
 
@@ -43,6 +44,7 @@ export type ContextEnvelope = Readonly<{
   productSha: string;
   ledgerRef: string;
   ledgerSha: string;
+  evidenceManifestDigest: string;
   objectFormat: GitObjectFormat;
   records: readonly string[];
   adapter: ContextAdapterRequest;

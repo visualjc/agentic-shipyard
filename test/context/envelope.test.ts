@@ -14,6 +14,7 @@ const base = {
   productSha: "a".repeat(40),
   ledgerRef: "refs/heads/shipyard-ledger",
   ledgerSha: "b".repeat(40),
+  evidenceManifestDigest: "c".repeat(64),
   envelopePath: ".shipyard/envelopes/delivery-001.json",
   repoRoot: "/worktrees/delivery-001",
 } as const;
@@ -24,7 +25,7 @@ test("creates deeply immutable envelopes with each role's exact record-path allo
   const status = createEnvelope({ ...base, role: "status" });
 
   assert.deepEqual(implementer.records, ["deliveries/delivery-001/contract.md", "deliveries/delivery-001/assigned-task.md"]);
-  assert.deepEqual(reviewer.records, ["deliveries/delivery-001/intent.md", "deliveries/delivery-001/acceptance.json", "deliveries/delivery-001/review.json"]);
+  assert.deepEqual(reviewer.records, ["deliveries/delivery-001/intent.md", "deliveries/delivery-001/evidence/manifest.json", "deliveries/delivery-001/evidence/acceptance.json", "deliveries/delivery-001/review.json"]);
   assert.deepEqual(status.records, []);
   assert.deepEqual(implementer.adapter, { host: "codex", role: "implementer", envelopePath: ".shipyard/envelopes/delivery-001.json", repoRoot: "/worktrees/delivery-001" });
   assert.ok(Object.isFrozen(implementer));

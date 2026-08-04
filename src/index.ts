@@ -73,9 +73,8 @@ export { CONTEXT_ROLES } from "./context/types.js";
 export type { ContextAdapterRequest, ContextAuthorityResolver, ContextDispatchExpectation, ContextEnvelope, ContextEnvelopeInput, ContextRole, PinnedLedgerReader, ProductShaReader } from "./context/types.js";
 
 // Exact-SHA acceptance and independent-review evidence gate.
-export { canonicalJson, validateAcceptanceEvidence, validateFindingResolution, validateReviewRequest, validateReviewResult } from "./evidence/schema.js";
+export { canonicalJson, validateAcceptanceEvidence, validateEvidenceManifest, validateFindingResolution, validateReviewRequest, validateReviewResult } from "./evidence/schema.js";
 export { evaluateFreshness } from "./evidence/freshness.js";
-export { issueManifest } from "./evidence/issue-manifest.js";
 export { EvidenceError } from "./evidence/errors.js";
 export type { AcceptanceEvidence, AcceptanceItem, EvidenceDecision, EvidenceManifest, EvidenceState, FindingResolution, ReviewFinding, ReviewRequest, ReviewResult } from "./evidence/types.js";
 export { createTrustedCodexReviewOperation } from "./review/factory.js";
