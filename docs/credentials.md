@@ -54,9 +54,11 @@ value, including values that do not look like conventional GitHub tokens.
 
 ## Private disposable tracker fixture
 
-The private GitHub fixture is opt-in and must use an approved disposable
-development repository and a least-privileged test credential supplied by the
-operator's credential store. It exercises the real tracker: creates a marked
+The private GitHub fixture is opt-in and may use only a disposable development
+repository and actor pair present in the fixture's reviewed, code-owned exact
+allowlist, plus a least-privileged test credential supplied by the operator's
+credential store. The allowlist is empty in this revision, so no live fixture
+run is authorized. It exercises the real tracker: creates a marked
 development issue and PR, confirms a second call discovers the same IDs, then
 closes both in cleanup. It is not part of the deterministic test suite.
 It has no `NativeInteractive` configuration path and must not make a real
@@ -66,12 +68,19 @@ fixture must not switch or otherwise mutate its active account. Never record
 the credential, raw command environment, or a remote containing credentials in
 fixture evidence.
 
-The executable fixture harness is enabled only with
-`SHIPYARD_PRIVATE_GITHUB_FIXTURE=1` plus an explicit disposable
-repository that exactly matches `SHIPYARD_PRIVATE_GITHUB_REPOSITORY` and
-`SHIPYARD_PRIVATE_GITHUB_APPROVED_REPOSITORY`, the documented mutation
-acknowledgement, token, expected actor, existing head/base refs, and exact
-canonical lowercase 40- or 64-hex head SHA. The existing head ref must be
+The executable fixture harness is selected only with
+`SHIPYARD_PRIVATE_GITHUB_FIXTURE=1`. The requested
+`SHIPYARD_PRIVATE_GITHUB_REPOSITORY` and `SHIPYARD_PRIVATE_GITHUB_ACTOR` must
+exactly match one reviewed `{ repository, actor }` entry in the fixture source
+before the harness reads the token, binds a client, calls GitHub, or creates
+local state. Because that code-owned allowlist is empty in this revision, an
+enabled fixture fails closed at authorization. Authorizing a future disposable
+fixture requires a reviewed code change adding its exact pair; environment
+variables, files, and paths can select a request but cannot grant approval.
+The retired `visualjc/shipyard-fixture-staged` repository is forbidden by
+D-009 and must not be re-added. An authorized run also requires the documented
+mutation acknowledgement, token, existing head/base refs, and exact canonical
+lowercase 40- or 64-hex head SHA. The existing head ref must be
 exactly `shipyard/<stable-delivery-id>`; the fixture derives its delivery ID
 and record marker from that operator-created branch so the branch and tracker
 authority cannot diverge. Use a fresh uniquely named branch for each fresh

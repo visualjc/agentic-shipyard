@@ -18,16 +18,19 @@ import { FakeProcess, MemoryFilesystem } from "../helpers/fakes.js";
 
 const enabled = process.env.SHIPYARD_PRIVATE_GITHUB_FIXTURE === "1";
 const acknowledgement = "I_ACKNOWLEDGE_DISPOSABLE_GITHUB_MUTATIONS";
+type PrivateFixtureApproval = Readonly<{ repository: string; actor: string }>;
+/** Reviewed code authority only. No disposable private fixture is currently approved. */
+const PRIVATE_FIXTURE_APPROVALS: readonly PrivateFixtureApproval[] = Object.freeze([]);
 
 test("private fixture creates then idempotently discovers one approved development issue and PR", { skip: !enabled }, async () => {
-  const repository = required("SHIPYARD_PRIVATE_GITHUB_REPOSITORY");
-  const approvedRepository = required("SHIPYARD_PRIVATE_GITHUB_APPROVED_REPOSITORY");
-  assert.equal(repository, approvedRepository, "fixture repository must exactly equal the separately approved disposable repository");
+  const requestedRepository = required("SHIPYARD_PRIVATE_GITHUB_REPOSITORY");
   assert.equal(required("SHIPYARD_PRIVATE_GITHUB_MUTATION_ACKNOWLEDGEMENT"), acknowledgement);
+  const requestedActor = required("SHIPYARD_PRIVATE_GITHUB_ACTOR");
+  const approval = approvedPrivateFixture(requestedRepository, requestedActor, PRIVATE_FIXTURE_APPROVALS);
+  const { repository, actor } = approval;
   const { owner, name } = fixtureRepository(repository);
   const head = required("SHIPYARD_PRIVATE_GITHUB_HEAD_REF");
   const deliveryId = deliveryIdFromFixtureHead(head);
-  const actor = required("SHIPYARD_PRIVATE_GITHUB_ACTOR");
   const token = required("SHIPYARD_PRIVATE_GITHUB_TOKEN");
   const base = required("SHIPYARD_PRIVATE_GITHUB_BASE_REF");
   const sha = required("SHIPYARD_PRIVATE_GITHUB_HEAD_SHA");
@@ -35,15 +38,15 @@ test("private fixture creates then idempotently discovers one approved developme
   assert.match(sha, /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
   const credential = Object.freeze({ authorizationValue: token });
   const api = new GitHubRestAdapter({ resolve: async () => credential }, new FetchGitHubRestTransport());
-  await preflightPrivateFixture(actor, repository, approvedRepository, head, sha, credential, api);
+  await preflightPrivateFixture(approval, head, sha, credential, api);
   const root = await mkdtemp(join(tmpdir(), "shipyard-private-tracker-"));
   const topology = { kind: "single-repository" as const, repository: { owner, name, remote: { name: "origin", url: `https://github.com/${repository}.git` }, defaultBranch: base } };
   const bound = { resolve: async () => ({ profileName: "private-fixture", commonDirectory: root, profileFingerprint: "0".repeat(64), actorLogin: actor, topology }) };
-  const observedCreates = observePrivateFixtureCreates(repository, approvedRepository, api);
+  const observedCreates = observePrivateFixtureCreates(approval, api);
   const guard = new PrewriteFixtureGuard(
     new MutationLockService(nodeFilesystem, nodeProcess),
     bound,
-    () => preflightPrivateFixture(actor, repository, approvedRepository, head, sha, credential, api),
+    () => preflightPrivateFixture(approval, head, sha, credential, api),
   );
   const authority = {
     repositoryPath: root,
@@ -66,9 +69,27 @@ test("private fixture creates then idempotently discovers one approved developme
     assert.equal(second.issue.id, first.issue.id); assert.equal(second.pullRequest.id, first.pullRequest.id);
   } finally {
     try {
-      await closeCreatedPrivateFixtureRecords(actor, repository, approvedRepository, credential, api, observedCreates.records());
+      await closeCreatedPrivateFixtureRecords(approval, credential, api, observedCreates.records());
     } finally { await rm(root, { recursive: true, force: true }); }
   }
+});
+
+test("private fixture requires one exact reviewed code-owned repository and actor approval", () => {
+  assert.deepEqual(PRIVATE_FIXTURE_APPROVALS, []);
+  let tokenReads = 0; let clientBindings = 0; let providerCalls = 0; let localMutations = 0;
+  assert.throws(() => {
+    approvedPrivateFixture("acme/disposable", "fixture-actor", PRIVATE_FIXTURE_APPROVALS);
+    tokenReads += 1; clientBindings += 1; providerCalls += 1; localMutations += 1;
+  }, /reviewed code approval/);
+  assert.deepEqual({ tokenReads, clientBindings, providerCalls, localMutations }, { tokenReads: 0, clientBindings: 0, providerCalls: 0, localMutations: 0 });
+
+  const entry = { repository: "acme/disposable", actor: "fixture-actor" } as const;
+  const approval = approvedPrivateFixture(entry.repository, entry.actor, [entry]);
+  assert.deepEqual(approval, entry); assert.ok(Object.isFrozen(approval));
+  assert.throws(() => approvedPrivateFixture("acme/other", entry.actor, [entry]), /reviewed code approval/);
+  assert.throws(() => approvedPrivateFixture(entry.repository, "other-actor", [entry]), /reviewed code approval/);
+  assert.throws(() => approvedPrivateFixture(entry.repository, entry.actor, [entry, { ...entry }]), /duplicate/);
+  assert.throws(() => approvedPrivateFixture("visualjc/shipyard-fixture-staged", entry.actor, [{ repository: "visualjc/shipyard-fixture-staged", actor: entry.actor }]), /forbidden/);
 });
 
 test("private fixture derives one canonical delivery identity from its approved head before provider use", () => {
@@ -85,6 +106,7 @@ test("private fixture derives one canonical delivery identity from its approved 
 });
 
 test("private fixture cleanup verifies one actor-bound client and permits only exact approved close requests", async () => {
+  const approval = syntheticPrivateFixtureApproval();
   const credential = Object.freeze({ authorizationValue: "test-token" });
   const requests: GitHubRestRequest[] = []; let factoryCalls = 0;
   const client: GitHubRestClientFactory = { forCredential(actual) {
@@ -94,7 +116,7 @@ test("private fixture cleanup verifies one actor-bound client and permits only e
       return (request.path === "/user" ? { login: "fixture-actor" } : {}) as T;
     } };
   } };
-  await closePrivateFixtureRecords("fixture-actor", "acme/disposable", "acme/disposable", credential, client, { issue: 17, pullRequest: 23 });
+  await closePrivateFixtureRecords(approval, credential, client, { issue: 17, pullRequest: 23 });
   assert.equal(factoryCalls, 1);
   assert.deepEqual(requests, [
     { method: "GET", path: "/user" },
@@ -106,17 +128,17 @@ test("private fixture cleanup verifies one actor-bound client and permits only e
   const wrongActor: GitHubRestClientFactory = { forCredential: () => ({ request: async <T>(request: GitHubRestRequest) => {
     wrongActorRequests.push(request); return { login: "someone-else" } as T;
   } }) };
-  await assert.rejects(closePrivateFixtureRecords("fixture-actor", "acme/disposable", "acme/disposable", credential, wrongActor, { issue: 17, pullRequest: 23 }), (error: unknown) => error instanceof GitHubAuthorityError && error.code === "actor-mismatch");
+  await assert.rejects(closePrivateFixtureRecords(approval, credential, wrongActor, { issue: 17, pullRequest: 23 }), (error: unknown) => error instanceof GitHubAuthorityError && error.code === "actor-mismatch");
   assert.deepEqual(wrongActorRequests, [{ method: "GET", path: "/user" }]);
 
-  let outOfScopeFactoryCalls = 0;
-  const outOfScope: GitHubRestClientFactory = { forCredential: () => { outOfScopeFactoryCalls += 1; throw new Error("must not bind an out-of-scope cleanup client"); } };
-  await assert.rejects(closePrivateFixtureRecords("fixture-actor", "acme/other", "acme/disposable", credential, outOfScope, { issue: 17 }));
-  await assert.rejects(closePrivateFixtureRecords("fixture-actor", "acme/disposable", "acme/disposable", credential, outOfScope, { issue: -1 }));
-  assert.equal(outOfScopeFactoryCalls, 0);
+  let invalidRecordFactoryCalls = 0;
+  const invalidRecord: GitHubRestClientFactory = { forCredential: () => { invalidRecordFactoryCalls += 1; throw new Error("must not bind an invalid cleanup record"); } };
+  await assert.rejects(closePrivateFixtureRecords(approval, credential, invalidRecord, { issue: -1 }));
+  assert.equal(invalidRecordFactoryCalls, 0);
 });
 
 test("private fixture preflight verifies the exact actor and live encoded head before mutation", async () => {
+  const approval = syntheticPrivateFixtureApproval();
   const sha = "a".repeat(40); const credential = Object.freeze({ authorizationValue: "test-token" });
   const requests: GitHubRestRequest[] = []; let factoryCalls = 0;
   const client: GitHubRestClientFactory = { forCredential(actual) {
@@ -127,7 +149,7 @@ test("private fixture preflight verifies the exact actor and live encoded head b
       return { name: "shipyard/fixture-123", commit: { sha } } as T;
     } };
   } };
-  await preflightPrivateFixture("fixture-actor", "acme/disposable", "acme/disposable", "shipyard/fixture-123", sha, credential, client);
+  await preflightPrivateFixture(approval, "shipyard/fixture-123", sha, credential, client);
   assert.equal(factoryCalls, 1);
   assert.deepEqual(requests, [
     { method: "GET", path: "/user" },
@@ -147,7 +169,7 @@ test("private fixture preflight verifies the exact actor and live encoded head b
         return (request.path === "/user" ? { login: scenario.viewer } : { name: scenario.branch, commit: { sha: scenario.branchSha } }) as T;
       } };
     } };
-    await assert.rejects(preflightPrivateFixture("fixture-actor", "acme/disposable", "acme/disposable", "shipyard/fixture-123", sha, credential, mismatch), GitHubAuthorityError, scenario.name);
+    await assert.rejects(preflightPrivateFixture(approval, "shipyard/fixture-123", sha, credential, mismatch), GitHubAuthorityError, scenario.name);
     assert.equal(seen.length, scenario.expectedGets);
     assert.ok(seen.every(request => request.method === "GET"), `${scenario.name} must not reach POST or PATCH`);
   }
@@ -158,17 +180,13 @@ test("private fixture preflight verifies the exact actor and live encoded head b
     if (request.path === "/user") return { login: "fixture-actor" } as T;
     throw new GitHubAuthorityError("request-failed", "fixture branch was not found");
   } }) };
-  await assert.rejects(preflightPrivateFixture("fixture-actor", "acme/disposable", "acme/disposable", "shipyard/fixture-123", sha, credential, missing), (error: unknown) => error instanceof GitHubAuthorityError && error.code === "request-failed");
+  await assert.rejects(preflightPrivateFixture(approval, "shipyard/fixture-123", sha, credential, missing), (error: unknown) => error instanceof GitHubAuthorityError && error.code === "request-failed");
   assert.ok(missingRequests.every(request => request.method === "GET"));
-
-  let wrongRepositoryBindings = 0;
-  const wrongRepository: GitHubRestClientFactory = { forCredential: () => { wrongRepositoryBindings += 1; throw new Error("must not bind for an unapproved repository"); } };
-  await assert.rejects(preflightPrivateFixture("fixture-actor", "acme/other", "acme/disposable", "shipyard/fixture-123", sha, credential, wrongRepository));
-  assert.equal(wrongRepositoryBindings, 0);
 });
 
 test("private fixture never makes discovered-first provider records eligible for cleanup", async () => {
   const actor = "fixture-actor"; const repository = "acme/disposable"; const deliveryId = "fixture-existing";
+  const approval = syntheticPrivateFixtureApproval(repository, actor);
   const head = `shipyard/${deliveryId}`; const sha = "a".repeat(40); const marker = stableShipyardMarker(deliveryId);
   const credential = Object.freeze({ authorizationValue: "test-token" }); const requests: GitHubRestRequest[] = [];
   const githubRepository = { name: "disposable", full_name: repository, owner: { login: "acme" } };
@@ -183,11 +201,11 @@ test("private fixture never makes discovered-first provider records eligible for
       return assert.fail(`discovered-first fixture must not write: ${request.method} ${request.path}`);
     } };
   } };
-  await preflightPrivateFixture(actor, repository, repository, head, sha, credential, client);
-  const observedCreates = observePrivateFixtureCreates(repository, repository, client);
+  await preflightPrivateFixture(approval, head, sha, credential, client);
+  const observedCreates = observePrivateFixtureCreates(approval, client);
   const topology = { kind: "single-repository" as const, repository: { owner: "acme", name: "disposable", remote: { name: "origin", url: `https://github.com/${repository}.git` }, defaultBranch: "main" } };
   const bound = { resolve: async () => ({ profileName: "private-fixture", commonDirectory: "/fixture/.git", profileFingerprint: "0".repeat(64), actorLogin: actor, topology }) };
-  const guard = new PrewriteFixtureGuard(new MutationLockService(new MemoryFilesystem(), new FakeProcess()), bound, () => preflightPrivateFixture(actor, repository, repository, head, sha, credential, client));
+  const guard = new PrewriteFixtureGuard(new MutationLockService(new MemoryFilesystem(), new FakeProcess()), bound, () => preflightPrivateFixture(approval, head, sha, credential, client));
   const first = await trackDevelopmentRecords({
     repositoryPath: "/fixture", guard,
     trackingAuthority: { resolve: async () => ({ commonDirectory: "/fixture/.git", actorLogin: actor, repository: topology.repository, head, base: "main", expectedHeadSha: sha }) },
@@ -199,15 +217,14 @@ test("private fixture never makes discovered-first provider records eligible for
   assert.deepEqual(eligible, {});
   assert.deepEqual(eligible, createdFixtureRecordNumbers(first));
   const requestsBeforeCleanup = requests.length;
-  await closeCreatedPrivateFixtureRecords(actor, repository, repository, credential, client, eligible);
+  await closeCreatedPrivateFixtureRecords(approval, credential, client, eligible);
   assert.equal(requests.length, requestsBeforeCleanup);
   assert.ok(requests.every(request => request.method === "GET"));
-  await assert.rejects(closeCreatedPrivateFixtureRecords(actor, "acme/other", repository, credential, client, eligible));
-  assert.equal(requests.length, requestsBeforeCleanup);
 });
 
 test("private fixture revalidates a moved live head at the guarded mutation boundary before any POST", async () => {
   const actor = "fixture-actor"; const repository = "acme/disposable"; const deliveryId = "fixture-moving";
+  const approval = syntheticPrivateFixtureApproval(repository, actor);
   const head = `shipyard/${deliveryId}`; const expectedSha = "a".repeat(40); let liveSha = expectedSha;
   const credential = Object.freeze({ authorizationValue: "test-token" }); const requests: GitHubRestRequest[] = [];
   const client: GitHubRestClientFactory = { forCredential(actual) {
@@ -220,12 +237,12 @@ test("private fixture revalidates a moved live head at the guarded mutation boun
       return assert.fail(`moved-head fixture must not write: ${request.method} ${request.path}`);
     } };
   } };
-  await preflightPrivateFixture(actor, repository, repository, head, expectedSha, credential, client);
+  await preflightPrivateFixture(approval, head, expectedSha, credential, client);
   liveSha = "b".repeat(40);
-  const observedCreates = observePrivateFixtureCreates(repository, repository, client);
+  const observedCreates = observePrivateFixtureCreates(approval, client);
   const topology = { kind: "single-repository" as const, repository: { owner: "acme", name: "disposable", remote: { name: "origin", url: `https://github.com/${repository}.git` }, defaultBranch: "main" } };
   const bound = { resolve: async () => ({ profileName: "private-fixture", commonDirectory: "/fixture/.git", profileFingerprint: "0".repeat(64), actorLogin: actor, topology }) };
-  const guard = new PrewriteFixtureGuard(new MutationLockService(new MemoryFilesystem(), new FakeProcess()), bound, () => preflightPrivateFixture(actor, repository, repository, head, expectedSha, credential, client));
+  const guard = new PrewriteFixtureGuard(new MutationLockService(new MemoryFilesystem(), new FakeProcess()), bound, () => preflightPrivateFixture(approval, head, expectedSha, credential, client));
   await assert.rejects(trackDevelopmentRecords({
     repositoryPath: "/fixture", guard,
     trackingAuthority: { resolve: async () => ({ commonDirectory: "/fixture/.git", actorLogin: actor, repository: topology.repository, head, base: "main", expectedHeadSha: expectedSha }) },
@@ -239,6 +256,7 @@ test("private fixture revalidates a moved live head at the guarded mutation boun
 
 test("private fixture cleans only an observed issue POST when the head moves before the pull-request POST", async () => {
   const actor = "fixture-actor"; const repository = "acme/disposable"; const deliveryId = "fixture-partial";
+  const approval = syntheticPrivateFixtureApproval(repository, actor);
   const head = `shipyard/${deliveryId}`; const expectedSha = "a".repeat(40); let liveSha = expectedSha;
   const credential = Object.freeze({ authorizationValue: "test-token" }); const requests: GitHubRestRequest[] = [];
   let storedIssue: unknown;
@@ -260,11 +278,11 @@ test("private fixture cleans only an observed issue POST when the head moves bef
       return assert.fail(`partial fixture attempted an unexpected provider request: ${request.method} ${request.path}`);
     } };
   } };
-  await preflightPrivateFixture(actor, repository, repository, head, expectedSha, credential, client);
-  const observedCreates = observePrivateFixtureCreates(repository, repository, client);
+  await preflightPrivateFixture(approval, head, expectedSha, credential, client);
+  const observedCreates = observePrivateFixtureCreates(approval, client);
   const topology = { kind: "single-repository" as const, repository: { owner: "acme", name: "disposable", remote: { name: "origin", url: `https://github.com/${repository}.git` }, defaultBranch: "main" } };
   const bound = { resolve: async () => ({ profileName: "private-fixture", commonDirectory: "/fixture/.git", profileFingerprint: "0".repeat(64), actorLogin: actor, topology }) };
-  const guard = new PrewriteFixtureGuard(new MutationLockService(new MemoryFilesystem(), new FakeProcess()), bound, () => preflightPrivateFixture(actor, repository, repository, head, expectedSha, credential, client));
+  const guard = new PrewriteFixtureGuard(new MutationLockService(new MemoryFilesystem(), new FakeProcess()), bound, () => preflightPrivateFixture(approval, head, expectedSha, credential, client));
   await assert.rejects(trackDevelopmentRecords({
     repositoryPath: "/fixture", guard,
     trackingAuthority: { resolve: async () => ({ commonDirectory: "/fixture/.git", actorLogin: actor, repository: topology.repository, head, base: "main", expectedHeadSha: expectedSha }) },
@@ -274,13 +292,37 @@ test("private fixture cleans only an observed issue POST when the head moves bef
   assert.deepEqual(observedCreates.records(), { issue: 17 });
   assert.deepEqual(requests.filter(request => request.method === "POST").map(request => request.path), ["/repos/acme/disposable/issues"]);
 
-  await closeCreatedPrivateFixtureRecords(actor, repository, repository, credential, client, observedCreates.records());
+  await closeCreatedPrivateFixtureRecords(approval, credential, client, observedCreates.records());
   assert.deepEqual(requests.filter(request => request.method === "PATCH"), [
     { method: "PATCH", path: "/repos/acme/disposable/issues/17", body: { state: "closed" } },
   ]);
 });
 
 type TrackingCheckpoint = Awaited<ReturnType<typeof trackDevelopmentRecords>>;
+
+function approvedPrivateFixture(
+  requestedRepository: string,
+  requestedActor: string,
+  approvals: readonly PrivateFixtureApproval[],
+): PrivateFixtureApproval {
+  fixtureRepository(requestedRepository); fixtureActor(requestedActor);
+  const seen = new Set<string>();
+  const validated = approvals.map(candidate => {
+    assert.deepEqual(Object.keys(candidate).sort(), ["actor", "repository"], "fixture approval entries must contain only repository and actor");
+    fixtureRepository(candidate.repository); fixtureActor(candidate.actor);
+    const key = `${candidate.repository}\0${candidate.actor}`;
+    assert.ok(!seen.has(key), "fixture approval allowlist contains a duplicate repository and actor entry");
+    seen.add(key);
+    return Object.freeze({ repository: candidate.repository, actor: candidate.actor });
+  });
+  const matches = validated.filter(candidate => candidate.repository === requestedRepository && candidate.actor === requestedActor);
+  assert.equal(matches.length, 1, "private GitHub fixture requires one exact reviewed code approval for its repository and actor");
+  return matches[0];
+}
+
+function syntheticPrivateFixtureApproval(repository = "acme/disposable", actor = "fixture-actor"): PrivateFixtureApproval {
+  return approvedPrivateFixture(repository, actor, [{ repository, actor }]);
+}
 
 function createdFixtureRecordNumbers(checkpoint: TrackingCheckpoint): Readonly<{ issue?: number; pullRequest?: number }> {
   return {
@@ -290,16 +332,14 @@ function createdFixtureRecordNumbers(checkpoint: TrackingCheckpoint): Readonly<{
 }
 
 function observePrivateFixtureCreates(
-  repository: string,
-  separatelyApprovedRepository: string,
+  approval: PrivateFixtureApproval,
   underlying: GitHubRestClientFactory,
 ): Readonly<{
   factory: GitHubRestClientFactory;
   records(): Readonly<{ issue?: number; pullRequest?: number }>;
   stop(): void;
 }> {
-  assert.equal(repository, separatelyApprovedRepository, "fixture observer repository must exactly equal the separately approved disposable repository");
-  const { basePath } = fixtureRepository(repository);
+  const { basePath } = fixtureRepository(approval.repository); fixtureActor(approval.actor);
   let active = true; let issue: number | undefined; let pullRequest: number | undefined;
   const factory: GitHubRestClientFactory = { forCredential(credential) {
     const client = underlying.forCredential(credential);
@@ -341,21 +381,18 @@ function deliveryIdFromFixtureHead(head: string): string {
 }
 
 async function preflightPrivateFixture(
-  expectedActor: string,
-  repository: string,
-  separatelyApprovedRepository: string,
+  approval: PrivateFixtureApproval,
   head: string,
   expectedSha: string,
   credential: GitHubApiCredential,
   factory: GitHubRestClientFactory,
 ): Promise<void> {
-  assert.equal(repository, separatelyApprovedRepository, "fixture repository must exactly equal the separately approved disposable repository");
-  const { basePath } = fixtureRepository(repository);
+  const { basePath } = fixtureRepository(approval.repository); fixtureActor(approval.actor);
   deliveryIdFromFixtureHead(head);
   assert.match(expectedSha, /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
   const client = factory.forCredential(credential);
   const viewer = await client.request<{ login?: unknown }>({ method: "GET", path: "/user" });
-  if (viewer.login !== expectedActor) throw new GitHubAuthorityError("actor-mismatch", "GitHub authenticated actor does not match the configured fixture actor.");
+  if (viewer.login !== approval.actor) throw new GitHubAuthorityError("actor-mismatch", "GitHub authenticated actor does not match the reviewed fixture actor.");
   const branch = await client.request<{ name?: unknown; commit?: { sha?: unknown } }>({ method: "GET", path: `${basePath}/branches/${encodeURIComponent(head)}` });
   if (branch.name !== head || branch.commit?.sha !== expectedSha) {
     throw new GitHubAuthorityError("request-failed", "GitHub fixture head branch does not match the configured canonical ref and SHA.");
@@ -377,45 +414,45 @@ class PrewriteFixtureGuard extends DevelopmentRecordGuard {
 }
 
 async function closeCreatedPrivateFixtureRecords(
-  expectedActor: string,
-  repository: string,
-  separatelyApprovedRepository: string,
+  approval: PrivateFixtureApproval,
   credential: GitHubApiCredential,
   factory: GitHubRestClientFactory,
   records: Readonly<{ issue?: number; pullRequest?: number }>,
 ): Promise<void> {
-  assert.equal(repository, separatelyApprovedRepository, "fixture cleanup repository must exactly equal the separately approved disposable repository");
-  fixtureRepository(repository);
+  fixtureRepository(approval.repository); fixtureActor(approval.actor);
   const issue = fixtureRecordNumber(records.issue); const pullRequest = fixtureRecordNumber(records.pullRequest);
   if (issue === undefined && pullRequest === undefined) return;
-  await closePrivateFixtureRecords(expectedActor, repository, separatelyApprovedRepository, credential, factory, { issue, pullRequest });
+  await closePrivateFixtureRecords(approval, credential, factory, { issue, pullRequest });
 }
 
 async function closePrivateFixtureRecords(
-  expectedActor: string,
-  repository: string,
-  separatelyApprovedRepository: string,
+  approval: PrivateFixtureApproval,
   credential: GitHubApiCredential,
   factory: GitHubRestClientFactory,
   records: Readonly<{ issue?: number; pullRequest?: number }>,
 ): Promise<void> {
-  assert.equal(repository, separatelyApprovedRepository, "fixture cleanup repository must exactly equal the separately approved disposable repository");
-  const { basePath } = fixtureRepository(repository);
+  const { basePath } = fixtureRepository(approval.repository); fixtureActor(approval.actor);
   const issue = fixtureRecordNumber(records.issue); const pullRequest = fixtureRecordNumber(records.pullRequest);
   assert.ok(issue !== undefined || pullRequest !== undefined, "fixture cleanup requires a created issue or pull request");
   const client = factory.forCredential(credential);
   const viewer = await client.request<{ login?: unknown }>({ method: "GET", path: "/user" });
-  if (viewer.login !== expectedActor) throw new GitHubAuthorityError("actor-mismatch", "GitHub authenticated actor does not match the configured fixture actor.");
+  if (viewer.login !== approval.actor) throw new GitHubAuthorityError("actor-mismatch", "GitHub authenticated actor does not match the reviewed fixture actor.");
   if (pullRequest !== undefined) await client.request({ method: "PATCH", path: `${basePath}/pulls/${pullRequest}`, body: { state: "closed" } });
   if (issue !== undefined) await client.request({ method: "PATCH", path: `${basePath}/issues/${issue}`, body: { state: "closed" } });
 }
 
 function fixtureRepository(repository: string): { owner: string; name: string; basePath: string } {
   assert.match(repository, /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/);
+  assert.notEqual(repository.toLowerCase(), "visualjc/shipyard-fixture-staged", "the retired visualjc/shipyard-fixture-staged fixture is forbidden by D-009");
   const [owner, name] = repository.split("/");
   assert.ok(owner !== "." && owner !== ".." && name !== "." && name !== ".." && !owner.includes("..") && !name.includes(".."));
   assert.notEqual(owner.toLowerCase(), "nativeinteractive");
   return { owner, name, basePath: `/repos/${owner}/${name}` };
+}
+
+function fixtureActor(actor: string): string {
+  assert.match(actor, /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/, "fixture actor must be one exact canonical GitHub login");
+  return actor;
 }
 
 function fixtureRecordNumber(value: number | undefined): number | undefined {

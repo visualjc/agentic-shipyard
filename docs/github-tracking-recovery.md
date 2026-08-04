@@ -48,15 +48,22 @@ credentialed child process starts.
 ## Private disposable tracker fixture
 
 The executable private fixture is skipped unless
-`SHIPYARD_PRIVATE_GITHUB_FIXTURE=1`. It requires exact matching
-`SHIPYARD_PRIVATE_GITHUB_REPOSITORY` and
-`SHIPYARD_PRIVATE_GITHUB_APPROVED_REPOSITORY`, the acknowledgement
+`SHIPYARD_PRIVATE_GITHUB_FIXTURE=1`. The requested
+`SHIPYARD_PRIVATE_GITHUB_REPOSITORY` and `SHIPYARD_PRIVATE_GITHUB_ACTOR` must
+exactly match one reviewed `{ repository, actor }` entry in the fixture's
+code-owned allowlist before the harness reads a token, binds a client, calls a
+provider, or creates local state. That allowlist is empty in this revision, so
+the enabled fixture fails closed. A future authorization requires a reviewed
+code change adding the exact pair; no environment variable, file, or path can
+grant approval. The retired `visualjc/shipyard-fixture-staged` repository is
+forbidden by D-009 and must not be re-added. An authorized run also requires
+the acknowledgement
 `SHIPYARD_PRIVATE_GITHUB_MUTATION_ACKNOWLEDGEMENT=I_ACKNOWLEDGE_DISPOSABLE_GITHUB_MUTATIONS`,
-token, expected actor, existing head ref, base ref, and canonical lowercase
+token, existing head ref, base ref, and canonical lowercase
 40- or 64-hex head SHA. The head ref must be exactly
 `shipyard/<stable-delivery-id>` and is the fixture's sole delivery identity;
 use a fresh uniquely named pre-created branch when a fresh marker is required.
-`NativeInteractive/*` is always rejected. The approved disposable repository
+`NativeInteractive/*` is always rejected. The reviewed disposable repository
 is read-only-preflighted through the exact encoded branch endpoint after actor
 verification; its live branch name and commit SHA must exactly match the
 configured head before any local or provider mutation. The guarded mutation
