@@ -79,10 +79,16 @@ fixture marker. It uses the production REST
 transport and guarded tracker to
 preflight `/user` and the exact encoded head-branch endpoint, requiring the
 live branch name and commit SHA to match the configured values before any
-local or provider mutation. It then creates the marked issue/PR pair and proves
-idempotent discovery before cleanup. Cleanup binds one credential-scoped client, freshly verifies
-the configured actor, and permits only exact close requests for those created
-records in the separately approved repository. It is skipped by the normal
-test command, makes zero default-suite network calls, never invokes `gh`, and
-refuses NativeInteractive or any repository value containing a credential or
-URL.
+local or provider mutation. The guarded tracker repeats that actor and live-head
+check immediately before each POST. This blocks drift already visible at that
+boundary; it is not a cross-request compare-and-set, so the branch may still
+move after the check. It then creates the marked issue/PR pair and proves
+idempotent discovery before cleanup. Cleanup binds one credential-scoped
+client, freshly verifies the configured actor, and permits exact close requests
+only for positive record numbers observed in successful POST responses during
+the first tracker invocation. GET-discovered records are never cleanup-eligible.
+If a POST succeeds but no response arrives, the fixture does not discover and
+close a possibly older record; that ambiguity requires manual inspection. The
+fixture is skipped by the normal test command, makes zero default-suite network
+calls, never invokes `gh`, and refuses NativeInteractive or any repository
+value containing a credential or URL.

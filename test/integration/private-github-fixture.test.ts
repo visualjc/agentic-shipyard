@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { FetchGitHubRestTransport, GitHubRestAdapter } from "../../src/adapters/github-rest.js";
+import { stableShipyardMarker } from "../../src/github/markers.js";
 import { trackDevelopmentRecords } from "../../src/github/tracker.js";
 import { DevelopmentRecordGuard } from "../../src/github/tracking-guard.js";
 import { MutationLockService } from "../../src/locking/mutation-lock.js";
@@ -12,6 +13,8 @@ import { nodeProcess } from "../../src/adapters/process.js";
 import { canonicalWorkspaceBranch, stableDeliveryId } from "../../src/delivery/registry.js";
 import { GitHubAuthorityError } from "../../src/github/errors.js";
 import type { GitHubApiCredential, GitHubRestClientFactory, GitHubRestRequest } from "../../src/github/types.js";
+import type { BoundProfileAuthority, BoundProfileAuthorityResolver } from "../../src/profile/bound-authority.js";
+import { FakeProcess, MemoryFilesystem } from "../helpers/fakes.js";
 
 const enabled = process.env.SHIPYARD_PRIVATE_GITHUB_FIXTURE === "1";
 const acknowledgement = "I_ACKNOWLEDGE_DISPOSABLE_GITHUB_MUTATIONS";
@@ -36,27 +39,34 @@ test("private fixture creates then idempotently discovers one approved developme
   const root = await mkdtemp(join(tmpdir(), "shipyard-private-tracker-"));
   const topology = { kind: "single-repository" as const, repository: { owner, name, remote: { name: "origin", url: `https://github.com/${repository}.git` }, defaultBranch: base } };
   const bound = { resolve: async () => ({ profileName: "private-fixture", commonDirectory: root, profileFingerprint: "0".repeat(64), actorLogin: actor, topology }) };
+  const observedCreates = observePrivateFixtureCreates(repository, approvedRepository, api);
+  const guard = new PrewriteFixtureGuard(
+    new MutationLockService(nodeFilesystem, nodeProcess),
+    bound,
+    () => preflightPrivateFixture(actor, repository, approvedRepository, head, sha, credential, api),
+  );
   const authority = {
     repositoryPath: root,
-    guard: new DevelopmentRecordGuard(new MutationLockService(nodeFilesystem, nodeProcess), bound),
+    guard,
     trackingAuthority: { resolve: async () => ({ commonDirectory: root, actorLogin: actor, repository: topology.repository, head, base, expectedHeadSha: sha }) },
-    credentials: { resolve: async () => credential }, client: api,
+    credentials: { resolve: async () => credential }, client: observedCreates.factory,
   };
   const request = { deliveryId, issue: { title: "Shipyard disposable tracker fixture", body: "Approved disposable tracker run." }, pullRequest: { title: "Shipyard disposable tracker fixture", body: "Approved disposable tracker run." } };
-  let issue: number | undefined; let pullRequest: number | undefined;
   try {
-    const first = await trackDevelopmentRecords(authority, request);
-    issue = first.issue.number; pullRequest = first.pullRequest.number;
+    let first: TrackingCheckpoint;
+    try { first = await trackDevelopmentRecords(authority, request); }
+    finally { observedCreates.stop(); }
+    assert.deepEqual(observedCreates.records(), createdFixtureRecordNumbers(first));
     assert.equal(first.issue.state, "created"); assert.equal(first.pullRequest.state, "created");
-    assert.match(first.issue.url, new RegExp(`/${repository}/issues/${issue}$`));
-    assert.match(first.pullRequest.url, new RegExp(`/${repository}/pull/${pullRequest}$`));
+    assert.match(first.issue.url, new RegExp(`/${repository}/issues/${first.issue.number}$`));
+    assert.match(first.pullRequest.url, new RegExp(`/${repository}/pull/${first.pullRequest.number}$`));
     assert.equal(first.pullRequest.expectedHeadSha, sha);
     const second = await trackDevelopmentRecords(authority, request);
     assert.equal(second.issue.state, "discovered"); assert.equal(second.pullRequest.state, "discovered");
     assert.equal(second.issue.id, first.issue.id); assert.equal(second.pullRequest.id, first.pullRequest.id);
   } finally {
     try {
-      if (issue !== undefined || pullRequest !== undefined) await closePrivateFixtureRecords(actor, repository, approvedRepository, credential, api, { issue, pullRequest });
+      await closeCreatedPrivateFixtureRecords(actor, repository, approvedRepository, credential, api, observedCreates.records());
     } finally { await rm(root, { recursive: true, force: true }); }
   }
 });
@@ -157,6 +167,171 @@ test("private fixture preflight verifies the exact actor and live encoded head b
   assert.equal(wrongRepositoryBindings, 0);
 });
 
+test("private fixture never makes discovered-first provider records eligible for cleanup", async () => {
+  const actor = "fixture-actor"; const repository = "acme/disposable"; const deliveryId = "fixture-existing";
+  const head = `shipyard/${deliveryId}`; const sha = "a".repeat(40); const marker = stableShipyardMarker(deliveryId);
+  const credential = Object.freeze({ authorizationValue: "test-token" }); const requests: GitHubRestRequest[] = [];
+  const githubRepository = { name: "disposable", full_name: repository, owner: { login: "acme" } };
+  const client: GitHubRestClientFactory = { forCredential(actual) {
+    assert.equal(actual, credential);
+    return { request: async <T>(request: GitHubRestRequest) => {
+      requests.push(request);
+      if (request.path === "/user") return { login: actor } as T;
+      if (request.path.includes("/branches/")) return { name: head, commit: { sha } } as T;
+      if (request.path.includes("/issues?")) return [{ id: "I_existing", number: 17, html_url: `https://github.test/${repository}/issues/17`, body: marker }] as T;
+      if (request.path.includes("/pulls?")) return [{ id: "PR_existing", number: 23, html_url: `https://github.test/${repository}/pull/23`, body: marker, head: { sha, ref: head, repo: githubRepository }, base: { ref: "main" } }] as T;
+      return assert.fail(`discovered-first fixture must not write: ${request.method} ${request.path}`);
+    } };
+  } };
+  await preflightPrivateFixture(actor, repository, repository, head, sha, credential, client);
+  const observedCreates = observePrivateFixtureCreates(repository, repository, client);
+  const topology = { kind: "single-repository" as const, repository: { owner: "acme", name: "disposable", remote: { name: "origin", url: `https://github.com/${repository}.git` }, defaultBranch: "main" } };
+  const bound = { resolve: async () => ({ profileName: "private-fixture", commonDirectory: "/fixture/.git", profileFingerprint: "0".repeat(64), actorLogin: actor, topology }) };
+  const guard = new PrewriteFixtureGuard(new MutationLockService(new MemoryFilesystem(), new FakeProcess()), bound, () => preflightPrivateFixture(actor, repository, repository, head, sha, credential, client));
+  const first = await trackDevelopmentRecords({
+    repositoryPath: "/fixture", guard,
+    trackingAuthority: { resolve: async () => ({ commonDirectory: "/fixture/.git", actorLogin: actor, repository: topology.repository, head, base: "main", expectedHeadSha: sha }) },
+    credentials: { resolve: async () => credential }, client: observedCreates.factory,
+  }, { deliveryId, issue: { title: "Existing", body: "Existing" }, pullRequest: { title: "Existing", body: "Existing" } });
+  observedCreates.stop();
+  assert.equal(first.issue.state, "discovered"); assert.equal(first.pullRequest.state, "discovered");
+  const eligible = observedCreates.records();
+  assert.deepEqual(eligible, {});
+  assert.deepEqual(eligible, createdFixtureRecordNumbers(first));
+  const requestsBeforeCleanup = requests.length;
+  await closeCreatedPrivateFixtureRecords(actor, repository, repository, credential, client, eligible);
+  assert.equal(requests.length, requestsBeforeCleanup);
+  assert.ok(requests.every(request => request.method === "GET"));
+  await assert.rejects(closeCreatedPrivateFixtureRecords(actor, "acme/other", repository, credential, client, eligible));
+  assert.equal(requests.length, requestsBeforeCleanup);
+});
+
+test("private fixture revalidates a moved live head at the guarded mutation boundary before any POST", async () => {
+  const actor = "fixture-actor"; const repository = "acme/disposable"; const deliveryId = "fixture-moving";
+  const head = `shipyard/${deliveryId}`; const expectedSha = "a".repeat(40); let liveSha = expectedSha;
+  const credential = Object.freeze({ authorizationValue: "test-token" }); const requests: GitHubRestRequest[] = [];
+  const client: GitHubRestClientFactory = { forCredential(actual) {
+    assert.equal(actual, credential);
+    return { request: async <T>(request: GitHubRestRequest) => {
+      requests.push(request);
+      if (request.path === "/user") return { login: actor } as T;
+      if (request.path.includes("/branches/")) return { name: head, commit: { sha: liveSha } } as T;
+      if (request.path.includes("/issues?") || request.path.includes("/pulls?")) return [] as T;
+      return assert.fail(`moved-head fixture must not write: ${request.method} ${request.path}`);
+    } };
+  } };
+  await preflightPrivateFixture(actor, repository, repository, head, expectedSha, credential, client);
+  liveSha = "b".repeat(40);
+  const observedCreates = observePrivateFixtureCreates(repository, repository, client);
+  const topology = { kind: "single-repository" as const, repository: { owner: "acme", name: "disposable", remote: { name: "origin", url: `https://github.com/${repository}.git` }, defaultBranch: "main" } };
+  const bound = { resolve: async () => ({ profileName: "private-fixture", commonDirectory: "/fixture/.git", profileFingerprint: "0".repeat(64), actorLogin: actor, topology }) };
+  const guard = new PrewriteFixtureGuard(new MutationLockService(new MemoryFilesystem(), new FakeProcess()), bound, () => preflightPrivateFixture(actor, repository, repository, head, expectedSha, credential, client));
+  await assert.rejects(trackDevelopmentRecords({
+    repositoryPath: "/fixture", guard,
+    trackingAuthority: { resolve: async () => ({ commonDirectory: "/fixture/.git", actorLogin: actor, repository: topology.repository, head, base: "main", expectedHeadSha: expectedSha }) },
+    credentials: { resolve: async () => credential }, client: observedCreates.factory,
+  }, { deliveryId, issue: { title: "Moving", body: "Moving" }, pullRequest: { title: "Moving", body: "Moving" } }), (error: unknown) => error instanceof GitHubAuthorityError && error.code === "request-failed");
+  observedCreates.stop();
+  assert.deepEqual(observedCreates.records(), {});
+  assert.ok(requests.every(request => request.method === "GET"));
+  assert.equal(requests.filter(request => request.path.includes("/branches/")).length, 2, "one initial and one mutation-bound live-head check are required");
+});
+
+test("private fixture cleans only an observed issue POST when the head moves before the pull-request POST", async () => {
+  const actor = "fixture-actor"; const repository = "acme/disposable"; const deliveryId = "fixture-partial";
+  const head = `shipyard/${deliveryId}`; const expectedSha = "a".repeat(40); let liveSha = expectedSha;
+  const credential = Object.freeze({ authorizationValue: "test-token" }); const requests: GitHubRestRequest[] = [];
+  let storedIssue: unknown;
+  const client: GitHubRestClientFactory = { forCredential(actual) {
+    assert.equal(actual, credential);
+    return { request: async <T>(request: GitHubRestRequest) => {
+      requests.push(request);
+      if (request.path === "/user") return { login: actor } as T;
+      if (request.path.includes("/branches/")) return { name: head, commit: { sha: liveSha } } as T;
+      if (request.method === "GET" && request.path.includes("/issues?")) return (storedIssue === undefined ? [] : [storedIssue]) as T;
+      if (request.method === "GET" && request.path.includes("/pulls?")) return [] as T;
+      if (request.method === "POST" && request.path === "/repos/acme/disposable/issues") {
+        liveSha = "b".repeat(40);
+        const created = { id: "I_created", number: 17, html_url: `https://github.test/${repository}/issues/17` };
+        storedIssue = { ...created, body: (request.body as { body: string }).body };
+        return created as T;
+      }
+      if (request.method === "PATCH" && request.path === "/repos/acme/disposable/issues/17") return {} as T;
+      return assert.fail(`partial fixture attempted an unexpected provider request: ${request.method} ${request.path}`);
+    } };
+  } };
+  await preflightPrivateFixture(actor, repository, repository, head, expectedSha, credential, client);
+  const observedCreates = observePrivateFixtureCreates(repository, repository, client);
+  const topology = { kind: "single-repository" as const, repository: { owner: "acme", name: "disposable", remote: { name: "origin", url: `https://github.com/${repository}.git` }, defaultBranch: "main" } };
+  const bound = { resolve: async () => ({ profileName: "private-fixture", commonDirectory: "/fixture/.git", profileFingerprint: "0".repeat(64), actorLogin: actor, topology }) };
+  const guard = new PrewriteFixtureGuard(new MutationLockService(new MemoryFilesystem(), new FakeProcess()), bound, () => preflightPrivateFixture(actor, repository, repository, head, expectedSha, credential, client));
+  await assert.rejects(trackDevelopmentRecords({
+    repositoryPath: "/fixture", guard,
+    trackingAuthority: { resolve: async () => ({ commonDirectory: "/fixture/.git", actorLogin: actor, repository: topology.repository, head, base: "main", expectedHeadSha: expectedSha }) },
+    credentials: { resolve: async () => credential }, client: observedCreates.factory,
+  }, { deliveryId, issue: { title: "Partial", body: "Partial" }, pullRequest: { title: "Partial", body: "Partial" } }), (error: unknown) => error instanceof GitHubAuthorityError && error.code === "request-failed");
+  observedCreates.stop();
+  assert.deepEqual(observedCreates.records(), { issue: 17 });
+  assert.deepEqual(requests.filter(request => request.method === "POST").map(request => request.path), ["/repos/acme/disposable/issues"]);
+
+  await closeCreatedPrivateFixtureRecords(actor, repository, repository, credential, client, observedCreates.records());
+  assert.deepEqual(requests.filter(request => request.method === "PATCH"), [
+    { method: "PATCH", path: "/repos/acme/disposable/issues/17", body: { state: "closed" } },
+  ]);
+});
+
+type TrackingCheckpoint = Awaited<ReturnType<typeof trackDevelopmentRecords>>;
+
+function createdFixtureRecordNumbers(checkpoint: TrackingCheckpoint): Readonly<{ issue?: number; pullRequest?: number }> {
+  return {
+    ...(checkpoint.issue.state === "created" ? { issue: checkpoint.issue.number } : {}),
+    ...(checkpoint.pullRequest.state === "created" ? { pullRequest: checkpoint.pullRequest.number } : {}),
+  };
+}
+
+function observePrivateFixtureCreates(
+  repository: string,
+  separatelyApprovedRepository: string,
+  underlying: GitHubRestClientFactory,
+): Readonly<{
+  factory: GitHubRestClientFactory;
+  records(): Readonly<{ issue?: number; pullRequest?: number }>;
+  stop(): void;
+}> {
+  assert.equal(repository, separatelyApprovedRepository, "fixture observer repository must exactly equal the separately approved disposable repository");
+  const { basePath } = fixtureRepository(repository);
+  let active = true; let issue: number | undefined; let pullRequest: number | undefined;
+  const factory: GitHubRestClientFactory = { forCredential(credential) {
+    const client = underlying.forCredential(credential);
+    return { request: async <T>(request: GitHubRestRequest) => {
+      const response = await client.request<T>(request);
+      if (active && request.method === "POST") {
+        const number = positiveProviderRecordNumber(response);
+        if (request.path === `${basePath}/issues` && number !== undefined) {
+          if (issue !== undefined) assert.equal(issue, number, "fixture observed more than one created issue");
+          issue = number;
+        }
+        if (request.path === `${basePath}/pulls` && number !== undefined) {
+          if (pullRequest !== undefined) assert.equal(pullRequest, number, "fixture observed more than one created pull request");
+          pullRequest = number;
+        }
+      }
+      return response;
+    } };
+  } };
+  return Object.freeze({
+    factory,
+    records: () => ({ ...(issue === undefined ? {} : { issue }), ...(pullRequest === undefined ? {} : { pullRequest }) }),
+    stop: () => { active = false; },
+  });
+}
+
+function positiveProviderRecordNumber(value: unknown): number | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const number = (value as { number?: unknown }).number;
+  return typeof number === "number" && Number.isSafeInteger(number) && number > 0 ? number : undefined;
+}
+
 function deliveryIdFromFixtureHead(head: string): string {
   const prefix = "shipyard/";
   assert.ok(head.startsWith(prefix), "fixture head must be the canonical branch for its delivery ID");
@@ -185,6 +360,35 @@ async function preflightPrivateFixture(
   if (branch.name !== head || branch.commit?.sha !== expectedSha) {
     throw new GitHubAuthorityError("request-failed", "GitHub fixture head branch does not match the configured canonical ref and SHA.");
   }
+}
+
+class PrewriteFixtureGuard extends DevelopmentRecordGuard {
+  constructor(
+    locks: MutationLockService,
+    bound: BoundProfileAuthorityResolver,
+    private readonly prewrite: () => Promise<void>,
+  ) { super(locks, bound); }
+
+  override async revalidate(repositoryPath: string, expected: BoundProfileAuthority): Promise<BoundProfileAuthority> {
+    const current = await super.revalidate(repositoryPath, expected);
+    await this.prewrite();
+    return current;
+  }
+}
+
+async function closeCreatedPrivateFixtureRecords(
+  expectedActor: string,
+  repository: string,
+  separatelyApprovedRepository: string,
+  credential: GitHubApiCredential,
+  factory: GitHubRestClientFactory,
+  records: Readonly<{ issue?: number; pullRequest?: number }>,
+): Promise<void> {
+  assert.equal(repository, separatelyApprovedRepository, "fixture cleanup repository must exactly equal the separately approved disposable repository");
+  fixtureRepository(repository);
+  const issue = fixtureRecordNumber(records.issue); const pullRequest = fixtureRecordNumber(records.pullRequest);
+  if (issue === undefined && pullRequest === undefined) return;
+  await closePrivateFixtureRecords(expectedActor, repository, separatelyApprovedRepository, credential, factory, { issue, pullRequest });
 }
 
 async function closePrivateFixtureRecords(

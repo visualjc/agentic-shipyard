@@ -59,12 +59,17 @@ use a fresh uniquely named pre-created branch when a fresh marker is required.
 `NativeInteractive/*` is always rejected. The approved disposable repository
 is read-only-preflighted through the exact encoded branch endpoint after actor
 verification; its live branch name and commit SHA must exactly match the
-configured head before any local or provider mutation. In its controlled
-serial run, the fixture creates one marked development issue/PR through
+configured head before any local or provider mutation. The guarded mutation
+boundary repeats the actor and live-head check immediately before each POST;
+this rejects drift already visible then but cannot provide cross-request CAS.
+In its controlled serial run, the fixture creates one marked development issue/PR through
 `trackDevelopmentRecords`, proves the second call discovers the same provider
 IDs, then freshly verifies the configured actor on one credential-bound client
-before issuing only the two exact record-close requests in `finally`; normal
-tests remain network-free.
+before closing only positive record numbers observed in successful POST
+responses during that first tracker invocation. A GET-discovered issue or pull
+request is never cleanup-eligible. If a POST response is unavailable, cleanup
+does not discover by marker and risk closing an older record; manual inspection
+is required. Normal tests remain network-free.
 
 The tracker identifies its records only by its exact marker on a standalone
 body line. It excludes pull requests from GitHub's `/issues` listing and stores

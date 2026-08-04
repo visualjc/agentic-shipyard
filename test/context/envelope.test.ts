@@ -60,6 +60,38 @@ test("requires staged-pair envelopes to name the development repository", () => 
   assert.equal(createEnvelope({ ...base, role: "implementer", topology, repository: topology.development }).repository.name, "widget");
 });
 
+test("refuses accessor-backed topology and repository fields without invoking them", () => {
+  let topologyReads = 0;
+  let repositoryReads = 0;
+  const hostileInput = Object.defineProperties({ ...base, role: "implementer" }, {
+    topology: {
+      enumerable: true,
+      get() {
+        topologyReads += 1;
+        return topologyReads === 1 ? base.topology : { kind: "single-repository", repository: { ...base.repository, name: "attacker" } };
+      },
+    },
+    repository: {
+      enumerable: true,
+      get() {
+        repositoryReads += 1;
+        return repositoryReads === 1 ? base.repository : { ...base.repository, name: "attacker" };
+      },
+    },
+  });
+
+  assert.throws(() => createEnvelope(hostileInput as never),
+    (error: unknown) => error instanceof ContextError && error.code === "context-invalid-envelope");
+  assert.equal(topologyReads, 0);
+  assert.equal(repositoryReads, 0);
+});
+
+test("redacts hostile Proxy reflection failures as invalid envelopes", () => {
+  const hostile = new Proxy({}, { ownKeys: () => { throw new Error("reflection detail must not escape"); } });
+  assert.throws(() => createEnvelope({ ...base, role: "implementer", topology: hostile as never }),
+    (error: unknown) => error instanceof ContextError && error.code === "context-invalid-envelope");
+});
+
 test("validates serialized envelopes deeply and returns an independent immutable snapshot", () => {
   const envelope = createEnvelope({ ...base, role: "reviewer" });
   const serialized = structuredClone(envelope);
