@@ -18,6 +18,18 @@ async function repository(): Promise<string> {
   await git(path, ["commit", "--allow-empty", "-m", "product"]); return path;
 }
 
+async function assertPoisoned(store: GitLedgerStore, path: string, poisonSha: string): Promise<void> {
+  const rejected = (error: unknown): boolean => error instanceof LedgerError && error.code === "ledger-invalid-record";
+  await assert.rejects(store.snapshot([]), rejected);
+  assert.equal(await git(path, ["rev-parse", GitLedgerStore.ref]), poisonSha);
+  await assert.rejects(store.transact({ expectedHead: poisonSha, writes: [{ path: "records/forbidden", contents: "forbidden" }] }), rejected);
+  assert.equal(await git(path, ["rev-parse", GitLedgerStore.ref]), poisonSha);
+  await assert.rejects(store.read(poisonSha, []), rejected);
+  assert.equal(await git(path, ["rev-parse", GitLedgerStore.ref]), poisonSha);
+  await assert.rejects(store.inspectCommit(poisonSha), rejected);
+  assert.equal(await git(path, ["rev-parse", GitLedgerStore.ref]), poisonSha);
+}
+
 test("stores durable records on an orphan ledger ref outside product ancestry and excludes it from destinations", async () => {
   const path = await repository();
   try {
@@ -50,6 +62,65 @@ test("always writes the canonical ledger ref even when JavaScript callers pass a
     await ledger.transact({ expectedHead: undefined, writes: [{ path: "deliveries/d-1.json", contents: "initial" }] });
     assert.equal(await git(path, ["rev-parse", "main"]), productHead);
     assert.ok(await git(path, ["rev-parse", GitLedgerStore.ref]));
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
+test("rejects a pre-existing ledger ref in or descended from product history without advancing or repairing it", async () => {
+  for (const form of ["product-head", "product-descendant"] as const) {
+    const path = await repository();
+    try {
+      const productSha = await git(path, ["rev-parse", "main"]);
+      const poisonSha = form === "product-head"
+        ? productSha
+        : await git(path, ["commit-tree", await git(path, ["rev-parse", "main^{tree}"]), "-p", productSha, "-m", "poisoned ledger descendant"]);
+      await git(path, ["update-ref", GitLedgerStore.ref, poisonSha]);
+      await assertPoisoned(new GitLedgerStore(path), path, poisonSha);
+    } finally { await rm(path, { recursive: true, force: true }); }
+  }
+});
+
+test("rejects a pre-existing ledger ref that diverged from a shared product ancestor", async () => {
+  const path = await repository();
+  try {
+    const sharedAncestor = await git(path, ["rev-parse", "main"]);
+    const tree = await git(path, ["rev-parse", "main^{tree}"]);
+    const productSha = await git(path, ["commit-tree", tree, "-p", sharedAncestor, "-m", "product descendant"]);
+    const poisonSha = await git(path, ["commit-tree", tree, "-p", sharedAncestor, "-m", "divergent poisoned ledger"]);
+    await git(path, ["update-ref", "refs/heads/main", productSha, sharedAncestor]);
+    await git(path, ["update-ref", GitLedgerStore.ref, poisonSha]);
+    await assertPoisoned(new GitLedgerStore(path), path, poisonSha);
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
+test("rechecks isolation against local, remote-tracking, and tag product refs on every operation", async () => {
+  const path = await repository();
+  try {
+    const store = new GitLedgerStore(path);
+    const ledgerSha = await store.transact({ expectedHead: undefined, writes: [{ path: "records/safe", contents: "safe" }] });
+    assert.equal((await store.snapshot(["records/safe"])).records["records/safe"], "safe");
+    for (const productRef of ["refs/heads/poison", "refs/remotes/origin/poison", "refs/tags/poison"]) {
+      await git(path, ["update-ref", productRef, ledgerSha]);
+      await assertPoisoned(store, path, ledgerSha);
+      await git(path, ["update-ref", "-d", productRef]);
+      assert.equal((await store.snapshot([])).head, ledgerSha);
+    }
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
+test("uses the repository object format for null-OID CAS and isolation", async (context) => {
+  const path = await mkdtemp(join(tmpdir(), "shipyard-ledger-sha256-"));
+  try {
+    try { await git(path, ["init", "--object-format=sha256", "-b", "main"]); }
+    catch { context.skip("local Git does not support SHA-256 repositories"); return; }
+    await git(path, ["config", "user.name", "test"]); await git(path, ["config", "user.email", "test@example.test"]);
+    await git(path, ["commit", "--allow-empty", "-m", "product"]);
+    const store = new GitLedgerStore(path);
+    const ledgerSha = await store.transact({ expectedHead: undefined, writes: [{ path: "records/sha256", contents: "safe" }] });
+    assert.equal(ledgerSha.length, 64);
+    assert.equal((await store.snapshot(["records/sha256"])).records["records/sha256"], "safe");
+    const productSha = await git(path, ["rev-parse", "main"]);
+    await git(path, ["update-ref", GitLedgerStore.ref, productSha, ledgerSha]);
+    await assertPoisoned(store, path, productSha);
   } finally { await rm(path, { recursive: true, force: true }); }
 });
 

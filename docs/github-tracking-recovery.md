@@ -21,9 +21,12 @@ SHA, or target topology. The active delivery workspace supplies the canonical
 development repository default branch. Returned PR heads must name that same
 development repository; fork-qualified or noncanonical refs stop before a
 repeat. The guard is a common-directory/delivery-keyed durable lock, so a
-second process cannot race discovery and creation. If profile, fingerprint,
-topology, workspace, or head changed while waiting to resume, Shipyard stops
-before the first provider request; do not recover by substituting caller input.
+tracker flow first holds the shared workspace lifecycle lock, then its
+delivery-keyed lock, so cleanup cannot race discovery or creation. It rereads
+the complete delivery/worktree authority immediately before each provider POST.
+If profile, fingerprint, topology, workspace, or head changed while waiting to
+resume, Shipyard stops before the first provider request; do not recover by
+substituting caller input.
 
 Authenticated Git sync uses the active bound development repository only. It
 derives the configured remote name and exact URL from the live profile/binding,

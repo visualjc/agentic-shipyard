@@ -17,6 +17,11 @@ export type CreateOrResumeDelivery = Readonly<{
   repositoryPath: string; commonDirectory: string; deliveryId: string; branch: string; worktreePath: string;
   initialLedgerPath: string; initialLedgerContents: string; authoritativeBranch?: string;
 }>;
+/** The branch decision captured while the workspace lock is held. */
+export type WorktreeEnsureIntent = Readonly<
+  | { mode: "create"; startSha: string }
+  | { mode: "attach" }
+>;
 export interface WorkspaceGit {
   commonDirectory(repositoryPath: string): Promise<string>;
   worktreeExists(path: string): Promise<boolean>;
@@ -26,7 +31,7 @@ export interface WorkspaceGit {
   branchHead(repositoryPath: string, branch: string): Promise<string | undefined>;
   productHead(repositoryPath: string): Promise<string>;
   /** True only when this invocation successfully created the linked worktree. */
-  ensureWorktree(repositoryPath: string, branch: string, path: string, startSha: string): Promise<boolean>;
+  ensureWorktree(repositoryPath: string, branch: string, path: string, intent: WorktreeEnsureIntent): Promise<boolean>;
   removeWorktree(repositoryPath: string, path: string): Promise<void>;
 }
 export type WorkspaceGitIdentity = Readonly<{ commonDirectory: string; branch: string }>;
@@ -92,7 +97,13 @@ export class WorkspaceService {
         if (error instanceof LedgerError && error.code === "ledger-stale-head") throw new WorkspaceError("workspace-ledger-conflict", "Ledger advanced during creation; re-read and resume explicitly.");
         throw error;
       }
-      await this.ensureExpectedWorktree(request, actualCommonDirectory, provenance.startProductSha);
+      // This is deliberately decided here, under the workspace lock. The Git
+      // adapter must not inspect the branch again and silently turn a create
+      // into an attach after an external actor wins that race.
+      const worktreeIntent: WorktreeEnsureIntent = branchExists
+        ? { mode: "attach" }
+        : { mode: "create", startSha: provenance.startProductSha };
+      await this.ensureExpectedWorktree(request, actualCommonDirectory, worktreeIntent);
       if (matches.length === 0) {
         try { await this.registry.write(newDeliveryRegistryDocument([...(document?.workspaces ?? []), workspace])); }
         catch (error: unknown) { if (error instanceof DeliveryError) throw new WorkspaceError("workspace-registry-invalid", error.message); throw error; }
@@ -119,24 +130,33 @@ export class WorkspaceService {
     });
   }
 
-  private async ensureExpectedWorktree(request: CreateOrResumeDelivery, commonDirectory: string, startSha: string): Promise<void> {
+  private async ensureExpectedWorktree(request: CreateOrResumeDelivery, commonDirectory: string, intent: WorktreeEnsureIntent): Promise<void> {
     const exists = await this.git.worktreeExists(request.worktreePath);
     let identity = exists ? await this.git.worktreeIdentity(request.worktreePath) : undefined;
     if (exists && (!identity || identity.commonDirectory !== commonDirectory || identity.branch !== request.branch)) {
       throw new WorkspaceError("workspace-identity-mismatch", "The requested worktree path exists but is not this delivery’s Git worktree.");
     }
     if (!exists) {
-      const created = await this.git.ensureWorktree(request.repositoryPath, request.branch, request.worktreePath, startSha);
+      let created: boolean;
+      try {
+        created = await this.git.ensureWorktree(request.repositoryPath, request.branch, request.worktreePath, intent);
+      } catch (error: unknown) {
+        // A create-mode failure with the branch now present and no worktree at
+        // our path is the external same-SHA race. Do not remove anything: Git
+        // did not prove that path belongs to this invocation.
+        if (intent.mode === "create" && await this.git.branchExists(request.repositoryPath, request.branch) && !await this.git.worktreeExists(request.worktreePath)) {
+          throw new WorkspaceError("workspace-conflict", "The canonical feature branch appeared during worktree creation; refusing to adopt it.");
+        }
+        throw error;
+      }
       identity = await this.git.worktreeIdentity(request.worktreePath);
       if (!identity || identity.commonDirectory !== commonDirectory || identity.branch !== request.branch) {
         throw new WorkspaceError("workspace-identity-mismatch", "Git did not create the requested delivery worktree identity.");
       }
-      // `worktree add -b` can race an external branch creation after the
-      // earlier branchExists check. Git then attaches that branch instead of
-      // creating ours. Prove its head still equals durable provenance before
-      // any registry adoption; remove only this just-created linked worktree,
-      // never the foreign branch.
-      if (await this.git.branchHead(request.repositoryPath, request.branch) !== startSha) {
+      // A successful create must still point at the durable start object. If
+      // it changed afterwards, remove only the worktree this call created;
+      // never remove the branch itself.
+      if (intent.mode === "create" && await this.git.branchHead(request.repositoryPath, request.branch) !== intent.startSha) {
         // The adapter can prove creation only when its worktree-add command
         // succeeded. Never remove a path it cannot attribute to this call.
         if (created) await this.git.removeWorktree(request.repositoryPath, request.worktreePath);
@@ -205,9 +225,10 @@ export function createNodeWorkspaceGit(executable = DEFAULT_NODE_GIT_EXECUTABLE)
   async branchExists(repositoryPath, branch) { return (await git(repositoryPath, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`])) !== undefined; },
   async branchHead(repositoryPath, branch) { return git(repositoryPath, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]); },
   async productHead(repositoryPath) { return gitRequired(repositoryPath, ["rev-parse", "--verify", "HEAD"]); },
-  async ensureWorktree(repositoryPath, branch, path, startSha) {
-    const exists = await workspaceGit.branchExists(repositoryPath, branch);
-    await gitRequired(repositoryPath, exists ? ["worktree", "add", path, branch] : ["worktree", "add", "-b", branch, path, startSha]);
+  async ensureWorktree(repositoryPath, branch, path, intent) {
+    await gitRequired(repositoryPath, intent.mode === "attach"
+      ? ["worktree", "add", path, branch]
+      : ["worktree", "add", "-b", branch, path, intent.startSha]);
     return true;
   },
   async removeWorktree(repositoryPath, path) { await gitRequired(repositoryPath, ["worktree", "remove", path]); },

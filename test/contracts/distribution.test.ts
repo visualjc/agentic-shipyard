@@ -71,6 +71,25 @@ test("public package API excludes raw REST and credentialed Git runner bypasses"
   assert.equal("GitTransportService" in api, true);
 });
 
+test("public type surface lets a consumer implement the workspace Git port", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "shipyard-public-types-"));
+  try {
+    const entry = join(packageRoot, "dist", "src", "index.js");
+    const fixture = join(sandbox, "consumer.mts");
+    await writeFile(fixture, [
+      `import type { WorkspaceGit, WorktreeEnsureIntent } from ${JSON.stringify(entry)};`,
+      "const intent: WorktreeEnsureIntent = { mode: \"create\", startSha: \"a\".repeat(40) };",
+      "const port: Pick<WorkspaceGit, \"ensureWorktree\"> = {",
+      "  async ensureWorktree(_repositoryPath, _branch, _path, received) {",
+      "    return received.mode === intent.mode;",
+      "  },",
+      "};",
+      "void port;",
+    ].join("\n"), "utf8");
+    await execFileAsync(join(packageRoot, "node_modules", ".bin", "tsc"), ["--noEmit", "--module", "NodeNext", "--moduleResolution", "NodeNext", "--target", "ES2022", "--strict", fixture], { encoding: "utf8" });
+  } finally { await rm(sandbox, { recursive: true, force: true }); }
+});
+
 test("packaged skill installer creates only exact canonical discovery symlinks", async () => {
   const sandbox = await mkdtemp(join(tmpdir(), "shipyard-pack-"));
   try {

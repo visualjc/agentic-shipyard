@@ -11,6 +11,7 @@ import { JsonDeliveryRegistry } from "../../../src/delivery/registry.js";
 import { MutationLockError, MutationLockService } from "../../../src/locking/mutation-lock.js";
 import { WorkspaceError } from "../../../src/workspace/errors.js";
 import { nodeWorkspaceGit, WorkspaceService } from "../../../src/workspace/service.js";
+import type { WorktreeEnsureIntent } from "../../../src/workspace/service.js";
 import { nodeProcess } from "../../../src/adapters/process.js";
 import { FakeProcess, MemoryFilesystem } from "../../helpers/fakes.js";
 
@@ -141,7 +142,7 @@ test("resumes deterministically after faults following each durable creation bou
 
     const afterWorktree = value.request("d-worktree");
     let failWorktree = true;
-    const gitFault = { ...nodeWorkspaceGit, async ensureWorktree(repositoryPath: string, branch: string, path: string, startSha: string) { const created = await nodeWorkspaceGit.ensureWorktree(repositoryPath, branch, path, startSha); if (failWorktree) { failWorktree = false; throw new Error("after-worktree"); } return created; } };
+    const gitFault = { ...nodeWorkspaceGit, async ensureWorktree(repositoryPath: string, branch: string, path: string, intent: WorktreeEnsureIntent) { const created = await nodeWorkspaceGit.ensureWorktree(repositoryPath, branch, path, intent); if (failWorktree) { failWorktree = false; throw new Error("after-worktree"); } return created; } };
     await assert.rejects(new WorkspaceService(value.registry, value.ledger, gitFault, new MutationLockService(nodeFilesystem, nodeProcess)).createOrResume(afterWorktree), /after-worktree/);
     assert.equal(await nodeWorkspaceGit.worktreeExists(afterWorktree.worktreePath), true);
     await value.service.createOrResume(afterWorktree);
@@ -186,8 +187,8 @@ test("does not adopt a foreign branch created after the durable initial record",
   } finally { await dispose(value); }
 });
 
-test("fails closed when a deterministic Git fake creates the canonical branch during worktree add", async () => {
-  const startSha = "a".repeat(40); const foreignSha = "b".repeat(40);
+test("create intent rejects a same-SHA foreign branch race without registry adoption or cleanup", async () => {
+  const startSha = "a".repeat(40); const foreignSha = startSha;
   const request = { repositoryPath: "/repository", commonDirectory: "/repository/.git", deliveryId: "d-1", branch: "shipyard/d-1", worktreePath: "/worktrees/d-1", initialLedgerPath: "deliveries/d-1.json", initialLedgerContents: JSON.stringify({ deliveryId: "d-1" }) };
   let registryWrites = 0; let worktreeExists = false; let branchExists = false; let removals = 0;
   const registry = { async read() { return undefined; }, async write() { registryWrites += 1; } };
@@ -201,7 +202,11 @@ test("fails closed when a deterministic Git fake creates the canonical branch du
     async worktreeIdentity() { return worktreeExists ? { commonDirectory: request.commonDirectory, branch: request.branch } : undefined; },
     async worktreeIsClean() { return true; }, async branchExists() { return branchExists; },
     async branchHead() { return branchExists ? foreignSha : undefined; }, async productHead() { return startSha; },
-    async ensureWorktree() { branchExists = true; worktreeExists = true; return true; },
+    async ensureWorktree(_repositoryPath: string, _branch: string, _path: string, intent: WorktreeEnsureIntent) {
+      assert.deepEqual(intent, { mode: "create", startSha });
+      branchExists = true;
+      throw new Error("external branch won create race");
+    },
     async removeWorktree() { removals += 1; worktreeExists = false; },
   };
   const service = new WorkspaceService(registry, ledger, git, new MutationLockService(new MemoryFilesystem(), new FakeProcess()));
@@ -210,23 +215,23 @@ test("fails closed when a deterministic Git fake creates the canonical branch du
   assert.equal(registryWrites, 0);
   assert.equal(worktreeExists, false);
   assert.equal(await git.branchHead(), foreignSha);
-  assert.equal(removals, 1);
+  assert.equal(removals, 0);
 });
 
-test("fails closed when real Git creates the canonical branch between the preflight check and worktree add", async () => {
+test("real Git create intent preserves a same-SHA foreign branch created after preflight", async () => {
   const value = await fixture();
   try {
     const request = value.request("d-race"); let foreignHead = ""; let injected = false;
     const racingGit = {
       ...nodeWorkspaceGit,
-      async ensureWorktree(repositoryPath: string, branch: string, path: string, startSha: string) {
+      async ensureWorktree(repositoryPath: string, branch: string, path: string, intent: WorktreeEnsureIntent) {
+        assert.equal(intent.mode, "create");
         if (!injected) {
           injected = true;
-          await writeFile(join(repositoryPath, "foreign-race.txt"), "foreign", "utf8");
-          await git(repositoryPath, ["add", "foreign-race.txt"]); await git(repositoryPath, ["commit", "-m", "foreign branch race"]);
-          foreignHead = await git(repositoryPath, ["rev-parse", "HEAD"]); await git(repositoryPath, ["branch", branch]);
+          foreignHead = intent.startSha;
+          await git(repositoryPath, ["branch", branch, foreignHead]);
         }
-        return nodeWorkspaceGit.ensureWorktree(repositoryPath, branch, path, startSha);
+        return nodeWorkspaceGit.ensureWorktree(repositoryPath, branch, path, intent);
       },
     };
     const service = new WorkspaceService(value.registry, value.ledger, racingGit, new MutationLockService(nodeFilesystem, nodeProcess));

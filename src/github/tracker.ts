@@ -2,6 +2,7 @@ import { verifyTrackerActor } from "./authority.js";
 import type { GitHubApiCredentialResolver, GitHubRestClientFactory, GitHubTrackerSession } from "./types.js";
 import { GitHubTrackerError, stableShipyardMarker } from "./markers.js";
 import type { DevelopmentTrackingAuthorityResolver } from "./tracking-authority.js";
+import type { DevelopmentTrackingAuthority } from "./tracking-authority.js";
 import { DevelopmentRecordGuard } from "./tracking-guard.js";
 
 export type DevelopmentIssueRequest = { title: string; body: string };
@@ -84,12 +85,18 @@ export async function trackDevelopmentRecords(
       discover(tracker, `${basePath}/pulls`, marker, request.resume?.pullRequestId, "pull request", isProviderRecord),
     ]);
     if (foundPullRequest) assertPullRequestMatches(foundPullRequest, trusted);
-    const issue = foundIssue
-      ? { state: "discovered" as const, record: foundIssue }
-      : await createIssue(tracker, `${basePath}/issues`, marker, request.issue);
-    const pullRequest = foundPullRequest
-      ? { state: "discovered" as const, record: foundPullRequest }
-      : await createPullRequest(tracker, `${basePath}/pulls`, marker, request.pullRequest, trusted);
+    let issue: LocatedRecord;
+    if (foundIssue) issue = { state: "discovered", record: foundIssue };
+    else {
+      await revalidateBeforeWrite(authority, request, trusted);
+      issue = await createIssue(tracker, `${basePath}/issues`, marker, request.issue);
+    }
+    let pullRequest: LocatedRecord;
+    if (foundPullRequest) pullRequest = { state: "discovered", record: foundPullRequest };
+    else {
+      await revalidateBeforeWrite(authority, request, trusted);
+      pullRequest = await createPullRequest(tracker, `${basePath}/pulls`, marker, request.pullRequest, trusted);
+    }
     assertPullRequestMatches(pullRequest.record, trusted);
 
     return {
@@ -105,6 +112,15 @@ async function createIssue(session: GitHubTrackerSession, path: string, marker: 
   const record = await session.request<ProviderRecord>({ method: "POST", path, body: { title: input.title, body: withMarker(input.body, marker) } });
   assertRecord(record, "issue");
   return { state: "created", record };
+}
+
+/** Re-reads the registered worktree and bound repository immediately before a POST. */
+async function revalidateBeforeWrite(authority: DevelopmentRecordAuthority, request: DevelopmentRecordRequest, expected: DevelopmentTrackingAuthority): Promise<DevelopmentTrackingAuthority> {
+  const current = await authority.trackingAuthority.resolve(authority.repositoryPath, request.deliveryId);
+  if (!sameTrackingAuthority(expected, current)) {
+    throw new GitHubTrackerError("authority-mismatch", "Delivery or worktree authority changed before the provider write.");
+  }
+  return current;
 }
 
 async function createPullRequest(session: GitHubTrackerSession, path: string, marker: string, input: DevelopmentPullRequestRequest, trusted: Awaited<ReturnType<DevelopmentTrackingAuthorityResolver["resolve"]>>): Promise<LocatedRecord> {
@@ -186,6 +202,19 @@ function sameRepository(value: unknown, expected: { owner: string; name: string 
   if (typeof value !== "object" || value === null) return false;
   const repo = value as { name?: unknown; full_name?: unknown; owner?: { login?: unknown } };
   return repo.name === expected.name && repo.full_name === `${expected.owner}/${expected.name}` && repo.owner?.login === expected.owner;
+}
+
+function sameTrackingAuthority(left: DevelopmentTrackingAuthority, right: DevelopmentTrackingAuthority): boolean {
+  return left.commonDirectory === right.commonDirectory
+    && left.actorLogin === right.actorLogin
+    && left.head === right.head
+    && left.base === right.base
+    && left.expectedHeadSha === right.expectedHeadSha
+    && left.repository.owner === right.repository.owner
+    && left.repository.name === right.repository.name
+    && left.repository.defaultBranch === right.repository.defaultBranch
+    && left.repository.remote.name === right.repository.remote.name
+    && left.repository.remote.url === right.repository.remote.url;
 }
 
 function withMarker(body: string, marker: string): string { return `${body}\n\n${marker}`; }

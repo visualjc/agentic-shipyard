@@ -69,6 +69,38 @@ created at that SHA. `GitLedgerStore` always writes
 ref. Its subprocesses use a canonical absolute Git executable and never
 resolve a bare `git` from `PATH`.
 
+### Ledger/product ancestry invariant
+
+An existing canonical ledger ref is never trusted merely because it has the
+right name. Before and after snapshots, pinned reads, and commit inspection,
+and on both sides of transaction adoption, `GitLedgerStore` proves that the
+ledger history has no common ancestor with any supported product ref. This
+also rejects histories whose tips diverged from a shared commit, even when
+neither tip is an ancestor of the other. Product refs are:
+
+- every local branch under `refs/heads/` except the canonical ledger ref;
+- every remote-tracking branch under `refs/remotes/`; and
+- every lightweight or annotated tag under `refs/tags/` that peels to a
+  commit. Tags of non-commit objects are not product-history authorities.
+
+Shipyard has no supported remote-ledger or ledger-tag namespace. A copied
+ledger commit under a remote-tracking branch or commit tag therefore fails
+closed rather than being silently treated as another ledger retention ref.
+
+Each successful check reads the product-ref inventory twice. If it changes
+during the check, the operation stops with a transient unavailable error; if
+the ledger head changes, it stops as stale. Transactions validate the
+prospective commit before compare-and-swap adoption and validate the adopted
+head again before returning. No poisoned ref is deleted, rewritten, or
+automatically repaired: an operator must correct the explicit ref state, after
+which a fresh operation revalidates everything. Ref changes made outside
+Shipyard can still occur between Git commands, so the invariant is deliberately
+checked on every operation instead of cached.
+
+The compare-and-swap null object ID is derived from the repository's storage
+object format. SHA-1 repositories use 40 zeroes and SHA-256 repositories use 64;
+any unknown format is rejected rather than silently narrowed to SHA-1.
+
 ## Final delivery seal
 
 A delivery's final ledger seal is a canonical version-1 JSON record at

@@ -10,7 +10,7 @@ import type { PinnedLedgerReader } from "../context/types.js";
 import { canonicalGitExecutable, DEFAULT_NODE_GIT_EXECUTABLE, sanitizedGitEnvironment } from "./git-transport.js";
 
 const execFileAsync = promisify(execFile);
-const zeroOid = "0".repeat(40);
+type ProductCommitRef = Readonly<{ ref: string; commitSha: string }>;
 
 /** Git object-database ledger that never checks its orphan ref out in a product worktree. */
 export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
@@ -27,11 +27,13 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
   async snapshot(paths: readonly string[]): Promise<LedgerSnapshot> {
     if (paths.some((path) => !validLedgerPath(path))) throw new LedgerError("ledger-invalid-path", "Ledger record paths must be relative, normalized paths.");
     const head = await this.optionalRef(GitLedgerStore.ref);
+    if (head) await this.assertIsolatedHistory(head, head);
     const records: Record<string, string> = {};
     if (head) for (const path of paths) {
       const value = await this.optionalRecord(head, path);
       if (value !== undefined) records[path] = value;
     }
+    if (head) await this.assertIsolatedHistory(head, head);
     return { head, records };
   }
 
@@ -40,10 +42,12 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
     if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(ledgerSha) || paths.some((path) => !validLedgerPath(path))) {
       throw new LedgerError("ledger-invalid-path", "Pinned ledger reads require a full object ID and relative, normalized record paths.");
     }
+    const head = await this.optionalRef(GitLedgerStore.ref);
+    if (!head) throw new LedgerError("ledger-unavailable", "The configured ledger ref is unavailable.");
+    await this.assertIsolatedHistory(head, head);
     const resolved = await this.optionalRef(`${ledgerSha}^{commit}`);
     if (!resolved) throw new LedgerError("ledger-unavailable", "The pinned ledger commit is unavailable.");
-    const head = await this.optionalRef(GitLedgerStore.ref);
-    if (!head || !(await this.isAncestor(resolved, head))) {
+    if (!(await this.isAncestor(resolved, head))) {
       throw new LedgerError("ledger-unavailable", "The pinned ledger commit is not reachable from the configured ledger ref.");
     }
     const records: Record<string, string> = {};
@@ -51,16 +55,19 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
       const value = await this.optionalRecord(resolved, path);
       if (value !== undefined) records[path] = value;
     }
+    await this.assertIsolatedHistory(head, head);
     return records;
   }
 
   /** Reads the exact reachable commit identity, sole parent, and tree diff needed by final-seal verification. */
   async inspectCommit(ledgerSha: string): Promise<LedgerCommitInspection> {
     if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(ledgerSha)) throw new LedgerError("ledger-invalid-path", "Ledger commit inspection requires a full object ID.");
+    const head = await this.optionalRef(GitLedgerStore.ref);
+    if (!head) throw new LedgerError("ledger-unavailable", "The configured ledger ref is unavailable.");
+    await this.assertIsolatedHistory(head, head);
     const commitSha = await this.optionalRef(`${ledgerSha}^{commit}`);
     if (!commitSha) throw new LedgerError("ledger-unavailable", "The inspected ledger commit is unavailable.");
-    const head = await this.optionalRef(GitLedgerStore.ref);
-    if (!head || !(await this.isAncestor(commitSha, head))) throw new LedgerError("ledger-unavailable", "The inspected ledger commit is not reachable from the configured ledger ref.");
+    if (!(await this.isAncestor(commitSha, head))) throw new LedgerError("ledger-unavailable", "The inspected ledger commit is not reachable from the configured ledger ref.");
     const ancestry = (await this.gitRequired(["rev-list", "--parents", "-n", "1", commitSha])).split(" ");
     if (ancestry[0] !== commitSha || ancestry.length > 2) throw new LedgerError("ledger-invalid-record", "Ledger commits must have a single linear parent.");
     const parentSha = ancestry[1];
@@ -75,6 +82,7 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
       if (!mapped || !validLedgerPath(path)) throw new LedgerError("ledger-invalid-record", "Ledger commit diff contains an unsupported change.");
       changes.push(Object.freeze({ status: mapped, path }));
     }
+    await this.assertIsolatedHistory(head, head);
     return Object.freeze({ commitSha, parentSha, changes: Object.freeze(changes) });
   }
 
@@ -92,7 +100,9 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
       const tree = await this.gitRequired(["write-tree"], { GIT_INDEX_FILE: indexFile });
       const commitArgs = current.head ? ["commit-tree", tree, "-p", current.head] : ["commit-tree", tree];
       const commit = await this.gitInput(commitArgs, transaction.message ?? "shipyard ledger checkpoint");
+      await this.assertIsolatedHistory(commit, current.head);
       await this.updateRefCas(commit, current.head);
+      await this.assertIsolatedHistory(commit, commit);
       return commit;
     } finally { await rm(indexDirectory, { recursive: true, force: true }); }
   }
@@ -142,7 +152,7 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
   }
 
   private async updateRefCas(commit: string, expectedHead: string | undefined): Promise<void> {
-    const result = await this.run(["update-ref", GitLedgerStore.ref, commit, expectedHead ?? zeroOid]);
+    const result = await this.run(["update-ref", GitLedgerStore.ref, commit, expectedHead ?? await this.nullObjectId()]);
     if (result.code === 0) return;
     if (staleRefUpdate(result.stderr)) throw new LedgerError("ledger-stale-head", "The ledger advanced; re-read its head before retrying.");
     throw unavailable(result.stderr);
@@ -153,6 +163,62 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
     if (result.code === 0) return true;
     if (result.code === 1) return false;
     throw unavailable(result.stderr);
+  }
+
+  private async hasCommonAncestor(left: string, right: string): Promise<boolean> {
+    const result = await this.run(["merge-base", left, right]);
+    if (result.code === 0) return true;
+    if (result.code === 1) return false;
+    throw unavailable(result.stderr);
+  }
+
+  /**
+   * A ledger commit must share no ancestor with any supported product-ref
+   * namespace. The ref inventory is checked twice so a
+   * concurrent product-ref movement fails transiently rather than being
+   * silently adopted; every public operation repeats this check.
+   */
+  private async assertIsolatedHistory(commitSha: string, expectedLedgerHead: string | undefined): Promise<void> {
+    const before = await this.productCommitRefs();
+    for (const product of before) {
+      if (await this.hasCommonAncestor(commitSha, product.commitSha)) {
+        throw new LedgerError("ledger-invalid-record", `The canonical ledger history overlaps product ref ${product.ref}; repair must be explicit.`);
+      }
+    }
+    const after = await this.productCommitRefs();
+    if (productRefSignature(before) !== productRefSignature(after)) throw new LedgerError("ledger-unavailable", "Product refs changed during ledger isolation validation; retry from a fresh snapshot.");
+    if (await this.optionalRef(GitLedgerStore.ref) !== expectedLedgerHead) throw new LedgerError("ledger-stale-head", "The ledger advanced; re-read its head before retrying.");
+  }
+
+  /** Local heads (except the ledger), remote-tracking heads, and commit tags are product authority. */
+  private async productCommitRefs(): Promise<readonly ProductCommitRef[]> {
+    const output = await this.gitRequired([
+      "for-each-ref",
+      "--format=%(refname)%00%(objecttype)%00%(objectname)%00%(*objecttype)%00%(*objectname)",
+      "refs/heads", "refs/remotes", "refs/tags",
+    ]);
+    if (output === "") return Object.freeze([]);
+    const refs: ProductCommitRef[] = [];
+    for (const line of output.split("\n")) {
+      const [ref, objectType, objectName, peeledType, peeledName] = line.split("\0");
+      if (!ref || ref === GitLedgerStore.ref) continue;
+      const commitSha = objectType === "commit" ? objectName : peeledType === "commit" ? peeledName : undefined;
+      if (!commitSha) {
+        if (ref.startsWith("refs/heads/") || ref.startsWith("refs/remotes/")) throw new LedgerError("ledger-invalid-record", `Product ref ${ref} does not name a commit.`);
+        continue; // A tag of a non-commit object is not a product-history authority.
+      }
+      if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commitSha)) throw new LedgerError("ledger-invalid-record", `Product ref ${ref} has a non-canonical object ID.`);
+      refs.push(Object.freeze({ ref, commitSha }));
+    }
+    refs.sort((left, right) => left.ref < right.ref ? -1 : left.ref > right.ref ? 1 : 0);
+    return Object.freeze(refs);
+  }
+
+  private async nullObjectId(): Promise<string> {
+    const format = await this.gitRequired(["rev-parse", "--show-object-format=storage"]);
+    if (format === "sha1") return "0".repeat(40);
+    if (format === "sha256") return "0".repeat(64);
+    throw new LedgerError("ledger-unavailable", `Unsupported Git object format: ${format || "unknown"}.`);
   }
 
   private async run(args: string[], env?: NodeJS.ProcessEnv): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -200,6 +266,7 @@ function missingTreePath(stderr: string): boolean {
   return /path ['”]?.+['”]? does not exist in|exists on disk, but not in|not a valid object name/i.test(stderr);
 }
 function staleRefUpdate(stderr: string): boolean { return /cannot lock ref .+ is at .+ but expected/i.test(stderr); }
+function productRefSignature(refs: readonly ProductCommitRef[]): string { return refs.map(({ ref, commitSha }) => `${ref}\0${commitSha}`).join("\n"); }
 function refspecPatternMatches(pattern: string, ref: string): boolean {
   if (pattern.includes("..") || !pattern.startsWith("refs/")) return true;
   const stars = [...pattern].filter((character) => character === "*").length;

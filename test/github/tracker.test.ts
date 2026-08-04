@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { stableShipyardMarker } from "../../src/github/markers.js";
+import { GitHubTrackerError, stableShipyardMarker } from "../../src/github/markers.js";
 import { trackDevelopmentRecords } from "../../src/github/tracker.js";
 import type { Topology } from "../../src/contracts/types.js";
 import type { DevelopmentRecordAuthority } from "../../src/github/tracker.js";
 import type { GitHubRestRequest } from "../../src/github/types.js";
 import { DevelopmentRecordGuard } from "../../src/github/tracking-guard.js";
-import { MutationLockService } from "../../src/locking/mutation-lock.js";
+import { MutationLockError, MutationLockService } from "../../src/locking/mutation-lock.js";
 import { FakeProcess, MemoryFilesystem } from "../helpers/fakes.js";
 
 const development = { owner: "acme", name: "development", remote: { name: "origin", url: "https://github.com/acme/development.git" }, defaultBranch: "main" };
@@ -199,6 +199,35 @@ test("a concrete durable guard rejects a concurrent second tracker instance", as
   const [first, second] = await Promise.allSettled([trackDevelopmentRecords(api.authority(), request), trackDevelopmentRecords(api.authority(), request)]);
   assert.equal([first, second].filter(result => result.status === "fulfilled").length, 1);
   assert.equal([first, second].filter(result => result.status === "rejected").length, 1);
+});
+
+test("holds the workspace lifecycle lock through discovery and revalidates before a write", async () => {
+  const filesystem = new MemoryFilesystem(); const process = new FakeProcess();
+  const viewerEntered = Promise.withResolvers<void>(); const releaseViewer = Promise.withResolvers<void>();
+  let authorityResolves = 0; let posts = 0;
+  const authority: DevelopmentRecordAuthority = {
+    repositoryPath: "/worktree",
+    guard: new DevelopmentRecordGuard(new MutationLockService(filesystem, process), { resolve: async () => ({ profileName: "test", commonDirectory: "/worktree/.git", profileFingerprint: "0".repeat(64), actorLogin: "shipyard-actor", topology: staged }) }),
+    trackingAuthority: { async resolve() {
+      authorityResolves += 1;
+      if (authorityResolves > 1) throw new GitHubTrackerError("authority-mismatch", "delivery worktree was removed");
+      return { commonDirectory: "/worktree/.git", actorLogin: "shipyard-actor", repository: development, ...trusted };
+    } },
+    credentials: { resolve: async () => ({ authorizationValue: "test-token" }) },
+    client: { forCredential: () => ({ request: async <T>(call: GitHubRestRequest) => {
+      if (call.path === "/user") { viewerEntered.resolve(); await releaseViewer.promise; return { login: "shipyard-actor" } as T; }
+      if (call.method === "POST") posts += 1;
+      return [] as T;
+    } }) },
+  };
+  const tracking = trackDevelopmentRecords(authority, request);
+  await viewerEntered.promise;
+  const cleanup = new MutationLockService(filesystem, process);
+  await assert.rejects(cleanup.acquire("/worktree/.git/shipyard-workspace.lock", "/worktree/.git", "workspace"), (error: unknown) => error instanceof MutationLockError && error.code === "lock-held");
+  releaseViewer.resolve();
+  await assert.rejects(tracking, (error: unknown) => error instanceof GitHubTrackerError && error.code === "authority-mismatch");
+  assert.equal(posts, 0);
+  assert.equal(authorityResolves, 2);
 });
 
 test("resumes a partially-created issue when the PR write previously failed", async () => {

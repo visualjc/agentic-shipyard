@@ -43,7 +43,7 @@ export { createGitLedgerStore, GitLedgerStore } from "./adapters/ledger-git.js";
 export { WorkspaceError } from "./workspace/errors.js";
 export type { WorkspaceFailureCode } from "./workspace/errors.js";
 export { createNodeWorkspaceGit, WorkspaceService, nodeWorkspaceGit } from "./workspace/service.js";
-export type { CreateOrResumeDelivery, InitialDeliveryLedgerRecord, WorkspaceGit, WorkspaceGitIdentity } from "./workspace/service.js";
+export type { CreateOrResumeDelivery, InitialDeliveryLedgerRecord, WorkspaceGit, WorkspaceGitIdentity, WorktreeEnsureIntent } from "./workspace/service.js";
 
 // Role-limited, exact-SHA worker context.
 export { ContextError } from "./context/errors.js";
