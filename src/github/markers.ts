@@ -12,7 +12,8 @@ export type GitHubTrackerErrorCode =
   | "invalid-record"
   | "ambiguous-record"
   | "resume-mismatch"
-  | "head-sha-mismatch";
+  | "head-sha-mismatch"
+  | "pagination-limit";
 
 /** A fail-closed error for unsafe-to-repeat tracker states. */
 export class GitHubTrackerError extends Error {

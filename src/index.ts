@@ -59,7 +59,7 @@ export type { GitHubApiCredential, GitHubApiCredentialResolver, GitHubRestClient
 export { GitHubTrackerError, stableShipyardMarker } from "./github/markers.js";
 export type { GitHubTrackerErrorCode } from "./github/markers.js";
 export { trackDevelopmentRecords } from "./github/tracker.js";
-export type { DevelopmentIssueCheckpoint, DevelopmentIssueRequest, DevelopmentPullRequestCheckpoint, DevelopmentPullRequestRequest, DevelopmentRecordRequest, DevelopmentRecordResume, DevelopmentRecordsCheckpoint } from "./github/tracker.js";
+export type { DevelopmentIssueCheckpoint, DevelopmentIssueRequest, DevelopmentPullRequestCheckpoint, DevelopmentPullRequestRequest, DevelopmentRecordAuthority, DevelopmentRecordMutationGuard, DevelopmentRecordRequest, DevelopmentRecordResume, DevelopmentRecordsCheckpoint } from "./github/tracker.js";
 export { githubTrackerStatusContributor } from "./github/status.js";
 export type { GitHubTrackerStatus } from "./github/status.js";
 export { GitTransportError, GitTransportService, redactGitTransportDiagnostic } from "./github/git-transport.js";

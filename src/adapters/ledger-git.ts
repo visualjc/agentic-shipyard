@@ -78,6 +78,18 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
     return !refspecPatternMatches(source, this.ref) && !refspecPatternMatches(destination, this.ref);
   }
 
+  /**
+   * Mandatory fail-closed boundary for every future product-ref transport.
+   * Issue #7 promotion code must call this before it hands refspecs or a
+   * serialized transport payload to Git; no promotion caller exists yet.
+   */
+  static requireProductOnlyTransport(refspecs: readonly string[], payload?: string): void {
+    if (!Array.isArray(refspecs) || refspecs.length === 0 || refspecs.some((refspec) => !this.excludesRefspec(refspec)) ||
+      (payload !== undefined && (typeof payload !== "string" || payload.includes(this.ref)))) {
+      throw new LedgerError("ledger-invalid-record", "Product transport must not carry the isolated ledger ref.");
+    }
+  }
+
   private async optionalRef(ref: string): Promise<string | undefined> {
     const result = await this.run(["rev-parse", "--verify", "--quiet", ref]);
     if (result.code === 0) return result.stdout.trim();
@@ -94,7 +106,7 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
     }
     const value = await this.run(["show", `${head}:${path}`]);
     if (value.code !== 0) throw unavailable(value.stderr);
-    return value.stdout.replace(/\n$/, "");
+    return value.stdout;
   }
 
   private async updateRefCas(commit: string, expectedHead: string | undefined): Promise<void> {
@@ -114,7 +126,7 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
   private async run(args: string[], env?: NodeJS.ProcessEnv): Promise<{ code: number; stdout: string; stderr: string }> {
     try {
       const { stdout, stderr } = await execFileAsync("git", ["-C", this.repositoryPath, ...args], {
-        encoding: "utf8", env: { ...process.env, ...env, GIT_AUTHOR_NAME: "shipyard", GIT_AUTHOR_EMAIL: "shipyard@local", GIT_COMMITTER_NAME: "shipyard", GIT_COMMITTER_EMAIL: "shipyard@local" },
+        encoding: "utf8", env: gitEnvironment(env),
       });
       return { code: 0, stdout, stderr };
     } catch (error: unknown) {
@@ -130,7 +142,7 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
   }
   private async gitInput(args: string[], input: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const child = spawn("git", ["-C", this.repositoryPath, ...args], { env: { ...process.env, GIT_AUTHOR_NAME: "shipyard", GIT_AUTHOR_EMAIL: "shipyard@local", GIT_COMMITTER_NAME: "shipyard", GIT_COMMITTER_EMAIL: "shipyard@local" } });
+      const child = spawn("git", ["-C", this.repositoryPath, ...args], { env: gitEnvironment() });
       let stdout = ""; let stderr = "";
       child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
       child.stdout.on("data", (chunk: string) => { stdout += chunk; }); child.stderr.on("data", (chunk: string) => { stderr += chunk; });
@@ -138,6 +150,13 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
       child.stdin.end(input);
     });
   }
+}
+
+/** Git repository selection must come only from the explicit -C argument. */
+function gitEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of Object.keys(environment)) if (key.startsWith("GIT_")) delete environment[key];
+  return { ...environment, ...extra, GIT_AUTHOR_NAME: "shipyard", GIT_AUTHOR_EMAIL: "shipyard@local", GIT_COMMITTER_NAME: "shipyard", GIT_COMMITTER_EMAIL: "shipyard@local" };
 }
 
 function unavailable(stderr: string): LedgerError { return new LedgerError("ledger-unavailable", `Git ledger operation failed${stderr ? `: ${stderr.trim()}` : ""}`); }

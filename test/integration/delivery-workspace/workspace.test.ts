@@ -94,5 +94,62 @@ test("fails closed for a dirty worktree, then removes only rebuildable state whi
     await value.service.cleanup(value.repository, "d-1");
     assert.equal((await value.registry.read())?.workspaces.length, 0);
     assert.equal((await value.ledger.snapshot([request.initialLedgerPath])).records[request.initialLedgerPath], request.initialLedgerContents);
+    const ledgerHead = (await value.ledger.snapshot([])).head!;
+    await git(value.repository, ["branch", "-D", request.branch]);
+    assert.equal((await value.ledger.read(ledgerHead, [request.initialLedgerPath]))[request.initialLedgerPath], request.initialLedgerContents);
   } finally { await dispose(value); }
+});
+
+test("rejects a foreign canonical feature branch before creating ledger or worktree state", async () => {
+  const value = await fixture();
+  try {
+    const request = value.request("d-1");
+    await git(value.repository, ["branch", request.branch]);
+    await assert.rejects(value.service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
+    assert.equal((await value.ledger.snapshot([request.initialLedgerPath])).head, undefined);
+    assert.equal(await nodeWorkspaceGit.worktreeExists(request.worktreePath), false);
+    assert.equal(await value.registry.read(), undefined);
+  } finally { await dispose(value); }
+});
+
+test("resumes deterministically after faults following each durable creation boundary", async () => {
+  const value = await fixture();
+  try {
+    const afterLedger = value.request("d-ledger");
+    let failLedger = true;
+    const ledgerFault = { snapshot: value.ledger.snapshot.bind(value.ledger), async transact(transaction: Parameters<GitLedgerStore["transact"]>[0]) { const result = await value.ledger.transact(transaction); if (failLedger) { failLedger = false; throw new Error("after-ledger"); } return result; } };
+    await assert.rejects(new WorkspaceService(value.registry, ledgerFault, nodeWorkspaceGit, new MutationLockService(nodeFilesystem, nodeProcess)).createOrResume(afterLedger), /after-ledger/);
+    assert.equal(await nodeWorkspaceGit.worktreeExists(afterLedger.worktreePath), false);
+    await value.service.createOrResume(afterLedger);
+
+    const afterWorktree = value.request("d-worktree");
+    let failWorktree = true;
+    const gitFault = { ...nodeWorkspaceGit, async ensureWorktree(repositoryPath: string, branch: string, path: string) { await nodeWorkspaceGit.ensureWorktree(repositoryPath, branch, path); if (failWorktree) { failWorktree = false; throw new Error("after-worktree"); } } };
+    await assert.rejects(new WorkspaceService(value.registry, value.ledger, gitFault, new MutationLockService(nodeFilesystem, nodeProcess)).createOrResume(afterWorktree), /after-worktree/);
+    assert.equal(await nodeWorkspaceGit.worktreeExists(afterWorktree.worktreePath), true);
+    await value.service.createOrResume(afterWorktree);
+
+    const beforeRegistry = value.request("d-registry");
+    let failRegistry = true;
+    const registryFault = { read: value.registry.read.bind(value.registry), async write(document: Parameters<JsonDeliveryRegistry["write"]>[0]) { if (failRegistry) { failRegistry = false; throw new Error("before-registry"); } return value.registry.write(document); } };
+    await assert.rejects(new WorkspaceService(registryFault, value.ledger, nodeWorkspaceGit, new MutationLockService(nodeFilesystem, nodeProcess)).createOrResume(beforeRegistry), /before-registry/);
+    assert.equal(await nodeWorkspaceGit.worktreeExists(beforeRegistry.worktreePath), true);
+    await value.service.createOrResume(beforeRegistry);
+    assert.deepEqual((await value.registry.read())?.workspaces.map((workspace) => workspace.deliveryId).sort(), ["d-ledger", "d-registry", "d-worktree"]);
+  } finally { await dispose(value); }
+});
+
+test("workspace Git operations ignore hostile inherited repository-control variables", async () => {
+  const value = await fixture();
+  const redirected = await fixture();
+  const inherited = Object.fromEntries(["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_CONFIG_GLOBAL"].map((key) => [key, process.env[key]]));
+  try {
+    process.env.GIT_DIR = join(redirected.repository, ".git"); process.env.GIT_WORK_TREE = redirected.repository; process.env.GIT_INDEX_FILE = join(redirected.repository, "index"); process.env.GIT_OBJECT_DIRECTORY = join(redirected.repository, ".git", "objects"); process.env.GIT_CONFIG_GLOBAL = join(redirected.root, "config");
+    const request = value.request("d-1"); await value.service.createOrResume(request);
+    assert.equal((await nodeWorkspaceGit.worktreeIdentity(request.worktreePath))?.commonDirectory, value.commonDirectory);
+    assert.equal(await nodeWorkspaceGit.branchExists(redirected.repository, request.branch), false);
+  } finally {
+    for (const [key, previous] of Object.entries(inherited)) previous === undefined ? delete process.env[key] : process.env[key] = previous;
+    await dispose(value); await dispose(redirected);
+  }
 });

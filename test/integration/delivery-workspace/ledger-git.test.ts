@@ -35,7 +35,51 @@ test("stores durable records on an orphan ledger ref outside product ancestry an
     assert.equal(GitLedgerStore.excludesRefspec("refs/*:refs/*"), false);
     assert.equal(GitLedgerStore.excludesRefspec("+refs/heads/main:refs/heads/*"), false);
     assert.equal(GitLedgerStore.excludesRefspec("*:*"), false);
+    assert.throws(() => GitLedgerStore.requireProductOnlyTransport(["refs/heads/main:refs/heads/main"], JSON.stringify({ ref: GitLedgerStore.ref })), LedgerError);
+    assert.throws(() => GitLedgerStore.requireProductOnlyTransport(["refs/heads/shipyard-ledger:refs/heads/main"]), LedgerError);
+    assert.doesNotThrow(() => GitLedgerStore.requireProductOnlyTransport(["refs/heads/main:refs/heads/main"], JSON.stringify({ ref: "refs/heads/main" })));
   } finally { await rm(path, { recursive: true, force: true }); }
+});
+
+test("preserves record bytes, atomically rejects a concurrent stale writer, and succeeds after reread", async () => {
+  const path = await repository();
+  try {
+    const ledger = new GitLedgerStore(path);
+    for (const contents of ["", "one\n", "many\n\n"]) {
+      const before = await ledger.snapshot(["records/bytes"]);
+      await ledger.transact({ expectedHead: before.head, writes: [{ path: "records/bytes", contents, ...(before.head ? { expectedContents: (await ledger.snapshot(["records/bytes"])).records["records/bytes"] } : {}) }] });
+      assert.equal((await ledger.snapshot(["records/bytes"])).records["records/bytes"], contents);
+    }
+    const head = (await ledger.snapshot([])).head!;
+    const [left, right] = await Promise.allSettled([
+      ledger.transact({ expectedHead: head, writes: [{ path: "records/left", contents: "left" }] }),
+      ledger.transact({ expectedHead: head, writes: [{ path: "records/right", contents: "right" }] }),
+    ]);
+    assert.equal([left, right].filter((result) => result.status === "fulfilled").length, 1);
+    const loser = left.status === "rejected" ? left : right;
+    assert.ok(loser.status === "rejected" && loser.reason instanceof LedgerError && loser.reason.code === "ledger-stale-head");
+    const retry = await ledger.snapshot(["records/left", "records/right"]);
+    const missing = retry.records["records/left"] === undefined ? "records/left" : "records/right";
+    await ledger.transact({ expectedHead: retry.head, writes: [{ path: missing, contents: missing.endsWith("left") ? "left" : "right" }] });
+    assert.deepEqual(await ledger.snapshot(["records/left", "records/right"]), { head: (await ledger.snapshot([])).head, records: { "records/left": "left", "records/right": "right" } });
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
+test("ignores hostile inherited Git repository-control environment", async () => {
+  const primary = await repository(); const redirected = await repository();
+  const inherited = Object.fromEntries(["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"].map((key) => [key, process.env[key]]));
+  try {
+    process.env.GIT_DIR = join(redirected, ".git"); process.env.GIT_WORK_TREE = redirected; process.env.GIT_INDEX_FILE = join(redirected, "index");
+    process.env.GIT_OBJECT_DIRECTORY = join(redirected, ".git", "objects"); process.env.GIT_CONFIG_GLOBAL = join(redirected, "config"); process.env.GIT_CONFIG_COUNT = "1"; process.env.GIT_CONFIG_KEY_0 = "core.bare"; process.env.GIT_CONFIG_VALUE_0 = "true";
+    const ledger = new GitLedgerStore(primary);
+    await ledger.transact({ expectedHead: undefined, writes: [{ path: "records/safe", contents: "safe" }] });
+    for (const key of Object.keys(inherited)) delete process.env[key];
+    assert.ok(await git(primary, ["rev-parse", "refs/heads/shipyard-ledger"]));
+    await assert.rejects(git(redirected, ["rev-parse", "refs/heads/shipyard-ledger"]));
+  } finally {
+    for (const [key, value] of Object.entries(inherited)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    await rm(primary, { recursive: true, force: true }); await rm(redirected, { recursive: true, force: true });
+  }
 });
 
 test("reads exact pinned ledger commits for ContextReader and fails closed for unavailable Git objects", async () => {

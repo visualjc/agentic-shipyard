@@ -21,6 +21,7 @@ export interface WorkspaceGit {
   worktreeExists(path: string): Promise<boolean>;
   worktreeIdentity(path: string): Promise<WorkspaceGitIdentity | undefined>;
   worktreeIsClean(path: string): Promise<boolean>;
+  branchExists(repositoryPath: string, branch: string): Promise<boolean>;
   ensureWorktree(repositoryPath: string, branch: string, path: string): Promise<void>;
   removeWorktree(repositoryPath: string, path: string): Promise<void>;
 }
@@ -52,6 +53,11 @@ export class WorkspaceService {
 
       const snapshot = await this.ledger.snapshot([request.initialLedgerPath]);
       const existing = snapshot.records[request.initialLedgerPath];
+      // An existing branch is resumable only when durable or local provenance
+      // identifies it as this exact delivery. Do this before either mutation.
+      if (await this.git.branchExists(request.repositoryPath, request.branch) && matches.length === 0 && existing !== request.initialLedgerContents) {
+        throw new WorkspaceError("workspace-conflict", "The canonical feature branch already exists without matching delivery provenance.");
+      }
       try {
         if (existing === undefined) await this.ledger.transact({ expectedHead: snapshot.head, writes: [{ path: request.initialLedgerPath, contents: request.initialLedgerContents }], message: `initialize ${request.deliveryId}` });
         else if (existing !== request.initialLedgerContents) throw new WorkspaceError("workspace-ledger-conflict", "The durable initial ledger record conflicts with this delivery.");
@@ -142,15 +148,21 @@ export const nodeWorkspaceGit: WorkspaceGit = {
     } catch { return undefined; }
   },
   async worktreeIsClean(path) { return (await gitRequired(path, ["status", "--porcelain=v1"])) === ""; },
+  async branchExists(repositoryPath, branch) { return (await git(repositoryPath, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`])) !== undefined; },
   async ensureWorktree(repositoryPath, branch, path) {
-    const exists = await git(repositoryPath, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
-    await gitRequired(repositoryPath, exists === undefined ? ["worktree", "add", "-b", branch, path] : ["worktree", "add", path, branch]);
+    const exists = await nodeWorkspaceGit.branchExists(repositoryPath, branch);
+    await gitRequired(repositoryPath, exists ? ["worktree", "add", path, branch] : ["worktree", "add", "-b", branch, path]);
   },
   async removeWorktree(repositoryPath, path) { await gitRequired(repositoryPath, ["worktree", "remove", path]); },
 };
 async function git(repositoryPath: string, args: string[]): Promise<string | undefined> {
-  try { const { stdout } = await execFileAsync("git", ["-C", repositoryPath, ...args], { encoding: "utf8" }); return stdout.trim(); }
+  try { const { stdout } = await execFileAsync("git", ["-C", repositoryPath, ...args], { encoding: "utf8", env: workspaceGitEnvironment() }); return stdout.trim(); }
   catch (error: unknown) { const code = (error as { code?: number }).code; if (code === 1) return undefined; throw error; }
+}
+function workspaceGitEnvironment(): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of Object.keys(environment)) if (key.startsWith("GIT_")) delete environment[key];
+  return environment;
 }
 async function gitRequired(repositoryPath: string, args: string[]): Promise<string> {
   const result = await git(repositoryPath, args);

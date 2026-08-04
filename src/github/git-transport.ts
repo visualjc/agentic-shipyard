@@ -32,6 +32,7 @@ function commandFor(repositoryPath: string, args: readonly string[], credential:
   if (args.some((arg) => arg.includes(credential.token) || /https?:\/\/[^/\s]*@/i.test(arg))) {
     throw new GitTransportError("Git transport refuses credentials in command arguments or remote URLs.");
   }
+  assertSafeNetworkCommand(args);
   return {
     executable: "git",
     // -c has command scope, so a global/system/local helper cannot win.
@@ -44,6 +45,29 @@ function commandFor(repositoryPath: string, args: readonly string[], credential:
       GIT_TERMINAL_PROMPT: "0",
     },
   };
+}
+
+/** The public transport accepts only the network operations Shipyard needs. */
+function assertSafeNetworkCommand(args: readonly string[]): void {
+  const [subcommand, remote, ...positionals] = args;
+  if ((subcommand !== "fetch" && subcommand !== "ls-remote") || !safeRemote(remote)) {
+    throw new GitTransportError("Git transport only permits fetch or ls-remote against a named remote.");
+  }
+  if (positionals.length > 1 || positionals.some(value => !safeRef(value))) {
+    throw new GitTransportError("Git transport refuses Git options and unsafe positional arguments.");
+  }
+  // Kept explicit for actionable diagnostics if this validation is ever widened.
+  if (args.some(value => /(?:^-|config|alias|helper|extraheader)/i.test(value))) {
+    throw new GitTransportError("Git transport refuses option, config, alias, helper, and extraheader injection.");
+  }
+}
+
+function safeRemote(value: string | undefined): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value);
+}
+
+function safeRef(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._/@-]{0,255}$/.test(value) && !value.includes("//") && !value.endsWith("/");
 }
 
 /** Executes an authenticated Git command without changing the active gh identity. */
