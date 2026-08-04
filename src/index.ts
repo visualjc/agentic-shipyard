@@ -19,6 +19,8 @@ export type { BindingDocument, BindingStore, RepositoryBinding, RepositoryTopolo
 export type { ProfileReader, TopologyRequest } from "./profile/policy.js";
 export { requireMatchingTopology, requireProfileAuthorization, sameTopology } from "./profile/policy.js";
 export { PROFILE_FINGERPRINT_ALGORITHM, profileFingerprint } from "./profile/fingerprint.js";
+export { ActiveBoundProfileAuthorityResolver, boundProfileAuthority } from "./profile/bound-authority.js";
+export type { BoundProfileAuthority, BoundProfileAuthorityResolver } from "./profile/bound-authority.js";
 export { PathPolicyError, classifyPath, classifyPaths, classifyProfilePath } from "./policy/path-classifier.js";
 export { MutationLockError, MutationLockService } from "./locking/mutation-lock.js";
 export type { AcquiredMutationLock, MutationLockRecord } from "./locking/mutation-lock.js";
@@ -48,7 +50,7 @@ export { allowedRecordPaths, createEnvelope, validateContextEnvelope } from "./c
 export { ContextReader } from "./context/reader.js";
 export type { LoadedContext } from "./context/reader.js";
 export { CONTEXT_ROLES } from "./context/types.js";
-export type { ContextAdapterRequest, ContextDispatchExpectation, ContextEnvelope, ContextEnvelopeInput, ContextRole, PinnedLedgerReader, ProductShaReader } from "./context/types.js";
+export type { ContextAdapterRequest, ContextAuthorityResolver, ContextDispatchExpectation, ContextEnvelope, ContextEnvelopeInput, ContextRole, PinnedLedgerReader, ProductShaReader } from "./context/types.js";
 
 // Command-scoped GitHub API and Git-transport boundaries.
 export { GitHubAuthorityError, redactGitHubCredential } from "./github/errors.js";

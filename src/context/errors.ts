@@ -3,6 +3,7 @@ export type ContextFailureCode =
   | "context-repository-mismatch"
   | "context-records-not-allowed"
   | "context-dispatch-mismatch"
+  | "context-binding-mismatch"
   | "context-stale-product"
   | "context-ledger-record-missing";
 

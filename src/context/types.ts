@@ -1,4 +1,5 @@
 import type { RepositoryRef, Topology } from "../contracts/types.js";
+import type { BoundProfileAuthorityResolver } from "../profile/bound-authority.js";
 
 export const CONTEXT_ROLES = ["implementer", "reviewer", "status"] as const;
 export const CANONICAL_LEDGER_REF = "refs/heads/shipyard-ledger";
@@ -9,6 +10,10 @@ export type ContextAdapterRequest = Readonly<{ host: string; role: ContextRole; 
 /** Trusted dispatch capability, supplied by the host rather than the serialized envelope. */
 export type ContextDispatchExpectation = Readonly<{
   profile: string;
+  /** Trusted binding/profile identity; never sourced from the envelope. */
+  profileFingerprint: string;
+  topology: Readonly<Topology>;
+  repository: Readonly<RepositoryRef>;
   deliveryId: string;
   host: string;
   role: ContextRole;
@@ -19,6 +24,9 @@ export type ContextDispatchExpectation = Readonly<{
   ledgerRef: string;
   ledgerSha: string;
 }>;
+
+/** Revalidates the dispatch repository against the live binding/profile pair. */
+export type ContextAuthorityResolver = Pick<BoundProfileAuthorityResolver, "resolve">;
 
 /** A self-contained, pinned, role-limited ledger context. */
 export type ContextEnvelope = Readonly<{

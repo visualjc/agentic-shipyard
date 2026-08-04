@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -74,12 +74,25 @@ test("serializes concurrent creators, preserves both registry entries after retr
   const value = await fixture();
   try {
     const left = value.request("d-1"); const right = value.request("d-2");
-    const results = await Promise.allSettled([value.service.createOrResume(left), value.service.createOrResume(right)]);
-    assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
-    const rejected = results.find((result): result is PromiseRejectedResult => result.status === "rejected")!;
-    assert.ok(rejected.reason instanceof MutationLockError && rejected.reason.code === "lock-held");
-    const retry = rejected === results[0] ? left : right;
-    await value.service.createOrResume(retry);
+    // Hold the first call after it has acquired the durable lock. This makes
+    // the competing acquire deterministic instead of relying on scheduler
+    // timing that sometimes allowed both operations to run sequentially.
+    const entered = Promise.withResolvers<void>(); const release = Promise.withResolvers<void>();
+    let blockOnce = true;
+    const blockingLedger = {
+      async snapshot(paths: readonly string[]) {
+        if (blockOnce) { blockOnce = false; entered.resolve(); await release.promise; }
+        return value.ledger.snapshot(paths);
+      },
+      transact: value.ledger.transact.bind(value.ledger),
+    };
+    const blockedService = new WorkspaceService(value.registry, blockingLedger, nodeWorkspaceGit, new MutationLockService(nodeFilesystem, nodeProcess));
+    const first = blockedService.createOrResume(left);
+    await entered.promise;
+    await assert.rejects(value.service.createOrResume(right), (error: unknown) => error instanceof MutationLockError && error.code === "lock-held");
+    release.resolve();
+    await first;
+    await value.service.createOrResume(right);
     assert.deepEqual((await value.registry.read())?.workspaces.map((workspace) => workspace.deliveryId).sort(), ["d-1", "d-2"]);
     assert.equal(Object.keys((await value.ledger.snapshot([left.initialLedgerPath, right.initialLedgerPath])).records).length, 2);
   } finally { await dispose(value); }
@@ -184,5 +197,28 @@ test("workspace Git operations ignore hostile inherited repository-control varia
   } finally {
     for (const [key, previous] of Object.entries(inherited)) previous === undefined ? delete process.env[key] : process.env[key] = previous;
     await dispose(value); await dispose(redirected);
+  }
+});
+
+test("ledger and workspace production Git operations never execute a PATH-prepended git", async () => {
+  const value = await fixture();
+  const directory = await mkdtemp(join(tmpdir(), "shipyard-fake-git-"));
+  const fakeGit = join(directory, "git");
+  const executed = join(directory, "executed");
+  const originalPath = process.env.PATH;
+  try {
+    await writeFile(fakeGit, `#!/bin/sh\n: > '${executed}'\nexit 99\n`, { mode: 0o700 });
+    await chmod(fakeGit, 0o700);
+    process.env.PATH = `${directory}:${originalPath ?? ""}`;
+
+    await value.ledger.transact({ expectedHead: undefined, writes: [{ path: "records/path-safe", contents: "safe" }] });
+    await value.service.createOrResume(value.request("d-path-safe"));
+
+    await assert.rejects(access(executed), /ENOENT/);
+    assert.equal((await nodeWorkspaceGit.worktreeIdentity(value.request("d-path-safe").worktreePath))?.branch, "shipyard/d-path-safe");
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    await dispose(value); await rm(directory, { recursive: true, force: true });
   }
 });

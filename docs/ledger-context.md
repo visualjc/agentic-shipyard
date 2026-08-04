@@ -28,14 +28,18 @@ The host-neutral adapter payload is exactly:
 ```
 
 Before any product or ledger call, the host supplies a trusted dispatch
-capability outside the serialized envelope. It binds the profile, delivery ID,
-host, role, envelope path, repository root, product branch/SHA and ledger
-ref/SHA. `ContextReader` compares the parsed envelope to that capability first;
-editing an envelope's role or delivery ID (including its adapter role) is
-therefore rejected with zero ledger reads. It then obtains the current product
-SHA for `repoRoot` and compares it to the product pin. A mismatch stops the
-operation; no ledger record may be read. On a match, context is loaded only
-through the pinned-read seam:
+capability outside the serialized envelope. It binds the profile fingerprint,
+complete topology, selected repository, delivery ID, host, role, envelope path,
+repository root, product branch/SHA and ledger ref/SHA. `ContextReader` compares
+the parsed envelope to that capability first, so replacing both serialized
+repository and topology cannot redirect a worker. It then resolves the active
+binding/profile pair for the trusted repository root and requires the same
+profile name, fingerprint, and topology before any product or ledger read.
+Editing an envelope's role or delivery ID (including its adapter role), or
+using a stale/wrong profile, is therefore rejected with zero ledger reads. It
+then obtains the current product SHA for `repoRoot` and compares it to the
+product pin. A mismatch stops the operation; no ledger record may be read. On
+a match, context is loaded only through the pinned-read seam:
 
 ```ts
 reader.read(envelope.ledgerSha, envelope.records)
@@ -57,4 +61,5 @@ entry without that record is rejected rather than repaired. When recovering
 before registry creation, an existing branch is accepted only if its head is
 the recorded starting SHA; a newly-created branch is explicitly created at
 that SHA. `GitLedgerStore` always writes `refs/heads/shipyard-ledger`; its
-constructor accepts no configurable ledger ref.
+constructor accepts no configurable ledger ref. Its subprocesses use a
+canonical absolute Git executable and never resolve a bare `git` from `PATH`.

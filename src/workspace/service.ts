@@ -9,8 +9,11 @@ import { LedgerError } from "../ledger/errors.js";
 import type { LedgerStore } from "../ledger/types.js";
 import { MutationLockService } from "../locking/mutation-lock.js";
 import { WorkspaceError } from "./errors.js";
+import { canonicalGitExecutable } from "../adapters/git-transport.js";
 
 const execFileAsync = promisify(execFile);
+// Never allow a worktree mutation to resolve a bare `git` through PATH.
+const gitExecutable = canonicalGitExecutable();
 
 export type CreateOrResumeDelivery = Readonly<{
   repositoryPath: string; commonDirectory: string; deliveryId: string; branch: string; worktreePath: string;
@@ -183,7 +186,7 @@ export const nodeWorkspaceGit: WorkspaceGit = {
   async removeWorktree(repositoryPath, path) { await gitRequired(repositoryPath, ["worktree", "remove", path]); },
 };
 async function git(repositoryPath: string, args: string[]): Promise<string | undefined> {
-  try { const { stdout } = await execFileAsync("git", ["-C", repositoryPath, ...args], { encoding: "utf8", env: workspaceGitEnvironment() }); return stdout.trim(); }
+  try { const { stdout } = await execFileAsync(gitExecutable, ["-C", repositoryPath, ...args], { encoding: "utf8", env: workspaceGitEnvironment() }); return stdout.trim(); }
   catch (error: unknown) { const code = (error as { code?: number }).code; if (code === 1) return undefined; throw error; }
 }
 

@@ -115,10 +115,11 @@ test("reads exact pinned ledger commits for ContextReader and fails closed for u
       productBranch: "main", productSha: await git(path, ["rev-parse", "HEAD"]), ledgerRef: GitLedgerStore.ref, ledgerSha: first,
     });
     const loaded = await new ContextReader({
-      profile: envelope.profile, deliveryId: envelope.deliveryId, host: envelope.host, role: envelope.role,
+      profile: envelope.profile, profileFingerprint: "0".repeat(64), topology: envelope.topology, repository: envelope.repository,
+      deliveryId: envelope.deliveryId, host: envelope.host, role: envelope.role,
       envelopePath: envelope.adapter.envelopePath, repoRoot: envelope.adapter.repoRoot, productBranch: envelope.productBranch,
       productSha: envelope.productSha, ledgerRef: envelope.ledgerRef, ledgerSha: envelope.ledgerSha,
-    }, { currentProductSha: async () => git(path, ["rev-parse", "HEAD"]) }, ledger).load(envelope);
+    }, { resolve: async () => ({ profileName: envelope.profile, profileFingerprint: "0".repeat(64), commonDirectory: "/test/.git", actorLogin: "actor", topology: envelope.topology }) }, { currentProductSha: async () => git(path, ["rev-parse", "HEAD"]) }, ledger).load(envelope);
     assert.equal(loaded.records["deliveries/d-1/contract.md"], "first");
     await assert.rejects(ledger.read("a".repeat(40), ["deliveries/d-1/contract.md"]), (error: unknown) => error instanceof LedgerError && error.code === "ledger-unavailable");
   } finally { await rm(path, { recursive: true, force: true }); }

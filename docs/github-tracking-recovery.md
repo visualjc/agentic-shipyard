@@ -13,6 +13,14 @@ future tracker checkpoint/record discovery flow to determine whether a provider
 write already completed. An ambiguous or mismatched provider record is unsafe
 to repeat and requires manual review.
 
+Tracking resolves the active binding and its fingerprint-matched named profile
+*inside* the durable mutation guard. The caller supplies a local repository
+path and injectable credential/network seams, never an actor login or a target
+topology. The resolved profile selects both the command-scoped actor and the
+only development repository. If the profile, fingerprint, or topology changed
+while waiting to resume, Shipyard stops before the first provider request; do
+not recover by substituting a repository or actor in the caller.
+
 The tracker identifies its records only by its exact marker on a standalone
 body line. It excludes pull requests from GitHub's `/issues` listing and stores
 GitHub's stable provider node ID when available, so a resumed run cannot mistake

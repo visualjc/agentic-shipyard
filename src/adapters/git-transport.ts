@@ -61,7 +61,8 @@ export function createNodeGitTransportCommandRunner(executable = DEFAULT_NODE_GI
   };
 }
 
-function canonicalGitExecutable(executable: string): string {
+/** Resolves a Git executable without permitting child_process PATH lookup. */
+export function canonicalGitExecutable(executable = DEFAULT_NODE_GIT_EXECUTABLE): string {
   if (!isAbsolute(executable)) throw new Error("Git executable must be an absolute path.");
   let canonical: string;
   try {

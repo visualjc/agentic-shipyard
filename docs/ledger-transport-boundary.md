@@ -7,3 +7,7 @@ that ref and rejects a serialized payload naming it.
 
 There is intentionally no promotion implementation in this issue. Issue #7
 must call this boundary immediately before its Git transport invocation.
+
+Ledger and local workspace Git operations pin the same canonical, absolute Git
+executable as the authenticated transport runner. A PATH-prepended executable
+therefore cannot take control of a ledger update or worktree mutation.

@@ -1,4 +1,5 @@
 import type { RepositoryRef, Topology } from "../contracts/types.js";
+import type { BoundProfileAuthorityResolver } from "../profile/bound-authority.js";
 import { verifyGitHubActor } from "./authority.js";
 import type { GitHubApiCredentialResolver, GitHubRestClientFactory, VerifiedGitHubSession } from "./types.js";
 import { GitHubTrackerError, stableShipyardMarker } from "./markers.js";
@@ -24,14 +25,16 @@ export type DevelopmentRecordRequest = {
 
 /** Inputs required to establish a verified, command-scoped GitHub session. */
 export type DevelopmentRecordAuthority = {
-  expectedActorLogin: string;
+  /** Local path is identity input only; the resolver chooses actor and repository. */
+  repositoryPath: string;
+  boundAuthority: BoundProfileAuthorityResolver;
   credentials: GitHubApiCredentialResolver;
   client: GitHubRestClientFactory;
 };
 
 /** Durable caller-owned serialization; tracking never mutates outside this seam. */
 export interface DevelopmentRecordMutationGuard {
-  exclusive<T>(deliveryId: string, operation: () => Promise<T>): Promise<T>;
+  exclusive<T>(repositoryPath: string, deliveryId: string, operation: () => Promise<T>): Promise<T>;
 }
 
 export type DevelopmentIssueCheckpoint = {
@@ -71,13 +74,15 @@ const MAX_DISCOVERY_PAGES = 100;
 export async function trackDevelopmentRecords(
   authority: DevelopmentRecordAuthority,
   mutationGuard: DevelopmentRecordMutationGuard,
-  topology: Topology,
   request: DevelopmentRecordRequest,
 ): Promise<DevelopmentRecordsCheckpoint> {
-  return mutationGuard.exclusive(request.deliveryId, async () => {
+  return mutationGuard.exclusive(authority.repositoryPath, request.deliveryId, async () => {
     assertExpectedHeadSha(request.pullRequest.expectedHeadSha);
-    const session = await verifyGitHubActor(authority.expectedActorLogin, authority.credentials, authority.client);
-    const repository = developmentRepository(topology);
+    // Resolve inside the durable mutation boundary so resume/checkpoint writes
+    // cannot reuse a profile or binding that changed while waiting for the lock.
+    const bound = await authority.boundAuthority.resolve(authority.repositoryPath, "review");
+    const session = await verifyGitHubActor(bound.actorLogin, authority.credentials, authority.client);
+    const repository = developmentRepository(bound.topology);
     const marker = stableShipyardMarker(request.deliveryId);
     const basePath = `/repos/${repository.owner}/${repository.name}`;
 

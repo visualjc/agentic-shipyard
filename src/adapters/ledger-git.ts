@@ -7,9 +7,12 @@ import { LedgerError } from "../ledger/errors.js";
 import { applyLedgerTransaction, validLedgerPath } from "../ledger/transaction.js";
 import type { LedgerSnapshot, LedgerStore, LedgerTransaction } from "../ledger/types.js";
 import type { PinnedLedgerReader } from "../context/types.js";
+import { canonicalGitExecutable } from "./git-transport.js";
 
 const execFileAsync = promisify(execFile);
 const zeroOid = "0".repeat(40);
+// Never allow a ledger mutation to resolve a bare `git` through PATH.
+const gitExecutable = canonicalGitExecutable();
 
 /** Git object-database ledger that never checks its orphan ref out in a product worktree. */
 export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
@@ -125,7 +128,7 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
 
   private async run(args: string[], env?: NodeJS.ProcessEnv): Promise<{ code: number; stdout: string; stderr: string }> {
     try {
-      const { stdout, stderr } = await execFileAsync("git", ["-C", this.repositoryPath, ...args], {
+      const { stdout, stderr } = await execFileAsync(gitExecutable, ["-C", this.repositoryPath, ...args], {
         encoding: "utf8", env: gitEnvironment(env),
       });
       return { code: 0, stdout, stderr };
@@ -142,7 +145,7 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
   }
   private async gitInput(args: string[], input: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const child = spawn("git", ["-C", this.repositoryPath, ...args], { env: gitEnvironment() });
+      const child = spawn(gitExecutable, ["-C", this.repositoryPath, ...args], { env: gitEnvironment() });
       let stdout = ""; let stderr = "";
       child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
       child.stdout.on("data", (chunk: string) => { stdout += chunk; }); child.stderr.on("data", (chunk: string) => { stderr += chunk; });

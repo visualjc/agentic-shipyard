@@ -4,6 +4,7 @@ import { stableShipyardMarker } from "../../src/github/markers.js";
 import { trackDevelopmentRecords } from "../../src/github/tracker.js";
 import type { Topology } from "../../src/contracts/types.js";
 import type { DevelopmentRecordAuthority, DevelopmentRecordMutationGuard } from "../../src/github/tracker.js";
+import type { BoundProfileAuthority } from "../../src/profile/bound-authority.js";
 import type { GitHubRestRequest } from "../../src/github/types.js";
 
 const development = { owner: "acme", name: "development", remote: { name: "origin", url: "https://github.com/acme/development.git" }, defaultBranch: "main" };
@@ -15,7 +16,7 @@ const matchingPullRequestFields = { head: { sha: request.pullRequest.expectedHea
 
 class SerialGuard implements DevelopmentRecordMutationGuard {
   private tail = Promise.resolve();
-  async exclusive<T>(_deliveryId: string, operation: () => Promise<T>): Promise<T> {
+  async exclusive<T>(_repositoryPath: string, _deliveryId: string, operation: () => Promise<T>): Promise<T> {
     const prior = this.tail;
     let release!: () => void;
     this.tail = new Promise<void>(resolve => { release = resolve; });
@@ -27,9 +28,13 @@ class SerialGuard implements DevelopmentRecordMutationGuard {
 class RecordingApi {
   readonly calls: GitHubRestRequest[] = [];
   constructor(private readonly respond: (request: GitHubRestRequest) => unknown | Promise<unknown>) {}
-  authority(): DevelopmentRecordAuthority {
+  authority(topology: Topology = staged): DevelopmentRecordAuthority {
     return {
-      expectedActorLogin: "shipyard-actor",
+      repositoryPath: "/worktree",
+      boundAuthority: { resolve: async (repositoryPath, operation): Promise<BoundProfileAuthority> => {
+        assert.equal(repositoryPath, "/worktree"); assert.equal(operation, "review");
+        return { profileName: "test", commonDirectory: "/worktree/.git", profileFingerprint: "0".repeat(64), actorLogin: "shipyard-actor", topology };
+      } },
       credentials: { resolve: async () => ({ authorizationValue: "test-token" }) },
       client: { forCredential: () => ({ request: async <T>(call: GitHubRestRequest) => {
         this.calls.push(call);
@@ -50,7 +55,7 @@ test("verifies the actor first and creates the staged-pair issue and PR only in 
     if (rest.path.endsWith("/issues")) return { id: "I_1", number: 17, html_url: "https://github.test/acme/development/issues/17" };
     return { id: "PR_1", number: 23, html_url: "https://github.test/acme/development/pull/23", ...matchingPullRequestFields };
   });
-  const checkpoint = await trackDevelopmentRecords(api.authority(), new SerialGuard(), staged, request);
+  const checkpoint = await trackDevelopmentRecords(api.authority(), new SerialGuard(), request);
   assert.deepEqual(api.calls.map(call => [call.method, call.path]), [["GET", "/user"], ["GET", "/repos/acme/development/issues?state=all&per_page=100&page=1"], ["GET", "/repos/acme/development/pulls?state=all&per_page=100&page=1"], ["POST", "/repos/acme/development/issues"], ["POST", "/repos/acme/development/pulls"]]);
   assert.ok(api.writes.every(call => call.path.includes("/acme/development/")));
   assert.equal((api.writes[0].body as { body: string }).body, `Work item\n\n${marker}`);
@@ -68,7 +73,7 @@ test("exhausts pagination and discovers a marked record on a later page", async 
     if (rest.method === "GET") return [{ id: "PR_marked", number: 102, html_url: "https://github.test/pull/102", body: marker, ...matchingPullRequestFields }];
     throw new Error("unexpected write");
   });
-  const checkpoint = await trackDevelopmentRecords(api.authority(), new SerialGuard(), single, request);
+  const checkpoint = await trackDevelopmentRecords(api.authority(single), new SerialGuard(), request);
   assert.equal(checkpoint.issue.id, "I_marked");
   assert.equal(api.writes.length, 0);
   assert.ok(api.calls.some(call => call.path.endsWith("issues?state=all&per_page=100&page=2")));
@@ -82,7 +87,7 @@ test("preflight rejects unsafe PR state before creating an issue", async () => {
     if (rest.path.includes("/pulls?")) return [{ id: "PR_1", number: 2, html_url: "https://github.test/pull/2", body: marker, pull_request: {}, head: { sha: "b".repeat(40), ref: request.pullRequest.head }, base: { ref: request.pullRequest.base } }];
     throw new Error(`unexpected request: ${rest.path}`);
   });
-  await assert.rejects(trackDevelopmentRecords(api.authority(), new SerialGuard(), staged, request), { code: "head-sha-mismatch" });
+  await assert.rejects(trackDevelopmentRecords(api.authority(), new SerialGuard(), request), { code: "head-sha-mismatch" });
   assert.equal(api.writes.length, 0);
 });
 
@@ -98,7 +103,7 @@ for (const [field, record, code] of [
       if (rest.path.includes("/pulls?")) return [{ id: "PR_1", number: 2, html_url: "https://github.test/pull/2", body: marker, ...record }];
       throw new Error(`unexpected request: ${rest.path}`);
     });
-    await assert.rejects(trackDevelopmentRecords(api.authority(), new SerialGuard(), staged, request), { code });
+    await assert.rejects(trackDevelopmentRecords(api.authority(), new SerialGuard(), request), { code });
     assert.equal(api.writes.length, 0);
   });
 }
@@ -110,7 +115,7 @@ test("fails closed when a newly-created PR response has the wrong head SHA", asy
     if (rest.path.endsWith("/issues")) return { id: "I_1", number: 1, html_url: "https://github.test/issues/1" };
     return { id: "PR_1", number: 2, html_url: "https://github.test/pull/2", head: { sha: "b".repeat(40), ref: request.pullRequest.head }, base: { ref: request.pullRequest.base } };
   });
-  await assert.rejects(trackDevelopmentRecords(api.authority(), new SerialGuard(), staged, request), { code: "head-sha-mismatch" });
+  await assert.rejects(trackDevelopmentRecords(api.authority(), new SerialGuard(), request), { code: "head-sha-mismatch" });
   assert.deepEqual(api.writes.map(call => call.path), ["/repos/acme/development/issues", "/repos/acme/development/pulls"]);
 });
 
@@ -125,7 +130,7 @@ test("rejects a newly-created PR response with the wrong head or base ref", asyn
       if (rest.path.endsWith("/issues")) return { id: "I_1", number: 1, html_url: "https://github.test/issues/1" };
       return { id: "PR_1", number: 2, html_url: "https://github.test/pull/2", ...record };
     });
-    await assert.rejects(trackDevelopmentRecords(api.authority(), new SerialGuard(), staged, request), { code });
+    await assert.rejects(trackDevelopmentRecords(api.authority(), new SerialGuard(), request), { code });
     assert.deepEqual(api.writes.map(call => call.path), ["/repos/acme/development/issues", "/repos/acme/development/pulls"]);
   }
 });
@@ -144,7 +149,7 @@ test("rejects duplicate marked records and mismatched or absent checkpoint IDs",
       if (rest.method === "GET") return [];
       throw new Error(`unexpected write for ${scenario.name}`);
     });
-    await assert.rejects(trackDevelopmentRecords(api.authority(), new SerialGuard(), staged, { ...request, resume: scenario.resume }), { code: scenario.code });
+    await assert.rejects(trackDevelopmentRecords(api.authority(), new SerialGuard(), { ...request, resume: scenario.resume }), { code: scenario.code });
     assert.equal(api.writes.length, 0, scenario.name);
   }
 });
@@ -158,7 +163,7 @@ test("requires the marker to occupy a standalone body line", async () => {
     if (rest.path.endsWith("/issues")) return { id: "I_created", number: 3, html_url: "https://github.test/issues/3" };
     throw new Error(`unexpected request: ${rest.path}`);
   });
-  const checkpoint = await trackDevelopmentRecords(api.authority(), new SerialGuard(), staged, request);
+  const checkpoint = await trackDevelopmentRecords(api.authority(), new SerialGuard(), request);
   assert.equal(checkpoint.issue.state, "created");
   assert.equal(checkpoint.pullRequest.state, "discovered");
   assert.deepEqual(api.writes.map(call => call.path), ["/repos/acme/development/issues"]);
@@ -173,7 +178,7 @@ test("excludes pull request objects from the issues listing", async () => {
     if (rest.path.endsWith("/issues")) return { id: "I_created", number: 3, html_url: "https://github.test/issues/3" };
     throw new Error(`unexpected request: ${rest.path}`);
   });
-  const checkpoint = await trackDevelopmentRecords(api.authority(), new SerialGuard(), staged, request);
+  const checkpoint = await trackDevelopmentRecords(api.authority(), new SerialGuard(), request);
   assert.equal(checkpoint.issue.id, "I_created");
   assert.equal(checkpoint.pullRequest.id, "PR_1");
   assert.deepEqual(api.writes.map(call => call.path), ["/repos/acme/development/issues"]);
@@ -182,7 +187,7 @@ test("excludes pull request objects from the issues listing", async () => {
 test("fails closed rather than loop forever on unbounded full provider pages", async () => {
   const fullPage = Array.from({ length: 100 }, (_, number) => ({ id: `I_${number}`, number, html_url: `https://github.test/issues/${number}`, body: "unmarked" }));
   const api = new RecordingApi(rest => rest.path === "/user" ? { login: "shipyard-actor" } : fullPage);
-  await assert.rejects(trackDevelopmentRecords(api.authority(), new SerialGuard(), staged, request), { code: "pagination-limit" });
+  await assert.rejects(trackDevelopmentRecords(api.authority(), new SerialGuard(), request), { code: "pagination-limit" });
   assert.equal(api.writes.length, 0);
   assert.ok(api.calls.length <= 201, "pagination scan must be bounded");
 });
@@ -199,7 +204,7 @@ test("a durable guard serializes concurrent tracking calls to one issue/PR pair"
     prCreated = true; return { id: "PR_1", number: 2, html_url: "https://github.test/pull/2", ...matchingPullRequestFields };
   });
   const guard = new SerialGuard();
-  const [first, second] = await Promise.all([trackDevelopmentRecords(api.authority(), guard, staged, request), trackDevelopmentRecords(api.authority(), guard, staged, request)]);
+  const [first, second] = await Promise.all([trackDevelopmentRecords(api.authority(), guard, request), trackDevelopmentRecords(api.authority(), guard, request)]);
   assert.equal(api.writes.filter(call => call.path.endsWith("/issues")).length, 1);
   assert.equal(api.writes.filter(call => call.path.endsWith("/pulls")).length, 1);
   assert.equal(first.issue.id, second.issue.id);
@@ -219,9 +224,31 @@ test("resumes a partially-created issue when the PR write previously failed", as
     return { id: "PR_1", number: 2, html_url: "https://github.test/pull/2", ...matchingPullRequestFields };
   });
   const guard = new SerialGuard();
-  await assert.rejects(trackDevelopmentRecords(api.authority(), guard, staged, request));
-  const resumed = await trackDevelopmentRecords(api.authority(), guard, staged, request);
+  await assert.rejects(trackDevelopmentRecords(api.authority(), guard, request));
+  const resumed = await trackDevelopmentRecords(api.authority(), guard, request);
   assert.equal(resumed.issue.state, "discovered");
   assert.equal(resumed.pullRequest.state, "created");
   assert.equal(api.writes.filter(call => call.path.endsWith("/issues")).length, 1);
+});
+
+test("resolves active profile authority inside the durable guard and rejects a stale profile before any provider call", async () => {
+  const api = new RecordingApi(() => { throw new Error("provider must not be called"); });
+  let inGuard = false;
+  const guard: DevelopmentRecordMutationGuard = {
+    exclusive: async (_repositoryPath, _deliveryId, operation) => {
+      inGuard = true;
+      try { return await operation(); } finally { inGuard = false; }
+    },
+  };
+  const authority: DevelopmentRecordAuthority = {
+    repositoryPath: "/worktree",
+    boundAuthority: { resolve: async () => {
+      assert.equal(inGuard, true, "active profile must be resolved after the durable guard is held");
+      throw Object.assign(new Error("profile changed"), { code: "binding-stale" });
+    } },
+    credentials: { resolve: async () => ({ authorizationValue: "test-token" }) },
+    client: api.authority().client,
+  };
+  await assert.rejects(trackDevelopmentRecords(authority, guard, request), { code: "binding-stale" });
+  assert.equal(api.calls.length, 0);
 });
