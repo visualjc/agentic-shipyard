@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DestinationSyncTransport, requireSourceFreePublication } from "../../src/sync/transport.js";
+import { DEFAULT_GIT_COMMAND_MAX_OUTPUT_BYTES, DEFAULT_GIT_COMMAND_TIMEOUT_MS } from "../../src/adapters/git-transport.js";
 import type { GitTransportCommand } from "../../src/adapters/git-transport.js";
 
 const topology = { kind: "staged-pair" as const, development: { owner: "acme", name: "dev", remote: { name: "origin", url: "https://github.com/acme/dev.git" }, defaultBranch: "main" }, destination: { owner: "acme", name: "dest", remote: { name: "upstream", url: "https://github.com/acme/dest.git" }, defaultBranch: "main" } };
@@ -9,7 +10,12 @@ function subject(commands: GitTransportCommand[], verifiedActorLogin = "actor", 
 
 test("credentialed destination Git runs only in a temporary config-isolated bare repository", async () => {
   const commands: GitTransportCommand[] = []; const staged = await subject(commands).stage("/product", "main", "main", "v1");
-  try { const credentialed = commands.filter(command => Object.values(command.env).some(value => value.includes("bearer"))); assert.ok(credentialed.length >= 2); assert.ok(credentialed.every(command => command.argv[1] !== "/product" && command.argv[0] === "-C")); assert.ok(credentialed.every(command => command.argv.join(" ").includes("upstream"))); assert.ok(commands.some(command => command.env.GIT_CONFIG_COUNT === undefined && command.argv.join(" ").includes("fetch --no-tags /product"))); assert.equal(commands.some(command => command.argv.join(" ").includes("github_pat_transport_secret")), false); } finally { await staged.release(); }
+  try { const credentialed = commands.filter(command => Object.values(command.env).some(value => value.includes("bearer"))); assert.ok(credentialed.length >= 2); assert.ok(credentialed.every(command => command.argv[1] !== "/product" && command.argv[0] === "-C")); assert.ok(credentialed.every(command => command.argv.join(" ").includes("upstream"))); assert.ok(commands.some(command => command.env.GIT_CONFIG_COUNT === undefined && command.argv.join(" ").includes("fetch --no-tags /product"))); assert.equal(commands.some(command => command.argv.join(" ").includes("github_pat_transport_secret")), false); assert.ok(commands.every(command => command.timeoutMs === DEFAULT_GIT_COMMAND_TIMEOUT_MS && command.maxOutputBytes === DEFAULT_GIT_COMMAND_MAX_OUTPUT_BYTES)); } finally { await staged.release(); }
+});
+
+test("destination transport rejects oversized injected-runner output with a fixed diagnostic", async () => {
+  const transport = new DestinationSyncTransport({ resolve: async () => ({ profileName: "p", commonDirectory: "/r/.git", profileFingerprint: "a".repeat(64), actorLogin: "actor", topology }) }, { commonDirectory: async () => "/r/.git", remoteUrl: async () => topology.destination.remote.url }, { resolve: async () => ({ token: "secret-token", verifiedActorLogin: "actor" }) }, { run: async () => ({ exitCode: 0, stdout: "x".repeat(DEFAULT_GIT_COMMAND_MAX_OUTPUT_BYTES + 1), stderr: "" }) });
+  await assert.rejects(transport.stage("/product", "main", "main"), (error: unknown) => error instanceof Error && /output limit.*killed/i.test(error.message) && !error.message.includes("secret-token"));
 });
 
 test("actor mismatch blocks before a token-bearing child", async () => { const commands: GitTransportCommand[] = []; await assert.rejects(subject(commands, "other").stage("/product", "main", "main"), /verified/i); assert.equal(commands.some(command => Object.values(command.env).some(value => value.includes("bearer"))), false); });

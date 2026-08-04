@@ -145,6 +145,17 @@ test("configured Git executable must be an absolute existing regular file", () =
   assert.throws(() => createNodeGitTransportCommandRunner("/definitely/not/git"), /existing regular file/i);
 });
 
+test("production Git runner kills hung and oversized children with fixed diagnostics", async (t) => {
+  for (const mode of ["hang", "flood"] as const) await t.test(mode, async () => {
+    const directory = await mkdtemp(join(tmpdir(), `shipyard-runner-${mode}-`)); const executable = join(directory, "trusted-git");
+    try {
+      await writeFile(executable, mode === "hang" ? "#!/bin/sh\nwhile :; do :; done\n" : "#!/bin/sh\nwhile :; do echo opaque-secret; done\n", { mode: 0o700 }); await chmod(executable, 0o700); const started = Date.now();
+      const result = await createNodeGitTransportCommandRunner(executable).run({ executable, argv: ["ls-remote", "origin"], env: { GIT_CONFIG_VALUE_1: "AUTHORIZATION: bearer opaque-secret" }, timeoutMs: mode === "hang" ? 150 : 1_000, maxOutputBytes: 128 });
+      assert.notEqual(result.exitCode, 0); assert.match(result.stderr, mode === "hang" ? /timed out.*killed/i : /output limit.*killed/i); assert.equal(result.stdout, ""); assert.doesNotMatch(result.stderr, /opaque-secret/); assert.ok(Date.now() - started < 3_000);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+});
+
 test("authenticated runner isolates a named remote from hostile Git config and developer-tool selection", async () => {
   const directory = await mkdtemp(join(tmpdir(), "shipyard-isolated-git-"));
   const executable = join(directory, "trusted-git");

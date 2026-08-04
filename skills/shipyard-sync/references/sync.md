@@ -9,5 +9,9 @@ If a durable source receipt reports that local ref creation failed, rerun the
 same explicit source import; Shipyard will resume without replacing a different
 immutable source ref or its last usable canonical record.
 
+The command accepts only `--source-ref`, `--repo`, and `--home`, each at most
+once, with no positional values. Treat unknown, misspelled, duplicate, empty,
+or ambiguous arguments as a refusal before repository or credential access.
+
 Source refs under `refs/shipyard/source/` are local-only and must never appear
 in product publication refspecs.

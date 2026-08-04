@@ -7,6 +7,13 @@ mutation, filesystem write, or mutation-lock operation. An unbound, stale,
 missing, malformed, changed, or unauthorized profile reports deterministic
 setup/rebind guidance.
 
-Sync freshness is reported as unavailable until an explicit `shipyard-sync`
-operation establishes fresh destination facts. Status never fetches, imports,
-acquires the sync lock, or reads/writes isolated ledger history to refresh it.
+Sync status derives baseline freshness from the current local worktree, branch,
+destination-tracking ref, remote URL, ancestry, and path policy. It also reads
+canonical source provenance, its pinned receipt, and the corresponding local
+source ref when those local records exist. Fresh, stale, unavailable, and the
+next safe action are therefore reported from real local facts instead of an
+unconditional placeholder.
+
+Status never fetches, imports, acquires a mutation lock, moves a ref, changes
+the index or worktree, writes or advances ledger history, dispatches delivery
+work, or calls a provider. All local Git reads are time- and output-bounded.

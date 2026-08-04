@@ -37,6 +37,9 @@ export type GitTransportCommand = {
   env: Readonly<Record<string, string>>;
   /** A named remote resolved into a temporary, config-isolated Git directory. */
   isolatedRemote?: Readonly<{ repositoryPath: string; remote: string; expectedUrl: string }>;
+  /** Every child is bounded even when an injected runner ignores these hints. */
+  timeoutMs?: number;
+  maxOutputBytes?: number;
 };
 
 export type GitTransportCommandResult = {
@@ -49,6 +52,9 @@ export interface GitTransportCommandRunner {
   run(command: GitTransportCommand): Promise<GitTransportCommandResult>;
 }
 
+export const DEFAULT_GIT_COMMAND_TIMEOUT_MS = 30_000;
+export const DEFAULT_GIT_COMMAND_MAX_OUTPUT_BYTES = 1_048_576;
+
 /**
  * Creates a runner pinned to one canonical, absolute Git executable. Supplying
  * a path is intentionally an explicit configuration/test seam: a bare command
@@ -59,19 +65,24 @@ export function createNodeGitTransportCommandRunner(executable = DEFAULT_NODE_GI
   return {
     async run(command) {
     let isolatedGitDirectory: string | undefined;
+    const timeoutMs = validLimit(command.timeoutMs, DEFAULT_GIT_COMMAND_TIMEOUT_MS);
+    const maxOutputBytes = validLimit(command.maxOutputBytes, DEFAULT_GIT_COMMAND_MAX_OUTPUT_BYTES);
     try {
-      if (command.isolatedRemote) isolatedGitDirectory = await isolatedRemoteGitDirectory(trustedExecutable, command.isolatedRemote);
+      if (command.isolatedRemote) isolatedGitDirectory = await isolatedRemoteGitDirectory(trustedExecutable, command.isolatedRemote, timeoutMs, maxOutputBytes);
       const result = await execFileAsync(trustedExecutable, [...command.argv], {
         encoding: "utf8",
         env: sanitizedGitEnvironment({ ...command.env, ...(isolatedGitDirectory ? { GIT_DIR: isolatedGitDirectory } : {}) }),
+        timeout: timeoutMs,
+        maxBuffer: maxOutputBytes,
+        killSignal: "SIGKILL",
       });
       return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
     } catch (error: unknown) {
-      const result = error as NodeJS.ErrnoException & { code?: number; stdout?: string; stderr?: string };
+      const result = error as NodeJS.ErrnoException & { code?: number; stdout?: string; stderr?: string; killed?: boolean; signal?: string };
       return {
         exitCode: typeof result.code === "number" ? result.code : 1,
-        stdout: result.stdout ?? "",
-        stderr: result.stderr ?? result.message,
+        stdout: "",
+        stderr: safeRunnerFailure(result),
       };
     } finally { if (isolatedGitDirectory) await rm(isolatedGitDirectory, { recursive: true, force: true }); }
     },
@@ -84,9 +95,9 @@ export function createNodeGitTransportCommandRunner(executable = DEFAULT_NODE_GI
  * exactly that remote. This prevents repository config from supplying helper,
  * proxy, extra-header, or url.*.insteadOf behavior to the authenticated child.
  */
-async function isolatedRemoteGitDirectory(executable: string, remote: Readonly<{ repositoryPath: string; remote: string; expectedUrl: string }>): Promise<string> {
+async function isolatedRemoteGitDirectory(executable: string, remote: Readonly<{ repositoryPath: string; remote: string; expectedUrl: string }>, timeoutMs: number, maxOutputBytes: number): Promise<string> {
   const { stdout } = await execFileAsync(executable, ["-C", remote.repositoryPath, "config", "--local", "--no-includes", "--get", `remote.${remote.remote}.url`], {
-    encoding: "utf8", env: sanitizedGitEnvironment(),
+    encoding: "utf8", env: sanitizedGitEnvironment(), timeout: timeoutMs, maxBuffer: maxOutputBytes, killSignal: "SIGKILL",
   });
   const rawUrl = stdout.trim();
   if (rawUrl !== remote.expectedUrl) throw new Error("Authenticated Git remote changed after authority validation.");
@@ -98,7 +109,7 @@ async function isolatedRemoteGitDirectory(executable: string, remote: Readonly<{
     // environment used by the authenticated child, then replace its config
     // with the deliberately minimal, authority-checked remote configuration.
     await execFileAsync(executable, ["init", "--bare", directory], {
-      encoding: "utf8", env: sanitizedGitEnvironment(),
+      encoding: "utf8", env: sanitizedGitEnvironment(), timeout: timeoutMs, maxBuffer: maxOutputBytes, killSignal: "SIGKILL",
     });
     await writeFile(join(directory, "config"), `[core]\n\tbare = true\n[remote \"${remote.remote}\"]\n\turl = ${url}\n`, { encoding: "utf8", mode: 0o600 });
     return directory;
@@ -137,3 +148,16 @@ export function canonicalGitExecutable(executable = DEFAULT_NODE_GIT_EXECUTABLE)
 export const nodeGitTransportCommandRunner: GitTransportCommandRunner = {
   run(command) { return createNodeGitTransportCommandRunner().run(command); },
 };
+
+function validLimit(value: number | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error("Git command limits must be positive safe integers.");
+  return value;
+}
+
+function safeRunnerFailure(error: NodeJS.ErrnoException & { killed?: boolean; signal?: string }): string {
+  if (error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return "Git command exceeded its output limit and was killed.";
+  if (error.killed || error.signal) return "Git command timed out and was killed.";
+  if (error.message === "Authenticated Git remote changed after authority validation.") return error.message;
+  return "Git command failed.";
+}

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { SyncError, SyncService, canonicalSourceRef } from "../../src/sync/service.js";
-import type { BaselineObservation, SyncGit } from "../../src/sync/git.js";
+import type { BaselineObservation, SyncGit, SyncMutationProof } from "../../src/sync/git.js";
 import type { BoundProfileAuthority } from "../../src/profile/bound-authority.js";
 import type { Profile } from "../../src/contracts/types.js";
 import { profileFingerprint } from "../../src/profile/fingerprint.js";
@@ -19,23 +19,25 @@ const authority = (current = profile()): BoundProfileAuthority => ({ profileName
 const clean = (changes: readonly string[] = ["src/app.ts"]): BaselineObservation => ({ clean: true, checkedOutBranch: "main", developmentSha: sha, destinationSha, ancestry: "behind", remoteUrl: destination.remote.url, changedPaths: changes, objectFormat: "sha1" });
 
 class FakeSyncGit implements SyncGit {
-  observation = clean(); observations = 0; onObserve?: (count: number) => void; fastForwards = 0; materializations = 0; imports: Array<{ source: string; localRef: string }> = []; resolved = destinationSha; localRefs = new Map<string, string>(); failImportOnce = false;
+  observation = clean(); observations = 0; onObserve?: (count: number) => void; onMaterialize?: () => void; onFastForward?: () => void; onImport?: () => void; fastForwards = 0; materializations = 0; imports: Array<{ source: string; localRef: string }> = []; resolved = destinationSha; localRefs = new Map<string, string>(); failImportOnce = false;
   async observe(): Promise<BaselineObservation> { this.observations += 1; this.onObserve?.(this.observations); return this.observation; }
   async observeStaged(): Promise<BaselineObservation> { return this.observation; }
-  async materializeStaged(): Promise<void> { this.materializations += 1; }
-  async fastForward(_repository: string, _remote: string, _developmentBranch: string, _destinationBranch: string, _expected: string, destination: string): Promise<void> { this.fastForwards += 1; this.observation = { ...this.observation, developmentSha: destination, destinationSha: destination, ancestry: "equal" }; }
+  async materializeStaged(_repository: string, _staged: string, _stagedRef: string, _expectedSha: string, proof: SyncMutationProof): Promise<void> { this.onMaterialize?.(); this.requireProof(proof); this.materializations += 1; }
+  async fastForward(_repository: string, destination: string, proof: SyncMutationProof): Promise<void> { this.onFastForward?.(); this.requireProof(proof); this.fastForwards += 1; this.observation = { ...this.observation, developmentSha: destination, destinationSha: destination, ancestry: "equal" }; }
   async importSource(_repository: string, _remote: string, source: string, localRef: string): Promise<string> { this.imports.push({ source, localRef }); this.localRefs.set(localRef, this.resolved); return this.resolved; }
-  async importStaged(_repository: string, _staged: string, stagedRef: string, localRef: string, expectedSha: string): Promise<string> { if (stagedRef.includes("source")) this.imports.push({ source: stagedRef, localRef }); if (this.failImportOnce) { this.failImportOnce = false; throw new Error("injected import failure"); } this.localRefs.set(localRef, expectedSha); return expectedSha; }
+  async importStaged(_repository: string, _staged: string, stagedRef: string, localRef: string, expectedSha: string, proof: SyncMutationProof): Promise<string> { this.onImport?.(); this.requireProof(proof); if (stagedRef.includes("source")) this.imports.push({ source: stagedRef, localRef }); if (this.failImportOnce) { this.failImportOnce = false; throw new Error("injected import failure"); } this.localRefs.set(localRef, expectedSha); return expectedSha; }
   async resolveSource(): Promise<string> { return this.resolved; }
   async resolveLocal(_repository: string, localRef: string): Promise<string> { const value = this.localRefs.get(localRef); if (!value) throw new Error("missing local ref"); return value; }
   async resolveLocalOptional(_repository: string, localRef: string): Promise<string | undefined> { return this.localRefs.get(localRef); }
+  private requireProof(proof: SyncMutationProof): void { if (!this.observation.clean || this.observation.checkedOutBranch !== proof.developmentBranch || this.observation.developmentSha !== proof.expectedDevelopmentSha || this.observation.destinationSha !== proof.expectedDestinationTrackingSha || this.observation.remoteUrl !== proof.expectedRemoteUrl || this.observation.objectFormat !== proof.objectFormat) throw new Error("mutation proof changed"); }
 }
-function service(git = new FakeSyncGit(), ledgerOverride?: LedgerStore & import("../../src/context/types.js").PinnedLedgerReader, currentProfile = profile(), now: () => Date = () => new Date("2026-08-04T00:00:00.000Z")) {
+type ServiceHooks = { onStage?: () => void; authority?: () => BoundProfileAuthority; profile?: () => Profile };
+function service(git = new FakeSyncGit(), ledgerOverride?: LedgerStore & import("../../src/context/types.js").PinnedLedgerReader, currentProfile = profile(), now: () => Date = () => new Date("2026-08-04T00:00:00.000Z"), hooks: ServiceHooks = {}) {
   const fs = new MemoryFilesystem();
   let head: string | undefined; let checkpoint = 0; const records: Record<string, string> = {};
-  const ledger = { objectFormat: async () => "sha1" as const, snapshot: async (paths: readonly string[]) => ({ head, records: Object.fromEntries(paths.filter(path => records[path] !== undefined).map(path => [path, records[path]!])) }), read: async (_sha: string, paths: readonly string[]) => Object.fromEntries(paths.filter(path => records[path] !== undefined).map(path => [path, records[path]!])), transact: async (transaction: { expectedHead: string | undefined; writes: readonly { path: string; contents: string }[] }) => { assert.equal(transaction.expectedHead, head); for (const write of transaction.writes) records[write.path] = write.contents; checkpoint += 1; head = checkpoint.toString(16).padStart(40, "0"); return head; } };
-  let transportCalls = 0; const transport = { stage: async (_repository: string, _development: string, _destination: string, sourceRef?: string) => { transportCalls += 1; return { repositoryPath: "/stage", destinationRef: "refs/shipyard/staged-destination", destinationSha: git.observation.destinationSha, ...(sourceRef === undefined ? {} : { sourceRef: "refs/shipyard/staged-source", sourceSha: git.resolved }), release: async () => {} }; } };
-  return { git, fs, records, transportCalls: () => transportCalls, service: new SyncService({ authority: { resolve: async () => authority(currentProfile) }, profiles: { read: async () => currentProfile }, git, transport, ledger: ledgerOverride ?? ledger, locks: new MutationLockService(fs, new FakeProcess()), lockPath: () => "/locks/sync", now }) };
+  let ledgerTransactions = 0; const ledger = { objectFormat: async () => "sha1" as const, snapshot: async (paths: readonly string[]) => ({ head, records: Object.fromEntries(paths.filter(path => records[path] !== undefined).map(path => [path, records[path]!])) }), read: async (_sha: string, paths: readonly string[]) => Object.fromEntries(paths.filter(path => records[path] !== undefined).map(path => [path, records[path]!])), transact: async (transaction: { expectedHead: string | undefined; writes: readonly { path: string; contents: string }[] }) => { ledgerTransactions += 1; assert.equal(transaction.expectedHead, head); for (const write of transaction.writes) records[write.path] = write.contents; checkpoint += 1; head = checkpoint.toString(16).padStart(40, "0"); return head; } };
+  let transportCalls = 0; const transport = { stage: async (_repository: string, _development: string, _destination: string, sourceRef?: string) => { transportCalls += 1; hooks.onStage?.(); return { repositoryPath: "/stage", destinationRef: "refs/shipyard/staged-destination", destinationSha: git.observation.destinationSha, ...(sourceRef === undefined ? {} : { sourceRef: "refs/shipyard/staged-source", sourceSha: git.resolved }), release: async () => {} }; } };
+  return { git, fs, records, ledgerTransactions: () => ledgerTransactions, transportCalls: () => transportCalls, service: new SyncService({ authority: { resolve: async () => hooks.authority?.() ?? authority(currentProfile) }, profiles: { read: async () => hooks.profile?.() ?? currentProfile }, git, transport, ledger: ledgerOverride ?? ledger, locks: new MutationLockService(fs, new FakeProcess()), lockPath: () => "/locks/sync", now }) };
 }
 
 test("fast-forwards a clean behind development main exactly to destination main", async () => {
@@ -104,7 +106,39 @@ test("conflicting path ownership blocks before baseline movement", async () => {
 
 test("a local race while acquiring the lock is revalidated before transport or credentials", async () => {
   const git = new FakeSyncGit(); git.onObserve = count => { if (count === 2) git.observation = { ...git.observation, clean: false }; }; const fixture = service(git);
-  await assert.rejects(fixture.service.sync({ repositoryPath: "/repo" }), (error: unknown) => error instanceof SyncError && error.code === "dirty-worktree"); assert.equal(fixture.transportCalls(), 0); assert.equal(git.materializations, 0); assert.equal(git.fastForwards, 0);
+  await assert.rejects(fixture.service.sync({ repositoryPath: "/repo" }), (error: unknown) => error instanceof SyncError && error.code === "dirty-worktree"); assert.equal(fixture.transportCalls(), 0); assert.equal(git.materializations, 0); assert.equal(git.fastForwards, 0); assert.equal(fixture.fs.files.has("/locks/sync"), false);
+});
+
+test("authority, operation, path policy, remote, and worktree drift during authenticated staging permit zero mutation", async (t) => {
+  for (const scenario of ["operation", "path-policy", "binding", "actor", "remote", "worktree"] as const) await t.test(scenario, async () => {
+    const git = new FakeSyncGit(); const base = profile(); let activeProfile = base; let activeAuthority = authority(base);
+    const hooks: ServiceHooks = { profile: () => activeProfile, authority: () => activeAuthority, onStage: () => {
+      if (scenario === "operation") activeProfile = { ...base, allowedOperations: ["status"] };
+      if (scenario === "path-policy") activeProfile = { ...base, pathPolicy: { schemaVersion: 1, rules: [{ owner: "product", pattern: "other/**" }] } };
+      if (scenario === "actor") activeProfile = { ...base, actor: { login: "other" } };
+      if (scenario === "operation" || scenario === "path-policy" || scenario === "actor") activeAuthority = authority(activeProfile);
+      if (scenario === "binding") activeAuthority = { ...activeAuthority, commonDirectory: "/other/.git" };
+      if (scenario === "remote") git.observation = { ...git.observation, remoteUrl: "https://github.com/acme/other.git" };
+      if (scenario === "worktree") git.observation = { ...git.observation, clean: false };
+    } };
+    const fixture = service(git, undefined, base, undefined, hooks); await assert.rejects(fixture.service.sync({ repositoryPath: "/repo" }));
+    assert.equal(fixture.transportCalls(), 1); assert.equal(git.materializations, 0); assert.equal(git.fastForwards, 0); assert.equal(git.imports.length, 0); assert.equal(fixture.ledgerTransactions(), 0);
+  });
+});
+
+test("last-moment Git proof rejects a worktree race before object materialization", async () => {
+  const git = new FakeSyncGit(); git.onMaterialize = () => { git.observation = { ...git.observation, clean: false }; }; const fixture = service(git);
+  await assert.rejects(fixture.service.sync({ repositoryPath: "/repo" }), /proof/i); assert.equal(git.materializations, 0); assert.equal(git.fastForwards, 0); assert.equal(fixture.ledgerTransactions(), 0);
+});
+
+test("worktree and path-policy races at the source pre-ledger seam leave ledger and refs unchanged", async (t) => {
+  for (const scenario of ["worktree", "path-policy"] as const) await t.test(scenario, async () => {
+    const git = new FakeSyncGit(); const base = profile(); let activeProfile = base; let profileReads = 0;
+    if (scenario === "worktree") git.onObserve = count => { if (count === 4) git.observation = { ...git.observation, clean: false }; };
+    const hooks: ServiceHooks = { profile: () => { profileReads += 1; if (scenario === "path-policy" && profileReads === 4) activeProfile = { ...base, pathPolicy: { schemaVersion: 1, rules: [{ owner: "product", pattern: "other/**" }] } }; return activeProfile; }, authority: () => authority(activeProfile) };
+    const fixture = service(git, undefined, base, undefined, hooks); const refsBefore = new Map(git.localRefs); const recordsBefore = structuredClone(fixture.records);
+    await assert.rejects(fixture.service.sync({ repositoryPath: "/repo", sourceRef: "release/race" })); assert.deepEqual(git.localRefs, refsBefore); assert.deepEqual(fixture.records, recordsBefore); assert.equal(fixture.ledgerTransactions(), 0); assert.equal(git.imports.length, 0);
+  });
 });
 
 test("source provenance validation rejects extra fields and mixed object formats and freezes accepted records", async () => {
@@ -147,9 +181,16 @@ test("an existing immutable source mismatch preserves its usable canonical ledge
   assert.deepEqual(fixture.records, recordsBefore); assert.equal(fixture.git.imports.length, 1);
 });
 
+test("a deleted local source ref plus a moved authoritative ref preserves canonical provenance exactly", async () => {
+  const fixture = service(); const imported = await fixture.service.sync({ repositoryPath: "/repo", sourceRef: "release/moved" }); if (imported.kind !== "source") throw new Error("expected source");
+  const recordsBefore = structuredClone(fixture.records); const transactionsBefore = fixture.ledgerTransactions(); fixture.git.localRefs.delete(imported.provenance.localRef); fixture.git.resolved = "c".repeat(40);
+  await assert.rejects(fixture.service.sync({ repositoryPath: "/repo", sourceRef: "release/moved" }), (error: unknown) => error instanceof SyncError && error.code === "source-stale");
+  assert.deepEqual(fixture.records, recordsBefore); assert.equal(fixture.ledgerTransactions(), transactionsBefore); assert.equal(fixture.git.localRefs.has(imported.provenance.localRef), false);
+});
+
 test("a failed first local source-ref creation is explicitly resumable from its durable receipt", async () => {
   const git = new FakeSyncGit(); git.failImportOnce = true; let tick = 0; const fixture = service(git, undefined, profile(), () => new Date(Date.parse("2026-08-04T00:00:00.000Z") + tick++));
   await assert.rejects(fixture.service.sync({ repositoryPath: "/repo", sourceRef: "release/resume" }), (error: unknown) => error instanceof SyncError && /rerun.*resume/i.test(error.message));
   assert.equal(git.localRefs.size, 0); assert.ok(Object.keys(fixture.records).some(path => path.startsWith("sync/source/")));
-  const resumed = await fixture.service.sync({ repositoryPath: "/repo", sourceRef: "release/resume" }); assert.equal(resumed.kind, "source"); assert.equal(git.localRefs.size, 1);
+  const transactions = fixture.ledgerTransactions(); const resumed = await fixture.service.sync({ repositoryPath: "/repo", sourceRef: "release/resume" }); assert.equal(resumed.kind, "source"); assert.equal(git.localRefs.size, 1); assert.equal(fixture.ledgerTransactions(), transactions);
 });

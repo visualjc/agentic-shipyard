@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_NODE_GIT_EXECUTABLE, type GitTransportCommand, type GitTransportCommandRunner, nodeGitTransportCommandRunner } from "../adapters/git-transport.js";
+import { DEFAULT_GIT_COMMAND_MAX_OUTPUT_BYTES, DEFAULT_GIT_COMMAND_TIMEOUT_MS, DEFAULT_NODE_GIT_EXECUTABLE, type GitTransportCommand, type GitTransportCommandRunner, nodeGitTransportCommandRunner } from "../adapters/git-transport.js";
 import type { GitAdapter } from "../adapters/git.js";
 import { redactGitTransportDiagnostic } from "../github/git-transport.js";
 import type { BoundProfileAuthorityResolver } from "../profile/bound-authority.js";
@@ -56,15 +56,25 @@ export class DestinationSyncTransport implements SyncDestinationTransport {
     return matches[0]![1]!;
   }
 
-  private async runCredentialed(stage: string, args: string[], credential: VerifiedGitTransportCredential) { return this.credentialed({ executable: DEFAULT_NODE_GIT_EXECUTABLE, argv: ["-C", stage, ...args], env: credentialEnvironment(credential) }, credential); }
-  private async credentialed(command: GitTransportCommand, credential: VerifiedGitTransportCredential) { const result = await this.runner.run(command); if (result.exitCode !== 0) throw new SyncError("observation-changed", `Authenticated destination Git failed: ${redactGitTransportDiagnostic(result.stderr || result.stdout, [credential.token])}`); return { stdout: redactGitTransportDiagnostic(result.stdout, [credential.token]), stderr: redactGitTransportDiagnostic(result.stderr, [credential.token]) }; }
-  private async local(repositoryPath: string, args: string[], includeC = true): Promise<string> { const result = await this.runner.run({ executable: DEFAULT_NODE_GIT_EXECUTABLE, argv: includeC ? ["-C", repositoryPath, ...args] : args, env: {} }); if (result.exitCode !== 0) throw new SyncError("observation-changed", `Isolated staging Git failed: ${result.stderr || result.stdout}`); return result.stdout.trim(); }
+  private async runCredentialed(stage: string, args: string[], credential: VerifiedGitTransportCredential) { return this.credentialed({ executable: DEFAULT_NODE_GIT_EXECUTABLE, argv: ["-C", stage, ...args], env: credentialEnvironment(credential), timeoutMs: DEFAULT_GIT_COMMAND_TIMEOUT_MS, maxOutputBytes: DEFAULT_GIT_COMMAND_MAX_OUTPUT_BYTES }, credential); }
+  private async credentialed(command: GitTransportCommand, credential: VerifiedGitTransportCredential) {
+    const bounded = { ...command, timeoutMs: DEFAULT_GIT_COMMAND_TIMEOUT_MS, maxOutputBytes: DEFAULT_GIT_COMMAND_MAX_OUTPUT_BYTES };
+    const result = await this.runner.run(bounded); requireBoundedResult(result.stdout, result.stderr);
+    if (result.exitCode !== 0) throw new SyncError("observation-changed", `Authenticated destination Git failed: ${safeDiagnostic(result.stderr || result.stdout, [credential.token])}`);
+    return { stdout: redactGitTransportDiagnostic(result.stdout, [credential.token]), stderr: redactGitTransportDiagnostic(result.stderr, [credential.token]) };
+  }
+  private async local(repositoryPath: string, args: string[], includeC = true): Promise<string> {
+    const result = await this.runner.run({ executable: DEFAULT_NODE_GIT_EXECUTABLE, argv: includeC ? ["-C", repositoryPath, ...args] : args, env: {}, timeoutMs: DEFAULT_GIT_COMMAND_TIMEOUT_MS, maxOutputBytes: DEFAULT_GIT_COMMAND_MAX_OUTPUT_BYTES }); requireBoundedResult(result.stdout, result.stderr);
+    if (result.exitCode !== 0) throw new SyncError("observation-changed", `Isolated staging Git failed: ${safeDiagnostic(result.stderr || result.stdout)}`); return result.stdout.trim();
+  }
 }
 
 function credentialEnvironment(credential: VerifiedGitTransportCredential): Readonly<Record<string, string>> { return { GIT_CONFIG_COUNT: "3", GIT_CONFIG_KEY_0: "credential.helper", GIT_CONFIG_VALUE_0: "", GIT_CONFIG_KEY_1: "http.https://github.com/.extraheader", GIT_CONFIG_VALUE_1: "", GIT_CONFIG_KEY_2: "http.https://github.com/.extraheader", GIT_CONFIG_VALUE_2: `AUTHORIZATION: bearer ${credential.token}`, GIT_TERMINAL_PROMPT: "0" }; }
 function safeBranch(value: string): boolean { return /^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$/.test(value) && !value.includes("//") && !value.split("/").some(part => part === "." || part === ".."); }
 function safeSourceInput(value: string): boolean { return safeBranch(value) && !value.includes(":") && !value.includes("*") && !value.startsWith("-") && !value.endsWith("/"); }
 function exactGitHubUrl(value: string, owner: string, name: string): boolean { return value === `https://github.com/${owner}/${name}.git` || value === `https://github.com/${owner}/${name}`; }
+function requireBoundedResult(stdout: string, stderr: string): void { if (Buffer.byteLength(stdout) + Buffer.byteLength(stderr) > DEFAULT_GIT_COMMAND_MAX_OUTPUT_BYTES) throw new SyncError("observation-changed", "Git command exceeded its output limit and was killed."); }
+function safeDiagnostic(value: string, secrets: readonly string[] = []): string { return redactGitTransportDiagnostic(value, secrets).replace(/[^\x20-\x7e\n\t]/g, "?").slice(0, 512).trim() || "Git command failed."; }
 
 export type PublicationRequest = Readonly<{ refspecs: readonly string[]; payload?: unknown }>;
 export function requireSourceFreePublication(request: PublicationRequest): void { const serialized = request.payload === undefined ? undefined : JSON.stringify(request.payload); try { GitLedgerStore.requireProductOnlyTransport(request.refspecs, serialized); } catch { throw new SyncError("unsafe-source-ref", "Source refs and other local Shipyard metadata are local-only and cannot appear in product publication refspecs or payloads."); } }

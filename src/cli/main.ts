@@ -3,20 +3,22 @@ import { setup } from "../commands/setup.js";
 import { status } from "../commands/status.js";
 import { sync } from "../commands/sync.js";
 import type { TopologyRequest } from "../profile/policy.js";
-import { explicitOptionalOption, optionalOption, parseArguments, requiredOption } from "./arguments.js";
+import { explicitOptionalOption, optionalOption, parseArguments, requiredOption, requireExactCommandShape } from "./arguments.js";
 import { setupGuidance } from "./guidance.js";
 import { createRuntime } from "./runtime.js";
+import { NodeSyncStatusReader } from "../adapters/sync-status.js";
 
 export type CommandName = "shipyard" | "setup" | "status" | "sync" | "help";
 export async function run(argv: readonly string[], invokedAs: CommandName = "shipyard", cwd = process.cwd()): Promise<{ code: number; output: string }> {
   try {
     const parsed = parseArguments(argv);
     const command = invokedAs === "shipyard" ? (parsed.positionals.shift() ?? "help") : invokedAs;
+    if (command === "sync") requireExactCommandShape(parsed, "shipyard-sync", ["home", "repo", "source-ref"]);
     const home = optionalOption(parsed, "home");
     const runtime = createRuntime(home);
     const repositoryPath = optionalOption(parsed, "repo") ?? cwd;
     if (command === "help") return { code: 0, output: `${help(parsed.positionals[0])}\n` };
-    if (command === "status") return { code: 0, output: `${JSON.stringify(await status(runtime.bindings, runtime.git, runtime.profiles, repositoryPath), null, 2)}\n` };
+    if (command === "status") return { code: 0, output: `${JSON.stringify(await status(runtime.bindings, runtime.git, runtime.profiles, repositoryPath, new NodeSyncStatusReader()), null, 2)}\n` };
     if (command === "sync") return { code: 0, output: `${JSON.stringify(await sync(runtime, repositoryPath, explicitOptionalOption(parsed, "source-ref")), null, 2)}\n` };
     if (command === "setup") {
       const kind = requiredOption(parsed, "topology");

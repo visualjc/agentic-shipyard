@@ -8,6 +8,11 @@ The command verifies the token's GitHub viewer against the bound profile actor
 before any credentialed Git child. Credentialed fetch and lookup run only in a
 temporary bare repository whose config contains the exact bound destination;
 the product repository imports the verified object afterward without a token.
+After staging, and again before each object, ref, index, worktree, or ledger
+mutation, Shipyard re-resolves the binding and profile authorization, actor,
+topology, remote, clean local Git facts, and path ownership. The local adapter
+also checks the exact expected branch, development ref, destination-tracking
+ref, remote URL, and object format at the mutation boundary.
 
 It never promotes, finalizes, merges, rebases, resets, repairs feature work, or
 pushes. A dirty worktree, changed remote identity, non-fast-forward ancestry,
@@ -32,6 +37,12 @@ first ref creation fails, rerun the identical explicit import to resume; if an
 older immutable ref names another SHA, Shipyard preserves its canonical record
 and stops before writing the ledger. Source refs are never included in
 Shipyard product publication refspecs.
+
+A moved authoritative source never replaces its prior canonical provenance,
+even if the corresponding local source ref was deleted. Only the same exact
+SHA can resume a missing local source ref from the already verified receipt.
+All local and authenticated Git children have fixed time and output bounds and
+return bounded redacted diagnostics on failure.
 
 The deterministic port matrix covers both full SHA-1 and SHA-256 object IDs.
 On this macOS Git build, remote SHA-256 receive is unsupported, so the real

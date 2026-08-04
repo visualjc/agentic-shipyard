@@ -2,25 +2,32 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { canonicalGitExecutable, DEFAULT_NODE_GIT_EXECUTABLE, sanitizedGitEnvironment } from "./git-transport.js";
 import { redactGitTransportDiagnostic } from "../github/git-transport.js";
-import type { BaselineObservation, SyncGit } from "../sync/git.js";
+import type { BaselineObservation, SyncGit, SyncMutationProof } from "../sync/git.js";
 
 const exec = promisify(execFile);
 export type NodeSyncGitOptions = Readonly<{
   transactionTimeoutMs?: number;
   transactionMaxOutputBytes?: number;
   transactionSpawner?: typeof spawn;
+  commandTimeoutMs?: number;
+  commandMaxOutputBytes?: number;
 }>;
+type TransactionLimits = Readonly<{ transactionTimeoutMs: number; transactionMaxOutputBytes: number; transactionSpawner?: typeof spawn }>;
 
 /** Local Git mutation adapter. It has no push/rebase/reset or merge-commit capability. */
 export class NodeSyncGit implements SyncGit {
   private readonly executable: string;
-  private readonly transaction: Required<Omit<NodeSyncGitOptions, "transactionSpawner">> & Pick<NodeSyncGitOptions, "transactionSpawner">;
+  private readonly transaction: TransactionLimits;
+  private readonly command: Readonly<{ timeoutMs: number; maxOutputBytes: number }>;
   constructor(executable = DEFAULT_NODE_GIT_EXECUTABLE, options: NodeSyncGitOptions = {}) {
     this.executable = canonicalGitExecutable(executable);
     const transactionTimeoutMs = options.transactionTimeoutMs ?? 30_000;
     const transactionMaxOutputBytes = options.transactionMaxOutputBytes ?? 16_384;
-    if (!Number.isSafeInteger(transactionTimeoutMs) || transactionTimeoutMs <= 0 || !Number.isSafeInteger(transactionMaxOutputBytes) || transactionMaxOutputBytes <= 0) throw new Error("Git transaction limits must be positive safe integers.");
+    const commandTimeoutMs = options.commandTimeoutMs ?? 30_000;
+    const commandMaxOutputBytes = options.commandMaxOutputBytes ?? 1_048_576;
+    if (![transactionTimeoutMs, transactionMaxOutputBytes, commandTimeoutMs, commandMaxOutputBytes].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error("Git command limits must be positive safe integers.");
     this.transaction = { transactionTimeoutMs, transactionMaxOutputBytes, transactionSpawner: options.transactionSpawner };
+    this.command = { timeoutMs: commandTimeoutMs, maxOutputBytes: commandMaxOutputBytes };
   }
   async observe(repo: string, remote: string, developmentBranch: string, destinationBranch: string): Promise<BaselineObservation> {
     const [dirty, branch, developmentSha, destinationSha, remoteUrl, format] = await Promise.all([
@@ -44,19 +51,19 @@ export class NodeSyncGit implements SyncGit {
     const paths = (await this.required(staged, ["diff", "--name-only", developmentSha, destinationSha])).split("\n").filter(Boolean);
     return { clean: dirty === "", checkedOutBranch: branch, developmentSha, destinationSha, ancestry, remoteUrl, changedPaths: paths, objectFormat: format };
   }
-  async materializeStaged(repo: string, staged: string, stagedRef: string, expectedSha: string): Promise<void> {
+  async materializeStaged(repo: string, staged: string, stagedRef: string, expectedSha: string, proof: SyncMutationProof): Promise<void> {
+    await this.assertMutationProof(repo, proof);
     await this.required(repo, ["fetch", "--no-tags", "--no-write-fetch-head", staged, stagedRef]);
     if (await this.required(repo, ["rev-parse", "--verify", `${expectedSha}^{commit}`]) !== expectedSha) throw new Error("Staged object materialization did not preserve its exact object ID.");
   }
-  async fastForward(repo: string, remote: string, branch: string, destinationBranch: string, expected: string, destination: string): Promise<void> {
+  async fastForward(repo: string, destination: string, proof: SyncMutationProof): Promise<void> {
+    await this.assertMutationProof(repo, proof);
+    const { destinationRemote: remote, developmentBranch: branch, destinationBranch, expectedDevelopmentSha: expected, expectedDestinationTrackingSha: trackingBefore } = proof;
     if (!await this.ancestor(repo, expected, destination)) throw new Error("Fast-forward ancestry changed; no ref was updated.");
-    if (await this.required(repo, ["symbolic-ref", "--short", "HEAD"]) !== branch) throw new Error("Checked-out branch changed; no ref was updated.");
-    if (await this.required(repo, ["status", "--porcelain"]) !== "") throw new Error("Worktree or index changed; no ref was updated.");
-    if (await this.required(repo, ["rev-parse", `refs/heads/${branch}`]) !== expected) throw new Error("Development branch changed; no ref was updated.");
-    const trackingRef = `refs/remotes/${remote}/${destinationBranch}`; const trackingBefore = await this.optional(repo, trackingRef); const nullObject = await this.nullObject(repo);
-    const transaction = await prepareRefTransaction(this.executable, repo, [{ ref: `refs/heads/${branch}`, next: destination, previous: expected }, { ref: trackingRef, next: destination, previous: trackingBefore ?? nullObject }], this.transaction);
+    const trackingRef = `refs/remotes/${remote}/${destinationBranch}`;
+    const transaction = await prepareRefTransaction(this.executable, repo, [{ ref: `refs/heads/${branch}`, next: destination, previous: expected }, { ref: trackingRef, next: destination, previous: trackingBefore }], this.transaction);
     let applied = false;
-    try { await this.required(repo, ["read-tree", "-u", "-m", expected, destination]); applied = true; await transaction.commit(); }
+    try { await this.assertMutationProof(repo, proof); await this.required(repo, ["read-tree", "-u", "-m", expected, destination]); applied = true; await transaction.commit(); }
     catch (error) {
       await transaction.abort();
       const mainNow = await this.optional(repo, `refs/heads/${branch}`); const trackingNow = await this.optional(repo, trackingRef);
@@ -65,9 +72,11 @@ export class NodeSyncGit implements SyncGit {
     }
   }
   async importSource(repo: string, remote: string, source: string, local: string): Promise<string> { await this.required(repo, ["fetch", "--no-tags", remote, `${source}:${local}`]); return this.required(repo, ["rev-parse", local]); }
-  async importStaged(repo: string, staged: string, stagedRef: string, localRef: string, expectedSha: string): Promise<string> {
+  async importStaged(repo: string, staged: string, stagedRef: string, localRef: string, expectedSha: string, proof: SyncMutationProof): Promise<string> {
+    await this.assertMutationProof(repo, proof);
     await this.required(repo, ["fetch", "--no-tags", "--no-write-fetch-head", staged, stagedRef]);
     const resolved = await this.required(repo, ["rev-parse", "--verify", `${expectedSha}^{object}`]); if (resolved !== expectedSha) throw new Error("Staged import did not resolve to its expected exact object.");
+    await this.assertMutationProof(repo, proof);
     const current = await this.optional(repo, localRef); if (localRef.startsWith("refs/shipyard/source/") && current !== undefined && current !== resolved) throw new Error("Existing source ref differs; policy-read-only source refs are never overwritten.");
     if (current !== resolved) await this.required(repo, ["update-ref", localRef, resolved, current ?? await this.nullObject(repo)]);
     return resolved;
@@ -83,12 +92,26 @@ export class NodeSyncGit implements SyncGit {
     catch (error) { if ((error as NodeJS.ErrnoException & { code?: number }).code === 1) return undefined; throw error; }
   }
   private async nullObject(repo: string): Promise<string> { const format = await this.required(repo, ["rev-parse", "--show-object-format"]); return "0".repeat(format === "sha256" ? 64 : 40); }
+  private async assertMutationProof(repo: string, proof: SyncMutationProof): Promise<void> {
+    const [dirty, branch, development, tracking, remoteUrl, objectFormat] = await Promise.all([
+      this.required(repo, ["status", "--porcelain"]),
+      this.required(repo, ["symbolic-ref", "--short", "HEAD"]),
+      this.required(repo, ["rev-parse", `refs/heads/${proof.developmentBranch}`]),
+      this.required(repo, ["rev-parse", `refs/remotes/${proof.destinationRemote}/${proof.destinationBranch}`]),
+      this.required(repo, ["remote", "get-url", proof.destinationRemote]),
+      this.required(repo, ["rev-parse", "--show-object-format"]),
+    ]);
+    if (dirty !== "" || branch !== proof.developmentBranch || development !== proof.expectedDevelopmentSha || tracking !== proof.expectedDestinationTrackingSha || remoteUrl !== proof.expectedRemoteUrl || objectFormat !== proof.objectFormat) throw new Error("Local Git mutation proof changed; no mutation was permitted.");
+  }
   private async treeAndWorktreeEqual(repo: string, commit: string): Promise<boolean> { try { return await this.required(repo, ["write-tree"]) === await this.required(repo, ["rev-parse", `${commit}^{tree}`]) && await this.required(repo, ["diff", "--quiet"]) === ""; } catch { return false; } }
-  private async required(repo: string, args: string[]): Promise<string> { const { stdout } = await exec(this.executable, ["-C", repo, ...args], { encoding: "utf8", env: sanitizedGitEnvironment() }); return stdout.trim(); }
+  private async required(repo: string, args: string[]): Promise<string> {
+    try { const { stdout } = await exec(this.executable, ["-C", repo, ...args], { encoding: "utf8", env: sanitizedGitEnvironment(), timeout: this.command.timeoutMs, maxBuffer: this.command.maxOutputBytes, killSignal: "SIGKILL" }); return stdout.trim(); }
+    catch (error) { throw safeLocalGitError(error); }
+  }
 }
 
 type RefUpdate = Readonly<{ ref: string; next: string; previous: string }>;
-async function prepareRefTransaction(executable: string, repositoryPath: string, updates: readonly RefUpdate[], limits: Required<Omit<NodeSyncGitOptions, "transactionSpawner">> & Pick<NodeSyncGitOptions, "transactionSpawner">) {
+async function prepareRefTransaction(executable: string, repositoryPath: string, updates: readonly RefUpdate[], limits: TransactionLimits) {
   const child = (limits.transactionSpawner ?? spawn)(executable, ["-C", repositoryPath, "update-ref", "--stdin"], { env: sanitizedGitEnvironment(), stdio: ["pipe", "pipe", "pipe"] });
   let output = ""; let diagnostic = ""; let outputBytes = 0; let finished = false; let terminalError: Error | undefined;
   let resolvePrepared!: () => void; let rejectPrepared!: (error: Error) => void; let preparedSettled = false;
@@ -132,4 +155,12 @@ async function prepareRefTransaction(executable: string, repositoryPath: string,
 function safeTransactionDiagnostic(value: string, code: number | null): string {
   const safe = redactGitTransportDiagnostic(value).replace(/[^\x20-\x7e\n\t]/g, "?").slice(0, 512).trim();
   return safe ? `Git ref transaction failed: ${safe}` : `Git ref transaction exited ${code ?? "without a status"}.`;
+}
+
+function safeLocalGitError(error: unknown): Error {
+  const failure = error as NodeJS.ErrnoException & { killed?: boolean; signal?: string; stderr?: string; stdout?: string };
+  const message = failure.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" ? "Local Git command exceeded its output limit and was killed." : failure.killed || failure.signal ? "Local Git command timed out and was killed." : "Local Git command failed.";
+  const safe = new Error(message) as Error & { code?: string | number };
+  if (typeof failure.code === "number") safe.code = failure.code;
+  return safe;
 }
