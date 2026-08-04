@@ -44,10 +44,10 @@ The executable private fixture is skipped unless
 token, expected actor, existing head ref, base ref, and canonical lowercase
 40- or 64-hex head SHA.
 `NativeInteractive/*` is always rejected. The approved disposable repository
-must already contain that head branch at that SHA. The fixture creates exactly
-one marked development issue/PR through `trackDevelopmentRecords`, proves the
-second call discovers the same provider IDs, then closes both records in
-`finally`; normal tests remain network-free.
+must already contain that head branch at that SHA. In its controlled serial
+run, the fixture creates one marked development issue/PR through
+`trackDevelopmentRecords`, proves the second call discovers the same provider
+IDs, then closes both records in `finally`; normal tests remain network-free.
 
 The tracker identifies its records only by its exact marker on a standalone
 body line. It excludes pull requests from GitHub's `/issues` listing and stores
@@ -55,6 +55,17 @@ GitHub's stable provider node ID when available, so a resumed run cannot mistake
 a marked pull request or a marker-like body substring for its issue. Before
 accepting either a discovered or newly-created pull request, it also verifies
 the exact head SHA, head ref, and base ref requested for the delivery.
+
+The common-directory/delivery lock serializes cooperating processes that share
+that directory. It cannot serialize independent clones or hosts, and GitHub's
+issue and pull-request create endpoints provide no documented compare-and-set
+or idempotency-key guarantee. Shipyard therefore makes no global exactly-once
+creation promise. After every POST it re-discovers the marker and returns
+success only when the exact created record is visible and unique. If discovery
+is delayed, mismatched, or finds duplicates, it fails closed rather than
+claiming success. Wait for provider visibility, re-run discovery with the same
+delivery ID, and manually reconcile duplicate marked records before retrying;
+do not remove markers or create replacement records automatically.
 
 For authorization failures, verify credential scope and the configured actor
 outside Shipyard, then retry with a newly resolved ephemeral credential. For

@@ -27,6 +27,7 @@ export function createEnvelope(input: ContextEnvelopeInput): ContextEnvelope {
     productSha: input.productSha,
     ledgerRef: input.ledgerRef,
     ledgerSha: input.ledgerSha,
+    objectFormat: input.objectFormat,
     records: [...records],
     adapter: { host: input.host, role: input.role, envelopePath: input.envelopePath, repoRoot: input.repoRoot },
   });
@@ -34,11 +35,11 @@ export function createEnvelope(input: ContextEnvelopeInput): ContextEnvelope {
 
 /** Validates untrusted serialized data and returns a detached, deeply frozen snapshot. */
 export function validateContextEnvelope(value: unknown): ContextEnvelope {
-  if (!record(value) || !exactKeys(value, ["schemaVersion", "profile", "topology", "repository", "deliveryId", "host", "role", "productBranch", "productSha", "ledgerRef", "ledgerSha", "records", "adapter"]) || value.schemaVersion !== 1 || !CONTEXT_ROLES.includes(value.role as ContextRole) || !record(value.adapter)) invalid();
+  if (!record(value) || !exactKeys(value, ["schemaVersion", "profile", "topology", "repository", "deliveryId", "host", "role", "productBranch", "productSha", "ledgerRef", "ledgerSha", "objectFormat", "records", "adapter"]) || value.schemaVersion !== 1 || !CONTEXT_ROLES.includes(value.role as ContextRole) || !record(value.adapter)) invalid();
   if (!exactKeys(value.adapter, ["host", "role", "envelopePath", "repoRoot"]) || value.adapter.host !== value.host || value.adapter.role !== value.role || !Array.isArray(value.records)) invalid();
   return createEnvelope({
     profile: text(value.profile), topology: value.topology as ContextEnvelope["topology"], repository: value.repository as ContextEnvelope["repository"],
-    deliveryId: text(value.deliveryId), host: text(value.host), role: value.role as ContextRole, productBranch: text(value.productBranch), productSha: text(value.productSha), ledgerRef: text(value.ledgerRef), ledgerSha: text(value.ledgerSha),
+    deliveryId: text(value.deliveryId), host: text(value.host), role: value.role as ContextRole, productBranch: text(value.productBranch), productSha: text(value.productSha), ledgerRef: text(value.ledgerRef), ledgerSha: text(value.ledgerSha), objectFormat: objectFormat(value.objectFormat),
     envelopePath: text(value.adapter.envelopePath), repoRoot: text(value.adapter.repoRoot), records: value.records.map(text),
   });
 }
@@ -60,7 +61,8 @@ function validateInput(input: ContextEnvelopeInput): void {
   if (!sameRepository(input.repository, deliveryRepository(input.topology))) {
     throw new ContextError("context-repository-mismatch", "The envelope repository must be the delivery repository selected by its topology.");
   }
-  if (!fullObjectId(input.productSha) || !fullObjectId(input.ledgerSha) || input.ledgerRef !== CANONICAL_LEDGER_REF) invalid();
+  const format = objectFormat(input.objectFormat);
+  if (!fullObjectId(format, input.productSha) || !fullObjectId(format, input.ledgerSha) || input.ledgerRef !== CANONICAL_LEDGER_REF) invalid();
 }
 function record(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean { return Object.keys(value).length === keys.length && Object.keys(value).every((key) => keys.includes(key)); }
@@ -76,7 +78,8 @@ function sameRepository(left: RepositoryRef, right: RepositoryRef): boolean {
   return left.owner === right.owner && left.name === right.name && left.defaultBranch === right.defaultBranch
     && left.remote.name === right.remote.name && left.remote.url === right.remote.url;
 }
-function fullObjectId(value: string): boolean { return /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value); }
+function objectFormat(value: unknown): "sha1" | "sha256" { if (value === "sha1" || value === "sha256") return value; return invalid(); }
+function fullObjectId(format: "sha1" | "sha256", value: string): boolean { return new RegExp(`^[a-f0-9]{${format === "sha1" ? 40 : 64}}$`).test(value); }
 function topology(value: unknown): Topology {
   if (!record(value) || typeof value.kind !== "string") invalid();
   if (value.kind === "single-repository") {

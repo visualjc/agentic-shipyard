@@ -4,6 +4,8 @@ import { GitHubTrackerError, stableShipyardMarker } from "./markers.js";
 import type { DevelopmentTrackingAuthorityResolver } from "./tracking-authority.js";
 import type { DevelopmentTrackingAuthority } from "./tracking-authority.js";
 import { DevelopmentRecordGuard } from "./tracking-guard.js";
+import type { BoundProfileAuthority } from "../profile/bound-authority.js";
+import type { RepositoryRef, Topology } from "../contracts/types.js";
 
 export type DevelopmentIssueRequest = { title: string; body: string };
 export type DevelopmentPullRequestRequest = {
@@ -62,17 +64,18 @@ type LocatedRecord = { state: "discovered" | "created"; record: ProviderRecord }
 const MAX_DISCOVERY_PAGES = 100;
 
 /**
- * Finds or creates Shipyard's one issue and one PR in the bound development
+ * Discovers or creates the intended issue/PR pair in the bound development
  * repository. The topology never accepts a caller-selected repository.
  */
 export async function trackDevelopmentRecords(
   authority: DevelopmentRecordAuthority,
   request: DevelopmentRecordRequest,
 ): Promise<DevelopmentRecordsCheckpoint> {
-  return authority.guard.run(authority.repositoryPath, request.deliveryId, async () => {
+  return authority.guard.run(authority.repositoryPath, request.deliveryId, async bound => {
     // Resolve inside the durable mutation boundary so resume/checkpoint writes
     // cannot reuse a profile or binding that changed while waiting for the lock.
     const trusted = await authority.trackingAuthority.resolve(authority.repositoryPath, request.deliveryId);
+    assertTrackingAuthorityMatchesBound(trusted, bound, request.deliveryId);
     const repository = trusted.repository;
     const tracker = await verifyTrackerActor(trusted.actorLogin, repository, authority.credentials, authority.client);
     const marker = stableShipyardMarker(request.deliveryId);
@@ -88,14 +91,14 @@ export async function trackDevelopmentRecords(
     let issue: LocatedRecord;
     if (foundIssue) issue = { state: "discovered", record: foundIssue };
     else {
-      await revalidateBeforeWrite(authority, request, trusted);
-      issue = await createIssue(tracker, `${basePath}/issues`, marker, request.issue);
+      await revalidateBeforeWrite(authority, request, trusted, bound);
+      issue = await createAndReconcile(tracker, `${basePath}/issues`, marker, request.issue, "issue", isIssueRecord);
     }
     let pullRequest: LocatedRecord;
     if (foundPullRequest) pullRequest = { state: "discovered", record: foundPullRequest };
     else {
-      await revalidateBeforeWrite(authority, request, trusted);
-      pullRequest = await createPullRequest(tracker, `${basePath}/pulls`, marker, request.pullRequest, trusted);
+      await revalidateBeforeWrite(authority, request, trusted, bound);
+      pullRequest = await createAndReconcile(tracker, `${basePath}/pulls`, marker, request.pullRequest, "pull request", isProviderRecord, trusted);
     }
     assertPullRequestMatches(pullRequest.record, trusted);
 
@@ -114,9 +117,37 @@ async function createIssue(session: GitHubTrackerSession, path: string, marker: 
   return { state: "created", record };
 }
 
+/**
+ * GitHub does not provide a conditional/idempotent issue-create primitive.
+ * Re-list after a POST: a caller may only report created when its exact record
+ * is visible and unique.  A concurrent independent host can still create a
+ * duplicate during discovery; that condition is deliberately surfaced.
+ */
+async function createAndReconcile(
+  session: GitHubTrackerSession,
+  path: string,
+  marker: string,
+  input: DevelopmentIssueRequest | DevelopmentPullRequestRequest,
+  label: string,
+  accepts: (value: unknown) => value is ProviderRecord,
+  trusted?: DevelopmentTrackingAuthority,
+): Promise<LocatedRecord> {
+  const created = trusted
+    ? await createPullRequest(session, path, marker, input as DevelopmentPullRequestRequest, trusted)
+    : await createIssue(session, path, marker, input as DevelopmentIssueRequest);
+  const confirmed = await discover(session, path, marker, undefined, label, accepts);
+  if (!confirmed) throw new GitHubTrackerError("write-unconfirmed", `GitHub did not confirm the created ${label}; re-run discovery before retrying and manually review any duplicate marked records.`);
+  if (providerId(confirmed) !== providerId(created.record)) {
+    throw new GitHubTrackerError("ambiguous-record", `A different Shipyard-marked ${label} appeared after creation; manually reconcile duplicate marked records before retrying.`);
+  }
+  return { state: "created", record: confirmed };
+}
+
 /** Re-reads the registered worktree and bound repository immediately before a POST. */
-async function revalidateBeforeWrite(authority: DevelopmentRecordAuthority, request: DevelopmentRecordRequest, expected: DevelopmentTrackingAuthority): Promise<DevelopmentTrackingAuthority> {
+async function revalidateBeforeWrite(authority: DevelopmentRecordAuthority, request: DevelopmentRecordRequest, expected: DevelopmentTrackingAuthority, bound: BoundProfileAuthority): Promise<DevelopmentTrackingAuthority> {
+  const currentBound = await authority.guard.revalidate(authority.repositoryPath, bound);
   const current = await authority.trackingAuthority.resolve(authority.repositoryPath, request.deliveryId);
+  assertTrackingAuthorityMatchesBound(current, currentBound, request.deliveryId);
   if (!sameTrackingAuthority(expected, current)) {
     throw new GitHubTrackerError("authority-mismatch", "Delivery or worktree authority changed before the provider write.");
   }
@@ -215,6 +246,26 @@ function sameTrackingAuthority(left: DevelopmentTrackingAuthority, right: Develo
     && left.repository.defaultBranch === right.repository.defaultBranch
     && left.repository.remote.name === right.repository.remote.name
     && left.repository.remote.url === right.repository.remote.url;
+}
+
+/** The resolver supplies delivery facts, but it may never select actor/repository authority. */
+function assertTrackingAuthorityMatchesBound(tracking: DevelopmentTrackingAuthority, bound: BoundProfileAuthority, deliveryId: string): void {
+  const repository = developmentRepository(bound.topology);
+  if (tracking.commonDirectory !== bound.commonDirectory
+    || tracking.actorLogin !== bound.actorLogin
+    || !sameRepositoryRef(tracking.repository, repository)
+    || tracking.head !== `shipyard/${deliveryId}`
+    || tracking.base !== repository.defaultBranch
+    || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(tracking.expectedHeadSha)) {
+    throw new GitHubTrackerError("authority-mismatch", "Tracker authority does not exactly match the fresh bound development repository, actor, head, base, and SHA authority.");
+  }
+}
+
+function developmentRepository(topology: Topology): RepositoryRef { return topology.kind === "staged-pair" ? topology.development : topology.repository; }
+
+function sameRepositoryRef(left: RepositoryRef, right: RepositoryRef): boolean {
+  return left.owner === right.owner && left.name === right.name && left.defaultBranch === right.defaultBranch
+    && left.remote.name === right.remote.name && left.remote.url === right.remote.url;
 }
 
 function withMarker(body: string, marker: string): string { return `${body}\n\n${marker}`; }

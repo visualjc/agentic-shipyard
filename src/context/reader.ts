@@ -23,6 +23,9 @@ export class ContextReader {
     if (current !== envelope.productSha) {
       throw new ContextError("context-stale-product", "The product SHA changed; create a fresh context envelope before reading ledger records.");
     }
+    if (await this.ledger.objectFormat() !== envelope.objectFormat) {
+      throw new ContextError("context-dispatch-mismatch", "The envelope object format does not match the active repository.");
+    }
     const records = await this.ledger.read(envelope.ledgerSha, envelope.records);
     for (const path of envelope.records) if (typeof records[path] !== "string") {
       throw new ContextError("context-ledger-record-missing", "The pinned ledger does not contain every record required by this envelope.");
@@ -35,7 +38,7 @@ function matchesExpectation(envelope: ContextEnvelope, expected: ContextDispatch
   return envelope.profile === expected.profile && envelope.deliveryId === expected.deliveryId && envelope.host === expected.host && envelope.role === expected.role
     && envelope.adapter.host === expected.host && envelope.adapter.role === expected.role && envelope.adapter.envelopePath === expected.envelopePath && envelope.adapter.repoRoot === expected.repoRoot
     && sameTopology(envelope.topology, expected.topology) && sameRepository(envelope.repository, expected.repository)
-    && envelope.productBranch === expected.productBranch && envelope.productSha === expected.productSha && envelope.ledgerRef === expected.ledgerRef && envelope.ledgerSha === expected.ledgerSha;
+    && envelope.productBranch === expected.productBranch && envelope.productSha === expected.productSha && envelope.ledgerRef === expected.ledgerRef && envelope.ledgerSha === expected.ledgerSha && envelope.objectFormat === expected.objectFormat;
 }
 
 function sameRepository(left: ContextEnvelope["repository"], right: ContextDispatchExpectation["repository"]): boolean {

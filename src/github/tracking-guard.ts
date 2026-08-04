@@ -10,7 +10,7 @@ import { GitHubTrackerError } from "./markers.js";
 export class DevelopmentRecordGuard {
   constructor(private readonly locks: MutationLockService, private readonly bound: BoundProfileAuthorityResolver) {}
 
-  async run<T>(repositoryPath: string, deliveryId: string, operation: () => Promise<T>): Promise<T> {
+  async run<T>(repositoryPath: string, deliveryId: string, operation: (authority: BoundProfileAuthority) => Promise<T>): Promise<T> {
     const safeDeliveryId = stableDeliveryId(deliveryId);
     const initial = await this.bound.resolve(repositoryPath, "review");
     // Every tracker flow takes the workspace lock before its narrower delivery
@@ -24,11 +24,20 @@ export class DevelopmentRecordGuard {
         if (!sameAuthority(initial, current)) {
           throw new GitHubTrackerError("authority-mismatch", "Bound profile authority changed while waiting for the development-record lock.");
         }
-        return await operation();
+        return await operation(current);
       } finally {
         await deliveryLock.release();
       }
     } finally { await workspaceLock.release(); }
+  }
+
+  /** Re-reads the binding/profile while the caller still holds this guard's locks. */
+  async revalidate(repositoryPath: string, expected: BoundProfileAuthority): Promise<BoundProfileAuthority> {
+    const current = await this.bound.resolve(repositoryPath, "review");
+    if (!sameAuthority(expected, current)) {
+      throw new GitHubTrackerError("authority-mismatch", "Bound profile authority changed before the provider write.");
+    }
+    return current;
   }
 }
 

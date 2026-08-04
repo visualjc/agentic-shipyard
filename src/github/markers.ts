@@ -17,7 +17,8 @@ export type GitHubTrackerErrorCode =
   | "head-sha-mismatch"
   | "head-ref-mismatch"
   | "base-ref-mismatch"
-  | "pagination-limit";
+  | "pagination-limit"
+  | "write-unconfirmed";
 
 /** A fail-closed error for unsafe-to-repeat tracker states. */
 export class GitHubTrackerError extends Error {

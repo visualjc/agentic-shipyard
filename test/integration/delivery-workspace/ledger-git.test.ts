@@ -118,6 +118,9 @@ test("uses the repository object format for null-OID CAS and isolation", async (
     const ledgerSha = await store.transact({ expectedHead: undefined, writes: [{ path: "records/sha256", contents: "safe" }] });
     assert.equal(ledgerSha.length, 64);
     assert.equal((await store.snapshot(["records/sha256"])).records["records/sha256"], "safe");
+    const abbreviatedPin = ledgerSha.slice(0, 40);
+    await assert.rejects(store.read(abbreviatedPin, ["records/sha256"]), (error: unknown) => error instanceof LedgerError && error.code === "ledger-invalid-path");
+    await assert.rejects(store.inspectCommit(abbreviatedPin), (error: unknown) => error instanceof LedgerError && error.code === "ledger-invalid-path");
     const productSha = await git(path, ["rev-parse", "main"]);
     await git(path, ["update-ref", GitLedgerStore.ref, productSha, ledgerSha]);
     await assertPoisoned(store, path, productSha);
@@ -184,13 +187,13 @@ test("reads exact pinned ledger commits for ContextReader and fails closed for u
       host: "test", role: "implementer", envelopePath: ".shipyard/context.json", repoRoot: path, deliveryId: "d-1", profile: "test",
       topology: { kind: "single-repository", repository: { owner: "acme", name: "widget", remote: { name: "origin", url: "https://example.test/widget.git" }, defaultBranch: "main" } },
       repository: { owner: "acme", name: "widget", remote: { name: "origin", url: "https://example.test/widget.git" }, defaultBranch: "main" },
-      productBranch: "main", productSha: await git(path, ["rev-parse", "HEAD"]), ledgerRef: GitLedgerStore.ref, ledgerSha: first,
+      productBranch: "main", objectFormat: "sha1", productSha: await git(path, ["rev-parse", "HEAD"]), ledgerRef: GitLedgerStore.ref, ledgerSha: first,
     });
     const loaded = await new ContextReader({
       profile: envelope.profile, profileFingerprint: "0".repeat(64), topology: envelope.topology, repository: envelope.repository,
       deliveryId: envelope.deliveryId, host: envelope.host, role: envelope.role,
       envelopePath: envelope.adapter.envelopePath, repoRoot: envelope.adapter.repoRoot, productBranch: envelope.productBranch,
-      productSha: envelope.productSha, ledgerRef: envelope.ledgerRef, ledgerSha: envelope.ledgerSha,
+      productSha: envelope.productSha, ledgerRef: envelope.ledgerRef, ledgerSha: envelope.ledgerSha, objectFormat: envelope.objectFormat,
     }, { resolve: async () => ({ profileName: envelope.profile, profileFingerprint: "0".repeat(64), commonDirectory: "/test/.git", actorLogin: "actor", topology: envelope.topology }) }, { currentProductSha: async () => git(path, ["rev-parse", "HEAD"]) }, ledger).load(envelope);
     assert.equal(loaded.records["deliveries/d-1/contract.md"], "first");
     await assert.rejects(ledger.read("a".repeat(40), ["deliveries/d-1/contract.md"]), (error: unknown) => error instanceof LedgerError && error.code === "ledger-unavailable");

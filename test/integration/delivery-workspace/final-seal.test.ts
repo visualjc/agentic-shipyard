@@ -36,7 +36,7 @@ test("seals exact ledger records in one reachable child commit that adds only th
     assert.deepEqual(observedCommit.changes, [{ status: "added", path: finalSealPath(deliveryId) }]);
     assert.equal(await git(path, ["merge-base", "--is-ancestor", sealCommitSha, GitLedgerStore.ref]).then(() => true, () => false), true);
     for (const recordPath of recordPaths) assert.equal(await git(path, ["rev-parse", `${preSealLedgerSha}:${recordPath}`]), await git(path, ["rev-parse", `${sealCommitSha}:${recordPath}`]));
-    assert.equal(verifyFinalLedgerSeal({ externalSealCommitSha: sealCommitSha, observedCommit, currentProductSha: productSha, sealContents, records: sealedRecords }).preSealLedgerSha, preSealLedgerSha);
+    assert.equal(verifyFinalLedgerSeal({ objectFormat: await store.objectFormat(), externalSealCommitSha: sealCommitSha, observedCommit, currentProductSha: productSha, sealContents, records: sealedRecords }).preSealLedgerSha, preSealLedgerSha);
 
     await assert.rejects(sealDelivery(store, { deliveryId, productSha, recordPaths }), (error: unknown) => error instanceof LedgerError && error.code === "ledger-path-conflict");
   } finally { await rm(path, { recursive: true, force: true }); }

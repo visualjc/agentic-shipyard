@@ -2,12 +2,13 @@ import { createHash } from "node:crypto";
 import { stableDeliveryId } from "../delivery/registry.js";
 import { LedgerError } from "./errors.js";
 import { validLedgerPath } from "./transaction.js";
-import type { LedgerCommitInspection, LedgerStore } from "./types.js";
+import type { GitObjectFormat, LedgerCommitInspection, LedgerStore, ObjectFormatAuthority } from "./types.js";
 
 export type FinalLedgerSealManifestEntry = Readonly<{ path: string; sha256: string }>;
 export type FinalLedgerSeal = Readonly<{
   schemaVersion: 1;
   deliveryId: string;
+  objectFormat: GitObjectFormat;
   productSha: string;
   /** The exact ledger head whose tree was sealed. The seal commit is its child. */
   preSealLedgerSha: string;
@@ -16,6 +17,7 @@ export type FinalLedgerSeal = Readonly<{
 
 export type CreateFinalLedgerSeal = Readonly<{
   deliveryId: string;
+  objectFormat: GitObjectFormat;
   productSha: string;
   preSealLedgerSha: string;
   records: Readonly<Record<string, string>>;
@@ -28,6 +30,8 @@ export type SealDeliveryRequest = Readonly<{
 }>;
 
 export type FinalLedgerSealObservation = Readonly<{
+  /** Trusted storage format derived from the repository that supplied the observations. */
+  objectFormat: GitObjectFormat;
   /** Stored outside the seal to avoid making a commit contain its own object ID. */
   externalSealCommitSha: string;
   observedCommit: LedgerCommitInspection;
@@ -57,11 +61,13 @@ export function finalSealManifest(deliveryId: string, records: Readonly<Record<s
 
 /** Serializes the only canonical version-1 seal representation. */
 export function createFinalLedgerSeal(input: CreateFinalLedgerSeal): string {
+  const format = objectFormat(input.objectFormat);
   const seal: FinalLedgerSeal = Object.freeze({
     schemaVersion: 1,
     deliveryId: canonicalDeliveryId(input.deliveryId),
-    productSha: fullObjectId(input.productSha, "product SHA"),
-    preSealLedgerSha: fullObjectId(input.preSealLedgerSha, "pre-seal ledger SHA"),
+    objectFormat: format,
+    productSha: fullObjectId(format, input.productSha, "product SHA"),
+    preSealLedgerSha: fullObjectId(format, input.preSealLedgerSha, "pre-seal ledger SHA"),
     manifest: finalSealManifest(input.deliveryId, input.records),
   });
   return JSON.stringify(seal);
@@ -72,12 +78,13 @@ export function validateFinalLedgerSeal(contents: string): FinalLedgerSeal {
   if (typeof contents !== "string") throw invalid("Final seal must be UTF-8 JSON text.");
   let value: unknown;
   try { value = JSON.parse(contents); } catch { throw invalid("Final seal is not valid JSON."); }
-  if (!plainRecord(value) || !exactKeys(value, ["schemaVersion", "deliveryId", "productSha", "preSealLedgerSha", "manifest"]) || value.schemaVersion !== 1 || !Array.isArray(value.manifest)) {
+  if (!plainRecord(value) || !exactKeys(value, ["schemaVersion", "deliveryId", "objectFormat", "productSha", "preSealLedgerSha", "manifest"]) || value.schemaVersion !== 1 || !Array.isArray(value.manifest)) {
     throw invalid("Final seal is not an exact version-1 document.");
   }
   const deliveryId = canonicalDeliveryId(value.deliveryId);
-  const productSha = fullObjectId(value.productSha, "product SHA");
-  const preSealLedgerSha = fullObjectId(value.preSealLedgerSha, "pre-seal ledger SHA");
+  const format = objectFormat(value.objectFormat);
+  const productSha = fullObjectId(format, value.productSha, "product SHA");
+  const preSealLedgerSha = fullObjectId(format, value.preSealLedgerSha, "pre-seal ledger SHA");
   if (value.manifest.length === 0) throw invalid("A final seal must cover at least one durable record.");
   const manifest = value.manifest.map((entry): FinalLedgerSealManifestEntry => {
     if (!plainRecord(entry) || !exactKeys(entry, ["path", "sha256"]) || typeof entry.path !== "string" || typeof entry.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(entry.sha256)) {
@@ -89,7 +96,7 @@ export function validateFinalLedgerSeal(contents: string): FinalLedgerSeal {
   for (let index = 1; index < manifest.length; index += 1) {
     if (lexical(manifest[index - 1]!.path, manifest[index]!.path) >= 0) throw invalid("Final seal manifest paths must be unique and strictly sorted.");
   }
-  const seal: FinalLedgerSeal = Object.freeze({ schemaVersion: 1, deliveryId, productSha, preSealLedgerSha, manifest: Object.freeze(manifest) });
+  const seal: FinalLedgerSeal = Object.freeze({ schemaVersion: 1, deliveryId, objectFormat: format, productSha, preSealLedgerSha, manifest: Object.freeze(manifest) });
   if (JSON.stringify(seal) !== contents) throw invalid("Final seal bytes are not canonically serialized.");
   return seal;
 }
@@ -100,11 +107,12 @@ export function validateFinalLedgerSeal(contents: string): FinalLedgerSeal {
  * created normally and its ID retained by the caller.
  */
 export function verifyFinalLedgerSeal(observation: FinalLedgerSealObservation): FinalLedgerSeal {
-  const externalCommit = fullObjectId(observation.externalSealCommitSha, "external seal commit SHA");
-  const commit = validateInspection(observation.observedCommit);
-  if (commit.commitSha !== externalCommit) throw invalid("The observed ledger commit is not the external seal commit.");
   const seal = validateFinalLedgerSeal(observation.sealContents);
-  if (fullObjectId(observation.currentProductSha, "current product SHA") !== seal.productSha) throw invalid("The sealed product SHA is stale or belongs to another product state.");
+  if (objectFormat(observation.objectFormat) !== seal.objectFormat) throw invalid("The final seal object format does not match the observing repository.");
+  const externalCommit = fullObjectId(seal.objectFormat, observation.externalSealCommitSha, "external seal commit SHA");
+  const commit = validateInspection(seal.objectFormat, observation.observedCommit);
+  if (commit.commitSha !== externalCommit) throw invalid("The observed ledger commit is not the external seal commit.");
+  if (fullObjectId(seal.objectFormat, observation.currentProductSha, "current product SHA") !== seal.productSha) throw invalid("The sealed product SHA is stale or belongs to another product state.");
   if (commit.parentSha !== seal.preSealLedgerSha) throw invalid("The seal commit parent is not the pre-seal ledger head.");
   if (commit.changes.length !== 1 || commit.changes[0]!.status !== "added" || commit.changes[0]!.path !== finalSealPath(seal.deliveryId)) {
     throw invalid("The seal commit must add only its non-self-referential final-seal record.");
@@ -116,9 +124,10 @@ export function verifyFinalLedgerSeal(observation: FinalLedgerSealObservation): 
 }
 
 /** Snapshots and atomically seals exactly the caller-declared durable records. */
-export async function sealDelivery(store: LedgerStore, request: SealDeliveryRequest): Promise<string> {
+export async function sealDelivery(store: LedgerStore & ObjectFormatAuthority, request: SealDeliveryRequest): Promise<string> {
   const deliveryId = canonicalDeliveryId(request.deliveryId);
-  const productSha = fullObjectId(request.productSha, "product SHA");
+  const format = objectFormat(await store.objectFormat());
+  const productSha = fullObjectId(format, request.productSha, "product SHA");
   if (!Array.isArray(request.recordPaths) || request.recordPaths.length === 0) throw invalid("A final seal requires explicit durable record paths.");
   const paths = request.recordPaths.map((path) => {
     if (typeof path !== "string") throw invalid("Final seal record paths must be strings.");
@@ -132,10 +141,10 @@ export async function sealDelivery(store: LedgerStore, request: SealDeliveryRequ
   if (Object.keys(snapshot.records).some((path) => !expectedPaths.has(path))) throw invalid("Ledger snapshot returned records outside the exact seal request.");
   if (snapshot.records[sealPath] !== undefined) throw new LedgerError("ledger-path-conflict", "Delivery already has an immutable final seal.");
   if (paths.some((path) => snapshot.records[path] === undefined)) throw invalid("Every final-seal record must exist at the exact pre-seal ledger head.");
-  const preSealLedgerSha = fullObjectId(snapshot.head, "pre-seal ledger SHA");
+  const preSealLedgerSha = fullObjectId(format, snapshot.head, "pre-seal ledger SHA");
   const records = Object.fromEntries(paths.map((path) => [path, snapshot.records[path]!]));
-  const contents = createFinalLedgerSeal({ deliveryId, productSha, preSealLedgerSha, records });
-  const sealCommitSha = fullObjectId(await store.transact({
+  const contents = createFinalLedgerSeal({ deliveryId, objectFormat: format, productSha, preSealLedgerSha, records });
+  const sealCommitSha = fullObjectId(format, await store.transact({
     expectedHead: preSealLedgerSha,
     writes: [{ path: sealPath, contents }],
     message: `seal delivery ${deliveryId}`,
@@ -144,10 +153,10 @@ export async function sealDelivery(store: LedgerStore, request: SealDeliveryRequ
   return sealCommitSha;
 }
 
-function validateInspection(value: unknown): LedgerCommitInspection {
+function validateInspection(format: GitObjectFormat, value: unknown): LedgerCommitInspection {
   if (!plainRecord(value) || !exactKeys(value, ["commitSha", "parentSha", "changes"]) || !Array.isArray(value.changes)) throw invalid("Ledger commit inspection is malformed.");
-  const commitSha = fullObjectId(value.commitSha, "observed seal commit SHA");
-  const parentSha = fullObjectId(value.parentSha, "observed seal parent SHA");
+  const commitSha = fullObjectId(format, value.commitSha, "observed seal commit SHA");
+  const parentSha = fullObjectId(format, value.parentSha, "observed seal parent SHA");
   const changes = value.changes.map((change) => {
     if (!plainRecord(change) || !exactKeys(change, ["status", "path"]) || !["added", "modified", "deleted"].includes(String(change.status)) || typeof change.path !== "string" || !validLedgerPath(change.path)) {
       throw invalid("Ledger commit change inspection is malformed.");
@@ -167,8 +176,12 @@ function canonicalDeliveryId(value: unknown): string {
   try { return stableDeliveryId(value); } catch { throw invalid("Final seal requires a stable delivery ID."); }
 }
 function finalSealPathUnchecked(deliveryId: string): string { return `deliveries/${deliveryId}/final-seal.json`; }
-function fullObjectId(value: unknown, name: string): string {
-  if (typeof value !== "string" || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value)) throw invalid(`Final seal requires a canonical ${name}.`);
+function objectFormat(value: unknown): GitObjectFormat {
+  if (value === "sha1" || value === "sha256") return value;
+  throw invalid("Final seal requires a supported Git object format.");
+}
+function fullObjectId(format: GitObjectFormat, value: unknown, name: string): string {
+  if (typeof value !== "string" || !new RegExp(`^[a-f0-9]{${format === "sha1" ? 40 : 64}}$`).test(value)) throw invalid(`Final seal requires a canonical ${name}.`);
   return value;
 }
 function sha256(contents: string): string { return createHash("sha256").update(Buffer.from(contents, "utf8")).digest("hex"); }

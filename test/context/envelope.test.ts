@@ -10,9 +10,10 @@ const base = {
   topology: { kind: "single-repository", repository: { owner: "acme", name: "widget", remote: { name: "origin", url: "https://example.test/widget.git" }, defaultBranch: "main" } },
   repository: { owner: "acme", name: "widget", remote: { name: "origin", url: "https://example.test/widget.git" }, defaultBranch: "main" },
   productBranch: "shipyard/delivery-001",
+  objectFormat: "sha1",
   productSha: "a".repeat(40),
   ledgerRef: "refs/heads/shipyard-ledger",
-  ledgerSha: "b".repeat(64),
+  ledgerSha: "b".repeat(40),
   envelopePath: ".shipyard/envelopes/delivery-001.json",
   repoRoot: "/worktrees/delivery-001",
 } as const;
@@ -43,6 +44,8 @@ test("rejects non-canonical pins and a repository not selected by the topology",
   assert.throws(() => createEnvelope({ ...base, role: "implementer", productSha: "A".repeat(40) }),
     (error: unknown) => error instanceof ContextError && error.code === "context-invalid-envelope");
   assert.throws(() => createEnvelope({ ...base, role: "implementer", ledgerSha: "a".repeat(39) }),
+    (error: unknown) => error instanceof ContextError && error.code === "context-invalid-envelope");
+  assert.throws(() => createEnvelope({ ...base, role: "implementer", objectFormat: "sha256", ledgerSha: "a".repeat(40) }),
     (error: unknown) => error instanceof ContextError && error.code === "context-invalid-envelope");
   assert.throws(() => createEnvelope({ ...base, role: "implementer", ledgerRef: "refs/heads/other" }),
     (error: unknown) => error instanceof ContextError && error.code === "context-invalid-envelope");

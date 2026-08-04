@@ -22,6 +22,7 @@ class RecordingApi {
   readonly calls: GitHubRestRequest[] = [];
   private readonly filesystem = new MemoryFilesystem();
   private readonly process = new FakeProcess();
+  private readonly records = { issues: [] as unknown[], pulls: [] as unknown[] };
   constructor(private readonly respond: (request: GitHubRestRequest) => unknown | Promise<unknown>) {}
   authority(topology: Topology = staged): DevelopmentRecordAuthority {
     return {
@@ -31,7 +32,18 @@ class RecordingApi {
       credentials: { resolve: async () => ({ authorizationValue: "test-token" }) },
       client: { forCredential: () => ({ request: async <T>(call: GitHubRestRequest) => {
         this.calls.push(call);
-        return this.respond(call) as Promise<T>;
+        const response = await this.respond(call);
+        if (call.method === "POST" && typeof response === "object" && response !== null) {
+          const record = { ...(response as object), body: (call.body as { body: string }).body };
+          if (call.path.endsWith("/issues")) this.records.issues.push(record);
+          else this.records.pulls.push(record);
+        }
+        if (call.method === "GET" && Array.isArray(response)) {
+          const stored = isIssuesPage(call.path) ? this.records.issues : call.path.includes("/pulls?") ? this.records.pulls : [];
+          const ids = new Set(response.map(record => typeof record === "object" && record !== null ? (record as { id?: unknown }).id : undefined));
+          return [...response, ...stored.filter(record => !ids.has((record as { id?: unknown }).id))] as T;
+        }
+        return response as T;
       } }) },
     };
   }
@@ -49,11 +61,55 @@ test("verifies the actor first and creates the staged-pair issue and PR only in 
     return { id: "PR_1", number: 23, html_url: "https://github.test/acme/development/pull/23", ...matchingPullRequestFields };
   });
   const checkpoint = await trackDevelopmentRecords(api.authority(), request);
-  assert.deepEqual(api.calls.map(call => [call.method, call.path]), [["GET", "/user"], ["GET", "/repos/acme/development/issues?state=all&per_page=100&page=1"], ["GET", "/repos/acme/development/pulls?state=all&per_page=100&page=1"], ["POST", "/repos/acme/development/issues"], ["POST", "/repos/acme/development/pulls"]]);
+  assert.deepEqual(api.calls.map(call => [call.method, call.path]), [["GET", "/user"], ["GET", "/repos/acme/development/issues?state=all&per_page=100&page=1"], ["GET", "/repos/acme/development/pulls?state=all&per_page=100&page=1"], ["POST", "/repos/acme/development/issues"], ["GET", "/repos/acme/development/issues?state=all&per_page=100&page=1"], ["POST", "/repos/acme/development/pulls"], ["GET", "/repos/acme/development/pulls?state=all&per_page=100&page=1"]]);
   assert.ok(api.writes.every(call => call.path.includes("/acme/development/")));
   assert.equal((api.writes[0].body as { body: string }).body, `Work item\n\n${marker}`);
   assert.equal((api.writes[1].body as { body: string }).body, `Ready for review\n\n${marker}`);
   assert.equal(checkpoint.actorLogin, "shipyard-actor");
+});
+
+test("a destination-returning resolver cannot escape a real staged-pair bound guard", async () => {
+  const api = new RecordingApi(rest => rest.path === "/user" ? { login: "shipyard-actor" } : []);
+  const authority = api.authority(staged);
+  authority.trackingAuthority = { resolve: async () => ({ commonDirectory: "/worktree/.git", actorLogin: "shipyard-actor", repository: destination, ...trusted }) };
+  await assert.rejects(trackDevelopmentRecords(authority, request), { code: "authority-mismatch" });
+  assert.equal(api.calls.length, 0, "the bound topology check happens before actor verification or a REST write");
+  assert.equal(api.writes.length, 0);
+});
+
+test("a caller-injected resolver cannot select an arbitrary development head, base, or SHA", async () => {
+  for (const override of [
+    { head: "feature/unbound" },
+    { base: "release" },
+    { expectedHeadSha: "not-a-commit" },
+  ]) {
+    const api = new RecordingApi(rest => rest.path === "/user" ? { login: "shipyard-actor" } : []);
+    const authority = api.authority(staged);
+    authority.trackingAuthority = { resolve: async () => ({ commonDirectory: "/worktree/.git", actorLogin: "shipyard-actor", repository: development, ...trusted, ...override }) };
+    await assert.rejects(trackDevelopmentRecords(authority, request), { code: "authority-mismatch" });
+    assert.equal(api.calls.length, 0);
+    assert.equal(api.writes.length, 0);
+  }
+});
+
+test("does not report a POST as success until marker discovery confirms it", async () => {
+  const api = new RecordingApi(rest => {
+    if (rest.path === "/user") return { login: "shipyard-actor" };
+    if (rest.method === "GET") return [];
+    return rest.path.endsWith("/issues")
+      ? { id: "I_1", number: 1, html_url: "https://github.test/issues/1" }
+      : { id: "PR_1", number: 2, html_url: "https://github.test/pull/2", ...matchingPullRequestFields };
+  });
+  // Avoid the fixture's normal local visibility shim to model provider lag.
+  const authority = api.authority();
+  authority.client = { forCredential: () => ({ request: async <T>(call: GitHubRestRequest) => {
+    api.calls.push(call);
+    if (call.path === "/user") return { login: "shipyard-actor" } as T;
+    if (call.method === "GET") return [] as T;
+    return { id: "I_1", number: 1, html_url: "https://github.test/issues/1" } as T;
+  } }) };
+  await assert.rejects(trackDevelopmentRecords(authority, request), (error: unknown) => error instanceof GitHubTrackerError && error.code === "write-unconfirmed" && error.message.includes("manually review"));
+  assert.equal(api.writes.length, 1);
 });
 
 test("exhausts pagination and discovers a marked record on a later page", async () => {
@@ -199,6 +255,42 @@ test("a concrete durable guard rejects a concurrent second tracker instance", as
   const [first, second] = await Promise.allSettled([trackDevelopmentRecords(api.authority(), request), trackDevelopmentRecords(api.authority(), request)]);
   assert.equal([first, second].filter(result => result.status === "fulfilled").length, 1);
   assert.equal([first, second].filter(result => result.status === "rejected").length, 1);
+});
+
+test("independent common-directory guards surface a concurrent create as ambiguity, never global exactly-once success", async () => {
+  const marker = stableShipyardMarker(request.deliveryId);
+  const issues: unknown[] = [];
+  const pulls: unknown[] = [];
+  const bothPosts = Promise.withResolvers<void>(); const releasePosts = Promise.withResolvers<void>();
+  const client = { forCredential: () => ({ request: async <T>(call: GitHubRestRequest) => {
+    if (call.path === "/user") return { login: "shipyard-actor" } as T;
+    if (isIssuesPage(call.path)) return issues as T;
+    if (call.path.includes("/pulls?")) return pulls as T;
+    if (call.path.endsWith("/issues")) {
+      const record = { id: `I_${issues.length + 1}`, number: issues.length + 1, html_url: `https://github.test/issues/${issues.length + 1}`, body: (call.body as { body: string }).body };
+      issues.push(record);
+      if (issues.length === 2) bothPosts.resolve();
+      await releasePosts.promise;
+      return record as T;
+    }
+    throw new Error("a duplicate issue must prevent PR creation");
+  } }) };
+  const independentAuthority = (): DevelopmentRecordAuthority => ({
+    repositoryPath: "/worktree",
+    guard: new DevelopmentRecordGuard(new MutationLockService(new MemoryFilesystem(), new FakeProcess()), { resolve: async () => ({ profileName: "test", commonDirectory: "/worktree/.git", profileFingerprint: "0".repeat(64), actorLogin: "shipyard-actor", topology: staged }) }),
+    trackingAuthority: { resolve: async () => ({ commonDirectory: "/worktree/.git", actorLogin: "shipyard-actor", repository: development, ...trusted }) },
+    credentials: { resolve: async () => ({ authorizationValue: "test-token" }) }, client,
+  });
+  const first = trackDevelopmentRecords(independentAuthority(), request);
+  const second = trackDevelopmentRecords(independentAuthority(), request);
+  await bothPosts.promise;
+  releasePosts.resolve();
+  const results = await Promise.allSettled([first, second]);
+  assert.equal(results.filter(result => result.status === "fulfilled").length, 0);
+  assert.ok(results.every(result => result.status === "rejected" && (result.reason as GitHubTrackerError).code === "ambiguous-record"));
+  assert.equal(issues.length, 2);
+  assert.ok(issues.every(record => typeof record === "object" && record !== null && (record as { body?: string }).body?.includes(marker)));
+  assert.equal(pulls.length, 0);
 });
 
 test("holds the workspace lifecycle lock through discovery and revalidates before a write", async () => {

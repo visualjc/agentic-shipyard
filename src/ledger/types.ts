@@ -10,6 +10,12 @@ export type LedgerCommitInspection = Readonly<{
   changes: readonly LedgerCommitChange[];
 }>;
 
+/** Git's storage object format is an authority fact, not a property inferred from an ID. */
+export type GitObjectFormat = "sha1" | "sha256";
+export interface ObjectFormatAuthority {
+  objectFormat(): Promise<GitObjectFormat>;
+}
+
 /** Durable isolated history port. Implementations compare expectedHead atomically. */
 export interface LedgerStore {
   snapshot(paths: readonly string[]): Promise<LedgerSnapshot>;

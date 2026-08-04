@@ -1,5 +1,6 @@
 import type { RepositoryRef, Topology } from "../contracts/types.js";
 import type { BoundProfileAuthorityResolver } from "../profile/bound-authority.js";
+import type { GitObjectFormat, ObjectFormatAuthority } from "../ledger/types.js";
 
 export const CONTEXT_ROLES = ["implementer", "reviewer", "status"] as const;
 export const CANONICAL_LEDGER_REF = "refs/heads/shipyard-ledger";
@@ -23,6 +24,7 @@ export type ContextDispatchExpectation = Readonly<{
   productSha: string;
   ledgerRef: string;
   ledgerSha: string;
+  objectFormat: GitObjectFormat;
 }>;
 
 /** Revalidates the dispatch repository against the live binding/profile pair. */
@@ -41,6 +43,7 @@ export type ContextEnvelope = Readonly<{
   productSha: string;
   ledgerRef: string;
   ledgerSha: string;
+  objectFormat: GitObjectFormat;
   records: readonly string[];
   adapter: ContextAdapterRequest;
 }>;
@@ -52,7 +55,7 @@ export type ContextEnvelopeInput = Omit<ContextEnvelope, "schemaVersion" | "reco
 };
 
 /** Deliberately narrow: records must be read from the envelope's exact ledger object. */
-export interface PinnedLedgerReader {
+export interface PinnedLedgerReader extends ObjectFormatAuthority {
   read(ledgerSha: string, paths: readonly string[]): Promise<Readonly<Record<string, string>>>;
 }
 

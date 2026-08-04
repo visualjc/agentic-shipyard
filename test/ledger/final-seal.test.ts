@@ -19,11 +19,12 @@ const records = {
 };
 
 function canonicalSeal(): string {
-  return createFinalLedgerSeal({ deliveryId, productSha, preSealLedgerSha, records });
+  return createFinalLedgerSeal({ deliveryId, objectFormat: "sha1", productSha, preSealLedgerSha, records });
 }
 
 function verification(overrides: Record<string, unknown> = {}) {
   return {
+    objectFormat: "sha1" as const,
     externalSealCommitSha: sealCommitSha,
     observedCommit: {
       commitSha: sealCommitSha,
@@ -45,6 +46,7 @@ test("creates canonical versioned bytes with a sorted durable path-and-byte-hash
   assert.equal(canonicalSeal(), JSON.stringify({
     schemaVersion: 1,
     deliveryId,
+    objectFormat: "sha1",
     productSha,
     preSealLedgerSha,
     manifest: finalSealManifest(deliveryId, records),
@@ -70,6 +72,7 @@ test("pure verification binds the external commit, its sole added seal, parent, 
   assert.deepEqual(verifyFinalLedgerSeal(verification()), JSON.parse(canonicalSeal()));
   const cases = [
     verification({ externalSealCommitSha: "d".repeat(40) }),
+    verification({ objectFormat: "sha256" }),
     verification({ observedCommit: { ...verification().observedCommit, parentSha: "d".repeat(40) } }),
     verification({ observedCommit: { ...verification().observedCommit, commitSha: "d".repeat(40) } }),
     verification({ observedCommit: { ...verification().observedCommit, changes: [{ status: "modified", path: finalSealPath(deliveryId) }] } }),

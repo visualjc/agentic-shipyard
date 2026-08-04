@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { LedgerError } from "../ledger/errors.js";
 import { applyLedgerTransaction, validLedgerPath } from "../ledger/transaction.js";
-import type { LedgerCommitChange, LedgerCommitInspection, LedgerSnapshot, LedgerStore, LedgerTransaction } from "../ledger/types.js";
+import type { GitObjectFormat, LedgerCommitChange, LedgerCommitInspection, LedgerSnapshot, LedgerStore, LedgerTransaction, ObjectFormatAuthority } from "../ledger/types.js";
 import type { PinnedLedgerReader } from "../context/types.js";
 import { canonicalGitExecutable, DEFAULT_NODE_GIT_EXECUTABLE, sanitizedGitEnvironment } from "./git-transport.js";
 
@@ -13,7 +13,7 @@ const execFileAsync = promisify(execFile);
 type ProductCommitRef = Readonly<{ ref: string; commitSha: string }>;
 
 /** Git object-database ledger that never checks its orphan ref out in a product worktree. */
-export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
+export class GitLedgerStore implements LedgerStore, PinnedLedgerReader, ObjectFormatAuthority {
   static readonly ref = "refs/heads/shipyard-ledger";
   /** The executable is resolved lazily so package import/construction is portable. */
   private readonly configuredGitExecutable: string;
@@ -39,7 +39,8 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
 
   /** Reads only the exact, existing ledger commit named by a context envelope. */
   async read(ledgerSha: string, paths: readonly string[]): Promise<Readonly<Record<string, string>>> {
-    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(ledgerSha) || paths.some((path) => !validLedgerPath(path))) {
+    const objectFormat = await this.objectFormat();
+    if (!fullObjectIdFor(objectFormat, ledgerSha) || paths.some((path) => !validLedgerPath(path))) {
       throw new LedgerError("ledger-invalid-path", "Pinned ledger reads require a full object ID and relative, normalized record paths.");
     }
     const head = await this.optionalRef(GitLedgerStore.ref);
@@ -47,6 +48,7 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
     await this.assertIsolatedHistory(head, head);
     const resolved = await this.optionalRef(`${ledgerSha}^{commit}`);
     if (!resolved) throw new LedgerError("ledger-unavailable", "The pinned ledger commit is unavailable.");
+    if (resolved !== ledgerSha) throw new LedgerError("ledger-unavailable", "The pinned ledger commit did not resolve to its exact object ID.");
     if (!(await this.isAncestor(resolved, head))) {
       throw new LedgerError("ledger-unavailable", "The pinned ledger commit is not reachable from the configured ledger ref.");
     }
@@ -61,12 +63,13 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
 
   /** Reads the exact reachable commit identity, sole parent, and tree diff needed by final-seal verification. */
   async inspectCommit(ledgerSha: string): Promise<LedgerCommitInspection> {
-    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(ledgerSha)) throw new LedgerError("ledger-invalid-path", "Ledger commit inspection requires a full object ID.");
+    if (!fullObjectIdFor(await this.objectFormat(), ledgerSha)) throw new LedgerError("ledger-invalid-path", "Ledger commit inspection requires a full object ID.");
     const head = await this.optionalRef(GitLedgerStore.ref);
     if (!head) throw new LedgerError("ledger-unavailable", "The configured ledger ref is unavailable.");
     await this.assertIsolatedHistory(head, head);
     const commitSha = await this.optionalRef(`${ledgerSha}^{commit}`);
     if (!commitSha) throw new LedgerError("ledger-unavailable", "The inspected ledger commit is unavailable.");
+    if (commitSha !== ledgerSha) throw new LedgerError("ledger-unavailable", "The inspected ledger commit did not resolve to its exact object ID.");
     if (!(await this.isAncestor(commitSha, head))) throw new LedgerError("ledger-unavailable", "The inspected ledger commit is not reachable from the configured ledger ref.");
     const ancestry = (await this.gitRequired(["rev-list", "--parents", "-n", "1", commitSha])).split(" ");
     if (ancestry[0] !== commitSha || ancestry.length > 2) throw new LedgerError("ledger-invalid-record", "Ledger commits must have a single linear parent.");
@@ -207,19 +210,20 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
         if (ref.startsWith("refs/heads/") || ref.startsWith("refs/remotes/")) throw new LedgerError("ledger-invalid-record", `Product ref ${ref} does not name a commit.`);
         continue; // A tag of a non-commit object is not a product-history authority.
       }
-      if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commitSha)) throw new LedgerError("ledger-invalid-record", `Product ref ${ref} has a non-canonical object ID.`);
+      if (!fullObjectIdFor(await this.objectFormat(), commitSha)) throw new LedgerError("ledger-invalid-record", `Product ref ${ref} has a non-canonical object ID.`);
       refs.push(Object.freeze({ ref, commitSha }));
     }
     refs.sort((left, right) => left.ref < right.ref ? -1 : left.ref > right.ref ? 1 : 0);
     return Object.freeze(refs);
   }
 
-  private async nullObjectId(): Promise<string> {
+  async objectFormat(): Promise<GitObjectFormat> {
     const format = await this.gitRequired(["rev-parse", "--show-object-format=storage"]);
-    if (format === "sha1") return "0".repeat(40);
-    if (format === "sha256") return "0".repeat(64);
+    if (format === "sha1" || format === "sha256") return format;
     throw new LedgerError("ledger-unavailable", `Unsupported Git object format: ${format || "unknown"}.`);
   }
+
+  private async nullObjectId(): Promise<string> { return "0".repeat((await this.objectFormat()) === "sha1" ? 40 : 64); }
 
   private async run(args: string[], env?: NodeJS.ProcessEnv): Promise<{ code: number; stdout: string; stderr: string }> {
     try {
@@ -275,3 +279,4 @@ function refspecPatternMatches(pattern: string, ref: string): boolean {
   return new RegExp(expression).test(ref);
 }
 function escapeRegExp(value: string): string { return value.replace(/[|\\{}()[\]^$+?.]/g, "\\$&"); }
+function fullObjectIdFor(format: GitObjectFormat, value: string): boolean { return new RegExp(`^[a-f0-9]{${format === "sha1" ? 40 : 64}}$`).test(value); }
