@@ -28,7 +28,14 @@ export type Profile = {
   allowedOperations: readonly Operation[];
   /** This profile owns the only path-authority policy Shipyard may use. */
   pathPolicy: PathPolicy;
+  /** Omission is the backward-compatible, disabled graph configuration. */
+  graph?: GraphProfile;
 };
+
+export type GraphProfile =
+  | Readonly<{ enabled: false }>
+  | Readonly<{ enabled: true; localOnlyApproved: true; adapter: "graphify"; reviewedToolSource: "graphify@0.9.32#00efd6e7969837ae4a9f11d8d504dcd3b20b09df"; executablePath: string; cacheRoot: string }>
+  | Readonly<{ enabled: true; localOnlyApproved: true; adapter: "codegraph"; reviewedToolSource: "codegraph@1.5.0#49c11fc2e0c02170742be8411e66a31af611f4b7"; executablePath: string; nodeExecutablePath: string }>;
 
 /** A binding belongs to the Git common directory, not a particular worktree. */
 export type Binding = {

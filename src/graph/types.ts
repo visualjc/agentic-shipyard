@@ -24,7 +24,7 @@ export type GraphDecision = Readonly<{
   fallbackAction: typeof GRAPH_FALLBACK_ACTION;
   reason: string;
 }>;
-export type GraphCacheLock = Readonly<{ ownerHost: string; ownerPid: number; acquiredAt: string }>;
+export type GraphCacheLock = Readonly<{ ownerHost: string; ownerPid: number; acquiredAt: string; token?: string }>;
 export type GraphRuntime = Readonly<{ available: boolean; reason?: string }>;
 export type GraphResult = Readonly<{ decision: GraphDecision; descriptor?: GraphDescriptor }>;
 /** Baseline is deliberately distinct from a feature worktree and must be proved by its Git authority port. */
@@ -40,11 +40,4 @@ export type GraphBaseline = Readonly<{
   resolvedSha: string;
   objectFormat: "sha1" | "sha256";
   clean: true;
-}>;
-export type GraphAdapter = Readonly<{
-  name: GraphDescriptor["adapter"];
-  probe(): Promise<GraphRuntime>;
-  seed?(baseline: GraphBaseline, source: GraphSource): Promise<void>;
-  refresh(source: GraphSource): Promise<GraphDescriptor>;
-  status(source: GraphSource, descriptor?: GraphDescriptor, lock?: GraphCacheLock): Promise<GraphDecision>;
 }>;

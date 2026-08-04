@@ -16,7 +16,7 @@ test("exact commit and dirty fingerprint are both required and divergent worktre
 test("restart/recreation descriptor mismatch and unavailable runtime always select source fallback", async () => {
   assert.equal((await evaluateGraphFreshness({ source, descriptor: descriptor({ worktreeRoot: "/private/recreated" }), adapter: "graphify", reviewedToolSource: GRAPHIFY_RECEIPT })).authoritative, false);
   const unavailable = await evaluateGraphFreshness({ source, adapter: "graphify", reviewedToolSource: GRAPHIFY_RECEIPT, runtime: { available: false, reason: "missing" } });
-  assert.deepEqual(unavailable, graphDecision("unavailable", "missing"));
+  assert.deepEqual(unavailable, graphDecision("unavailable", "Experimental graph runtime is unavailable."));
 });
 
 test("a private cache may retain its exact immutable-main seed identity but not a sibling worktree identity", () => {
@@ -35,6 +35,17 @@ test("locks distinguish live, stale and unknown/cross-host ownership without rem
   assert.equal((await evaluateGraphLock({ ownerHost: "test-host", ownerPid: 44, acquiredAt: "2026-08-03T00:00:00Z" }, process))?.state, "blocked");
   assert.equal((await evaluateGraphLock({ ownerHost: "test-host", ownerPid: 55, acquiredAt: "2026-08-03T00:00:00Z" }, process))?.state, "stale");
   assert.equal((await evaluateGraphLock({ ownerHost: "other", ownerPid: 55, acquiredAt: "2026-08-03T00:00:00Z" }, process))?.state, "blocked");
+});
+test("cross-host locks never probe the local process table", async () => {
+  let probes = 0;
+  const process = {
+    hostName: () => "test-host",
+    processId: () => 1,
+    now: () => new Date("2026-08-04T00:00:00Z"),
+    isProcessAlive: async () => { probes++; throw new Error("must not probe"); },
+  };
+  assert.equal((await evaluateGraphLock({ ownerHost: "other", ownerPid: 55, acquiredAt: "2026-08-03T00:00:00Z" }, process))?.state, "blocked");
+  assert.equal(probes, 0);
 });
 test("injected lock store uses exclusive acquire and never auto-removes stale records", async () => {
   const process = new FakeProcess(); let removed = 0; let existing: import("../../src/index.js").GraphCacheLock | undefined;

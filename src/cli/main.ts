@@ -20,7 +20,7 @@ export async function run(argv: readonly string[], invokedAs: CommandName = "shi
     const runtime = createRuntime(home);
     const repositoryPath = optionalOption(parsed, "repo") ?? cwd;
     if (command === "help") return { code: 0, output: `${help(parsed.positionals[0])}\n` };
-    if (command === "status") return { code: 0, output: `${JSON.stringify(await status(runtime.bindings, runtime.git, runtime.profiles, repositoryPath, new NodeSyncStatusReader()), null, 2)}\n` };
+    if (command === "status") return { code: 0, output: `${JSON.stringify(await status(runtime.bindings, runtime.git, runtime.profiles, repositoryPath, new NodeSyncStatusReader(), runtime.graphs), null, 2)}\n` };
     if (command === "sync") return { code: 0, output: `${JSON.stringify(await sync(runtime, repositoryPath, explicitOptionalOption(parsed, "source-ref")), null, 2)}\n` };
     if (command === "setup") {
       const kind = requiredOption(parsed, "topology");

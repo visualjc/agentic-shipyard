@@ -10,9 +10,17 @@ export function graphDecision(state: GraphState, reason: string): GraphDecision 
 
 /** Stable private identity: neither common directory nor branch name participates. */
 export function graphCacheIdentity(adapter: GraphDescriptor["adapter"], reviewedToolSource: string, source: Pick<GraphSource, "worktreeRoot" | "worktreeInstanceId" | "headSha">, baselineSha?: string): string {
-  const checked = validateGraphSource({ ...source, workingTreeFingerprint: `git-v1:${"0".repeat(64)}` });
+  let snapshot: Record<string, unknown>; try { const d = Object.getOwnPropertyDescriptors(source); if (Object.values(d).some(field => !("value" in field))) throw new Error(); snapshot = Object.fromEntries(Object.entries(d).map(([key, field]) => [key, field.value])); } catch { throw new Error("Invalid graph cache identity input."); }
+  const checked = validateGraphSource({ worktreeRoot: snapshot.worktreeRoot, worktreeInstanceId: snapshot.worktreeInstanceId, headSha: snapshot.headSha, workingTreeFingerprint: `git-v1:${"0".repeat(64)}` });
   if (adapter !== "graphify" && adapter !== "codegraph" || typeof reviewedToolSource !== "string" || !isGraphSha(baselineSha ?? checked.headSha)) throw new Error("Invalid graph cache identity input.");
   return createHash("sha256").update(JSON.stringify([adapter, reviewedToolSource, checked.worktreeRoot, checked.worktreeInstanceId, (baselineSha ?? checked.headSha).toLowerCase()])).digest("hex");
+}
+/** Stable mutation identity: every source snapshot for one physical cache shares one lock. */
+export function graphOperationLockIdentity(adapter: GraphDescriptor["adapter"], reviewedToolSource: string, source: Pick<GraphSource, "worktreeRoot" | "worktreeInstanceId">): string {
+  let root: unknown, instance: unknown;
+  try { const d = Object.getOwnPropertyDescriptors(source); if (Object.values(d).some(field => !("value" in field))) throw new Error(); root = d.worktreeRoot?.value; instance = d.worktreeInstanceId?.value; } catch { throw new Error("Invalid graph lock identity input."); }
+  if ((adapter !== "graphify" && adapter !== "codegraph") || typeof reviewedToolSource !== "string" || typeof root !== "string" || !isAbsolute(root) || resolve(root) !== root || typeof instance !== "string" || !/^git-worktree-v1:[0-9a-f]{64}$/.test(instance)) throw new Error("Invalid graph lock identity input.");
+  return createHash("sha256").update(JSON.stringify([adapter, reviewedToolSource, root, instance])).digest("hex");
 }
 /** Lock names live in a separate machine-local root, never in graph cache/output. */
 export function graphLockPath(lockRoot: string, cacheIdentity: string): string {
@@ -31,42 +39,28 @@ export function validateGraphDescriptor(source: GraphSource, descriptor: GraphDe
   return graphDecision("fresh", "Graph descriptor matches exact source snapshot.");
 }
 
-/** Validate a Git-authority-proved, clean main baseline before copying it. */
-export function validateGraphBaseline(source: GraphSource, baseline: import("./types.js").GraphBaseline | undefined, adapter: GraphDescriptor["adapter"], reviewedToolSource: string): GraphDecision {
-  try {
-    source = validateGraphSource(source);
-    if (!baseline || typeof baseline !== "object" || Object.getPrototypeOf(baseline) !== Object.prototype) throw new Error();
-    const fields = Object.getOwnPropertyDescriptors(baseline); if (Object.keys(fields).length !== 6 || Object.values(fields).some((field) => !("value" in field))) throw new Error();
-    const safe = Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.value])) as Record<string, unknown>;
-    if (safe.authoritativeRef !== "refs/heads/main" || safe.clean !== true) throw new Error();
-    const main = validateGraphSource(safe.source);
-    if (safe.objectFormat !== "sha1" && safe.objectFormat !== "sha256") throw new Error();
-    const expectedLength = safe.objectFormat === "sha1" ? 40 : 64;
-    if (!isGraphSha(safe.resolvedSha) || safe.resolvedSha.length !== expectedLength || main.headSha !== safe.resolvedSha.toLowerCase()) throw new Error();
-    // A feature checkout may match main's content, but may never self-seed.
-    if (resolve(main.worktreeRoot) === resolve(source.worktreeRoot) || main.worktreeInstanceId === source.worktreeInstanceId) throw new Error();
-    const descriptor = validateGraphDescriptor(main, safe.descriptor as GraphDescriptor, adapter, reviewedToolSource);
-    if (!descriptor.authoritative) return descriptor;
-    if (main.headSha !== source.headSha || main.workingTreeFingerprint !== source.workingTreeFingerprint) return graphDecision("stale", "Authoritative-main baseline does not exactly match the feature source.");
-    return graphDecision("fresh", "Clean authoritative-main baseline exactly matches the feature source.");
-  } catch { return graphDecision("invalid", "Authoritative-main baseline proof is invalid."); }
-}
-
 /** Unknown, cross-host and malformed locks are deliberately blocked, never deleted automatically. */
 export async function evaluateGraphLock(lock: GraphCacheLock | undefined, process: ProcessAdapter, maxAgeMs = 30 * 60_000): Promise<GraphDecision | undefined> {
   if (!lock) return undefined;
   try { lock = validateGraphLock(lock); } catch { return graphDecision("blocked", "Graph cache lock is malformed and requires manual verified recovery."); }
   const acquired = Date.parse(lock.acquiredAt);
   if (!Number.isFinite(acquired) || !lock.ownerHost || !Number.isInteger(lock.ownerPid) || lock.ownerPid < 1) return graphDecision("blocked", "Graph cache lock is malformed and requires manual verified recovery.");
-  if (lock.ownerHost !== process.hostName()) return graphDecision("blocked", "Graph cache lock is owned by another host and requires manual verified recovery.");
-  if (await process.isProcessAlive(lock.ownerPid)) return graphDecision("blocked", "Graph refresh is currently active.");
-  if (process.now().getTime() - acquired < maxAgeMs) return graphDecision("blocked", "Graph lock owner cannot be verified stale yet.");
+  let host: string;
+  try { host = (method(process, "hostName") as ProcessAdapter["hostName"])(); } catch { return graphDecision("blocked", "Graph lock ownership could not be observed safely."); }
+  if (lock.ownerHost !== host) return graphDecision("blocked", "Graph cache lock is owned by another host and requires manual verified recovery.");
+  let alive: boolean, now: number;
+  try { alive = await (method(process, "isProcessAlive") as ProcessAdapter["isProcessAlive"])(lock.ownerPid); now = (method(process, "now") as ProcessAdapter["now"])().getTime(); } catch { return graphDecision("blocked", "Graph lock ownership could not be observed safely."); }
+  if (alive) return graphDecision("blocked", "Graph refresh is currently active.");
+  if (now - acquired < maxAgeMs) return graphDecision("blocked", "Graph lock owner cannot be verified stale yet.");
   return graphDecision("stale", "Dead local graph lock is stale; recover only through verified lock recovery.");
 }
 
 export async function evaluateGraphFreshness(input: { source: GraphSource; descriptor?: GraphDescriptor; adapter: GraphDescriptor["adapter"]; reviewedToolSource: string; runtime?: GraphRuntime; lock?: GraphCacheLock; process?: ProcessAdapter }): Promise<GraphDecision> {
-  try { input.source = validateGraphSource(input.source); if (input.runtime) input.runtime = validateGraphRuntime(input.runtime); } catch { return graphDecision("invalid", "Graph source/runtime validation failed."); }
-  if (input.runtime && !input.runtime.available) return graphDecision("unavailable", input.runtime.reason ?? "Experimental graph runtime is unavailable.");
-  if (input.lock) { if (!input.process) return graphDecision("blocked", "Graph cache lock cannot be verified without process authority."); return (await evaluateGraphLock(input.lock, input.process))!; }
-  return validateGraphDescriptor(input.source, input.descriptor, input.adapter, input.reviewedToolSource);
+  let value: Record<string, unknown>, source: GraphSource, runtime: GraphRuntime | undefined;
+  try { const d = Object.getOwnPropertyDescriptors(input); if (Object.values(d).some(field => !("value" in field))) throw new Error(); value = Object.fromEntries(Object.entries(d).map(([key, field]) => [key, field.value])); source = validateGraphSource(value.source); runtime = value.runtime === undefined ? undefined : validateGraphRuntime(value.runtime); } catch { return graphDecision("invalid", "Graph source/runtime validation failed."); }
+  if (runtime && !runtime.available) return graphDecision("unavailable", "Experimental graph runtime is unavailable.");
+  if (value.lock) { if (!value.process) return graphDecision("blocked", "Graph cache lock cannot be verified without process authority."); return (await evaluateGraphLock(value.lock as GraphCacheLock, value.process as ProcessAdapter))!; }
+  return validateGraphDescriptor(source, value.descriptor as GraphDescriptor | undefined, value.adapter as GraphDescriptor["adapter"], value.reviewedToolSource as string);
 }
+
+function method(value: object, name: string): Function { const own = Object.getOwnPropertyDescriptor(value, name); const prototype = Object.getPrototypeOf(value); const inherited = prototype && Object.getOwnPropertyDescriptor(prototype, name); const descriptor = own ?? inherited; if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== "function") throw new Error(); return descriptor.value.bind(value); }

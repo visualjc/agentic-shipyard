@@ -28,5 +28,8 @@ function canonicalProfile(profile: Profile) {
     schemaVersion: profile.schemaVersion, name: profile.name, actor: { login: profile.actor.login }, topology,
     allowedOperations: [...profile.allowedOperations],
     pathPolicy: { schemaVersion: profile.pathPolicy.schemaVersion, rules: profile.pathPolicy.rules.map((rule) => ({ owner: rule.owner, pattern: rule.pattern })) },
+    // Omitted/explicitly-disabled graph state stays out of the v1 identity so
+    // existing bound profiles remain valid. Enabled graph authority is pinned.
+    ...(profile.graph?.enabled ? { graph: { ...profile.graph } } : {}),
   };
 }

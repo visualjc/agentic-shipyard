@@ -172,6 +172,15 @@ test("status refuses actor-only and path-policy-only profile authority drift unt
   } finally { await fixture.dispose(); }
 });
 
+test("status projects enabled graph freshness without launching tools or creating graph state", async () => {
+  const fixture = await createRepository(false);
+  try {
+    await writeProfile(fixture, "demo", { graph: { enabled: true, localOnlyApproved: true, adapter: "graphify", reviewedToolSource: "graphify@0.9.32#00efd6e7969837ae4a9f11d8d504dcd3b20b09df", executablePath: "/missing/graphify", cacheRoot: "/missing/external-cache" } });
+    const args = ["--home", fixture.home, "--profile", "demo", "--topology", "staged-pair", "--development-name", "origin", "--development-url", fixture.origin, "--destination-name", "destination", "--destination-url", fixture.destination]; assert.equal((await run(args, "setup", fixture.main)).code, 0);
+    const result = await run(["--home", fixture.home], "status", fixture.main); assert.equal(result.code, 0); assert.match(result.output, /"graphFreshness": "stale"/); assert.match(result.output, /"adapter": "graphify"/); await assert.rejects(access(join(fixture.home, "graph")));
+  } finally { await fixture.dispose(); }
+});
+
 test("setup reports manual stale-lock recovery guidance", async () => {
   const fixture = await createRepository();
   try {
@@ -224,7 +233,7 @@ async function createRepository(withProfile = true) {
 async function writeProfile(
   fixture: { home: string; origin: string; destination: string },
   fileName: string,
-  options: { malformed?: boolean; declaredName?: string; destinationUrl?: string; actor?: string; pathPolicy?: ReturnType<typeof policy> } = {},
+  options: { malformed?: boolean; declaredName?: string; destinationUrl?: string; actor?: string; pathPolicy?: ReturnType<typeof policy>; graph?: unknown } = {},
 ): Promise<void> {
   const directory = join(fixture.home, "profiles");
   await mkdir(directory, { recursive: true });
@@ -239,6 +248,7 @@ async function writeProfile(
     },
     allowedOperations: ["setup", "status", "help"],
     pathPolicy: options.pathPolicy ?? policy(),
+    ...(options.graph ? { graph: options.graph } : {}),
   };
   await writeFile(join(directory, `${fileName}.json`), `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600 });
 }

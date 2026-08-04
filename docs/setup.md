@@ -42,6 +42,30 @@ The filename identifier, document `name`, topology kind, and named remote URLs
 must match the setup request exactly. Missing, malformed, mismatched, or
 setup-disallowing profiles block before the binding is written.
 
+Graph acceleration is omitted (or set to `{ "enabled": false }`) by default.
+Omission and explicit disablement retain the existing version 1 profile
+fingerprint. Enabling it is a reviewed profile-authority change and requires
+`localOnlyApproved: true`, one exact built-in source receipt, and canonical
+absolute executable/cache paths; unknown graph fields are rejected. For
+Graphify the enabled shape is:
+
+```json
+{
+  "graph": {
+    "enabled": true,
+    "localOnlyApproved": true,
+    "adapter": "graphify",
+    "reviewedToolSource": "graphify@0.9.32#00efd6e7969837ae4a9f11d8d504dcd3b20b09df",
+    "executablePath": "/absolute/path/to/graphify",
+    "cacheRoot": "/absolute/external/shipyard-graph-cache"
+  }
+}
+```
+
+CodeGraph uses the corresponding exact
+`codegraph@1.5.0#49c11fc2e0c02170742be8411e66a31af611f4b7` receipt,
+`executablePath`, and `nodeExecutablePath`. Shipyard installs neither tool.
+
 `pathPolicy` is profile-owned authority. Operational path classification must
 consume this validated profile policy, never an unrelated local policy.
 

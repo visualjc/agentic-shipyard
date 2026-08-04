@@ -1,7 +1,8 @@
 import { ContractValidationError, invalid } from "./errors.js";
+import { isAbsolute, resolve } from "node:path";
 import {
   CONTRACT_VERSION, DELIVERY_PHASES, OPERATIONS, type Binding, type LifecycleState,
-  type Operation, type PathOwner, type PathPolicy, type Profile, type RepositoryRef,
+  type GraphProfile, type Operation, type PathOwner, type PathPolicy, type Profile, type RepositoryRef,
   type Topology,
 } from "./types.js";
 
@@ -60,8 +61,9 @@ function date(value: unknown, path: string, code: "invalid-binding" | "invalid-l
   return text;
 }
 export function validateProfile(value: unknown): Profile {
+  try { value = snapshotJson(value); } catch { invalid("invalid-profile", "$", "must be a plain data document"); }
   if (!isRecord(value)) invalid("invalid-profile", "$", "must be an object");
-  exactKeys(value, ["schemaVersion", "name", "actor", "topology", "allowedOperations", "pathPolicy"], "$", "invalid-profile"); version(value, "$", "invalid-profile");
+  exactKeys(value, ["schemaVersion", "name", "actor", "topology", "allowedOperations", "pathPolicy", "graph"], "$", "invalid-profile"); version(value, "$", "invalid-profile");
   if (!isRecord(value.actor)) invalid("invalid-profile", "$.actor", "must be an object"); exactKeys(value.actor, ["login"], "$.actor", "invalid-profile");
   if (!Array.isArray(value.allowedOperations) || value.allowedOperations.length === 0) invalid("invalid-profile", "$.allowedOperations", "must be a non-empty array");
   const allowedOperations = value.allowedOperations.map((operation, index) => validateOperation(operation, `$.allowedOperations[${index}]`));
@@ -69,7 +71,36 @@ export function validateProfile(value: unknown): Profile {
   let pathPolicy: PathPolicy;
   try { pathPolicy = validatePathPolicy(value.pathPolicy); }
   catch { invalid("invalid-profile", "$.pathPolicy", "must be a valid canonical path policy"); }
-  return { schemaVersion: CONTRACT_VERSION, name: nonEmpty(value.name, "$.name", "invalid-profile"), actor: { login: nonEmpty(value.actor.login, "$.actor.login", "invalid-profile") }, topology: topology(value.topology, "$.topology", "invalid-profile"), allowedOperations, pathPolicy };
+  const graph = value.graph === undefined ? undefined : validateGraphProfile(value.graph);
+  return { schemaVersion: CONTRACT_VERSION, name: nonEmpty(value.name, "$.name", "invalid-profile"), actor: { login: nonEmpty(value.actor.login, "$.actor.login", "invalid-profile") }, topology: topology(value.topology, "$.topology", "invalid-profile"), allowedOperations, pathPolicy, ...(graph ? { graph } : {}) };
+}
+function snapshotJson(value: unknown, depth = 0): unknown {
+  if (depth > 16) throw new Error();
+  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean" || value === undefined) return value;
+  if (Array.isArray(value)) { const d = Object.getOwnPropertyDescriptors(value) as Record<string, PropertyDescriptor>; const length = d["length"]; const size = length && "value" in length ? length.value : undefined; if (!Number.isSafeInteger(size) || size < 0 || Object.values(d).some(field => !("value" in field))) throw new Error(); const result: unknown[] = []; for (let index = 0; index < size; index++) { const field = d[String(index)]; if (!field || !("value" in field)) throw new Error(); result.push(snapshotJson(field.value, depth + 1)); } if (Object.keys(d).some(key => key !== "length" && !/^\d+$/.test(key))) throw new Error(); return result; }
+  if (typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype) throw new Error();
+  const d = Object.getOwnPropertyDescriptors(value); if (Object.values(d).some(field => !("value" in field))) throw new Error(); return Object.fromEntries(Object.entries(d).map(([key, field]) => [key, snapshotJson(field.value, depth + 1)]));
+}
+function validateGraphProfile(value: unknown): GraphProfile {
+  if (!isRecord(value)) invalid("invalid-profile", "$.graph", "must be an object");
+  if (value.enabled === false) { exactKeys(value, ["enabled"], "$.graph", "invalid-profile"); return Object.freeze({ enabled: false }); }
+  if (value.enabled !== true || value.localOnlyApproved !== true) invalid("invalid-profile", "$.graph", "enabled graphs require explicit localOnlyApproved true");
+  if (value.adapter === "graphify") {
+    exactKeys(value, ["enabled", "localOnlyApproved", "adapter", "reviewedToolSource", "executablePath", "cacheRoot"], "$.graph", "invalid-profile");
+    if (value.reviewedToolSource !== "graphify@0.9.32#00efd6e7969837ae4a9f11d8d504dcd3b20b09df") invalid("invalid-profile", "$.graph.reviewedToolSource", "must equal the reviewed Graphify pin");
+    return Object.freeze({ enabled: true, localOnlyApproved: true, adapter: "graphify", reviewedToolSource: value.reviewedToolSource, executablePath: absolute(value.executablePath, "$.graph.executablePath"), cacheRoot: absolute(value.cacheRoot, "$.graph.cacheRoot") });
+  }
+  if (value.adapter === "codegraph") {
+    exactKeys(value, ["enabled", "localOnlyApproved", "adapter", "reviewedToolSource", "executablePath", "nodeExecutablePath"], "$.graph", "invalid-profile");
+    if (value.reviewedToolSource !== "codegraph@1.5.0#49c11fc2e0c02170742be8411e66a31af611f4b7") invalid("invalid-profile", "$.graph.reviewedToolSource", "must equal the reviewed CodeGraph pin");
+    return Object.freeze({ enabled: true, localOnlyApproved: true, adapter: "codegraph", reviewedToolSource: value.reviewedToolSource, executablePath: absolute(value.executablePath, "$.graph.executablePath"), nodeExecutablePath: absolute(value.nodeExecutablePath, "$.graph.nodeExecutablePath") });
+  }
+  return invalid("invalid-profile", "$.graph.adapter", "must be graphify or codegraph");
+}
+function absolute(value: unknown, path: string): string {
+  const text = nonEmpty(value, path, "invalid-profile");
+  if (!isAbsolute(text) || resolve(text) !== text) invalid("invalid-profile", path, "must be a canonical absolute path");
+  return text;
 }
 export function validateBinding(value: unknown): Binding {
   if (!isRecord(value)) invalid("invalid-binding", "$", "must be an object");

@@ -12,3 +12,10 @@ reviewed pin, not an upstream-guaranteed behavior. It remains private to each
 canonical worktree. Any failed probe, exclusion, command, lock, or freshness
 check falls back to direct source inspection. No installer, MCP setup, or
 provider transmission is permitted.
+
+The production lane uses only canonical absolute Git/Node/CodeGraph paths and
+bounded local children. It verifies `.codegraph/` exclusion and tracked state
+both before and after indexing while one sibling external lock is held through
+descriptor persistence. The executable provenance sidecar and live-Git baseline
+authorization rules are the same as Graphify; structural baseline DTOs cannot
+authorize a copy.

@@ -7,6 +7,7 @@ import { BindingService } from "../binding/service.js";
 import { JsonBindingStore } from "../binding/store.js";
 import { MutationLockService } from "../locking/mutation-lock.js";
 import { GlobalProfileStore } from "./profile-store.js";
+import { createGraphLaneService, type GraphLaneController } from "../graph/service.js";
 
 export type CommandRuntime = Readonly<{
   bindings: BindingService;
@@ -14,6 +15,7 @@ export type CommandRuntime = Readonly<{
   git: typeof nodeGit;
   locks: MutationLockService;
   profiles: GlobalProfileStore;
+  graphs: GraphLaneController;
   setupLockPath(commonDirectory: string): string;
   bindingMutationLockPath(): string;
 }>;
@@ -27,6 +29,7 @@ export function createRuntime(home = process.env.SHIPYARD_HOME ?? join(process.e
     git: nodeGit,
     locks: new MutationLockService(nodeFilesystem, nodeProcess),
     profiles: new GlobalProfileStore(nodeFilesystem, home),
+    graphs: createGraphLaneService(home),
     setupLockPath: (commonDirectory) => join(home, "locks", `${createHash("sha256").update(commonDirectory).digest("hex")}.lock`),
     bindingMutationLockPath: () => join(home, "locks", "binding-store.lock"),
   };
