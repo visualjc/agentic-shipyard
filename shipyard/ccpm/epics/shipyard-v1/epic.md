@@ -2,8 +2,8 @@
 name: shipyard-v1
 status: backlog
 created: 2026-08-03T23:28:55Z
-updated: 2026-08-04T12:12:23Z
-progress: 40%
+updated: 2026-08-04T12:37:28Z
+progress: 50%
 prd: shipyard/ccpm/prds/shipyard-v1.md
 github: https://github.com/visualjc/agentic-shipyard/issues/1
 storage_root: shipyard/ccpm
@@ -155,7 +155,7 @@ reference documents and shares the same core policy engine.
 - [x] 3.md - Deliver workspace, ledger checkpointing, and context envelopes (parallel: true)
 - [ ] 4.md - Deliver scoped GitHub tracking authority (parallel: true)
 - [x] 5.md - Deliver safe baseline and source-ref synchronization (parallel: true)
-- [ ] 6.md - Deliver exact-SHA acceptance and Codex review (parallel: true)
+- [x] 6.md - Deliver exact-SHA acceptance and Codex review (parallel: true)
 - [ ] 7.md - Deliver staged-pair promotion and finalization (parallel: false)
 - [ ] 8.md - Deliver single-repository certification and finalization (parallel: false)
 - [ ] 9.md - Integrate planning lanes and public orchestration (parallel: false)
