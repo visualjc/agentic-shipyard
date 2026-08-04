@@ -1,6 +1,8 @@
 ---
 name: shipyard-review
 description: Run an independent exact-SHA Shipyard review.
+metadata:
+  invocation: shipyard-review
 ---
 
 # Shipyard review

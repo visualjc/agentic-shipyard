@@ -2,7 +2,7 @@
 name: shipyard-help
 description: Load focused documentation for a Shipyard command.
 metadata:
-  invocation: shipyard-help [setup|status|help]
+  invocation: shipyard-help [setup|status|sync|review|help]
 ---
 
 # Shipyard help

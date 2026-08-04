@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -204,6 +204,30 @@ test("bounds and redacts every ledger Git subprocess path", async (t) => {
       const ledger = new GitLedgerStore(path, { gitExecutable: executable, commandTimeoutMs: 1_000, commandMaxOutputBytes: 128 }); const started = Date.now(); let message = "";
       try { await ledger.transact({ expectedHead: undefined, writes: [{ path: "records/bounded", contents: "value" }] }); assert.fail("expected bounded ledger failure"); } catch (error) { message = String(error); }
       assert.match(message, flood ? /output limit.*killed/i : /timed out.*killed/i); assert.doesNotMatch(message, /user:secret|token-value/); assert.ok(Date.now() - started < 3_000);
+    } finally { await rm(path, { recursive: true, force: true }); }
+  });
+});
+
+test("current inventory bounds hostile subprocesses and proves process-tree teardown", async (t) => {
+  for (const mode of ["hang", "flood"] as const) await t.test(mode, async () => {
+    const path = await repository(); const executable = join(path, `git-inventory-${mode}`); const survivor = join(path, "inventory-descendant-survived");
+    try {
+      await new GitLedgerStore(path).transact({ expectedHead: undefined, writes: [{ path: "deliveries/d-1/contract.md", contents: "safe" }] });
+      const action = mode === "hang"
+        ? `(sleep 0.5; printf survived > "$2/inventory-descendant-survived") </dev/null >/dev/null 2>&1 &\n    while :; do :; done`
+        : `while :; do printf 'https://user:secret@example.test AUTHORIZATION: bearer token-value'; sleep 0.05; done`;
+      await writeFile(executable, `#!/bin/sh\ncase "$*" in\n  *"rev-list --first-parent --reverse --parents"*)\n    ${action};;\nesac\nexec /usr/bin/git "$@"\n`);
+      await chmod(executable, 0o700);
+      const ledger = new GitLedgerStore(path, { gitExecutable: executable, commandTimeoutMs: mode === "hang" ? 150 : 2_000, commandMaxOutputBytes: 512 });
+      const started = Date.now(); let message = "";
+      try { await ledger.currentInventory("deliveries/"); assert.fail("expected bounded inventory failure"); } catch (error) { message = String(error); }
+      assert.match(message, mode === "hang" ? /timed out.*killed/i : /output exceeds.*budget/i);
+      assert.doesNotMatch(message, /user:secret|token-value/);
+      assert.ok(Date.now() - started < 1_500, `${mode} inventory subprocess must fail within its configured bound`);
+      if (mode === "hang") {
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        await assert.rejects(access(survivor), "the timed-out inventory descendant must not survive teardown");
+      }
     } finally { await rm(path, { recursive: true, force: true }); }
   });
 });

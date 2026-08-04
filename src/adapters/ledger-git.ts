@@ -286,9 +286,71 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader, LedgerIn
     return result.stdout.trim();
   }
   /** Streaming output bound for attacker-controlled ledger history/tree/content inventory. */
-  private async gitRequiredBounded(args:string[],maxBytes:number):Promise<string>{
-    if(!Number.isSafeInteger(maxBytes)||maxBytes<=0)throw new LedgerError("ledger-invalid-record","Ledger inventory has an invalid output budget.");
-    return new Promise((resolve,reject)=>{let stdout="",stderr="",bytes=0,settled=false;const fail=(error:Error)=>{if(settled)return;settled=true;child.kill("SIGKILL");reject(error);};const child=spawn(this.gitExecutable(),["-C",this.repositoryPath,...args],{env:gitEnvironment()});child.stdout.setEncoding("utf8");child.stderr.setEncoding("utf8");child.stdout.on("data",(chunk:string)=>{bytes+=Buffer.byteLength(chunk,"utf8");if(bytes>maxBytes)fail(new LedgerError("ledger-invalid-record","Ledger inventory child output exceeds its budget."));else stdout+=chunk;});child.stderr.on("data",(chunk:string)=>{if((bytes+=Buffer.byteLength(chunk,"utf8"))>maxBytes)fail(new LedgerError("ledger-invalid-record","Ledger inventory child output exceeds its budget."));else stderr+=chunk;});child.on("error",()=>fail(new LedgerError("ledger-unavailable","Git ledger inventory process failed.")));child.on("close",code=>{if(settled)return;settled=true;if(code===0)resolve(stdout.trim());else reject(unavailable(stderr));});});
+  private async gitRequiredBounded(args: string[], maxBytes: number): Promise<string> {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new LedgerError("ledger-invalid-record", "Ledger inventory has an invalid output budget.");
+    const outputLimit = Math.min(maxBytes, this.command.maxOutputBytes);
+    return new Promise((resolve, reject) => {
+      const child = spawn(this.gitExecutable(), ["-C", this.repositoryPath, ...args], {
+        detached: process.platform !== "win32",
+        env: gitEnvironment(),
+      });
+      let stdout = ""; let stderr = ""; let outputBytes = 0; let settled = false; let failure: LedgerError | undefined;
+      let timer: ReturnType<typeof setTimeout> | undefined; let teardownTimer: ReturnType<typeof setTimeout> | undefined;
+      const settle = (code?: number | null) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        if (teardownTimer) clearTimeout(teardownTimer);
+        if (failure) reject(failure);
+        else if (code === 0) resolve(stdout.trim());
+        else reject(unavailable(stderr));
+      };
+      const terminate = () => {
+        let groupKilled = false;
+        if (process.platform !== "win32" && child.pid !== undefined) {
+          try { process.kill(-child.pid, "SIGKILL"); groupKilled = true; } catch { /* Fall back to the direct child handle. */ }
+        }
+        if (!groupKilled) child.kill("SIGKILL");
+      };
+      const fail = (error: LedgerError) => {
+        if (settled || failure) return;
+        failure = error;
+        if (timer) clearTimeout(timer);
+        terminate();
+        // A failed inventory command is not reported until its process tree has
+        // closed. The fallback remains bounded and explicitly reports that
+        // teardown could not be proven instead of claiming a safe failure.
+        teardownTimer = setTimeout(() => {
+          if (settled) return;
+          child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy(); child.unref();
+          failure = new LedgerError("ledger-unavailable", "Git ledger inventory process teardown could not be proven.");
+          settle();
+        }, KILL_TEARDOWN_TIMEOUT_MS);
+      };
+      const collect = (target: "stdout" | "stderr", chunk: string) => {
+        if (failure) return;
+        outputBytes += Buffer.byteLength(chunk, "utf8");
+        if (outputBytes > outputLimit) {
+          fail(new LedgerError("ledger-invalid-record", "Ledger inventory child output exceeds its budget."));
+          return;
+        }
+        if (target === "stdout") stdout += chunk; else stderr += chunk;
+      };
+      child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => collect("stdout", chunk));
+      child.stderr.on("data", (chunk: string) => collect("stderr", chunk));
+      child.once("error", () => fail(new LedgerError("ledger-unavailable", "Git ledger inventory process failed.")));
+      child.once("close", (code) => { void (async () => {
+        if (settled) return;
+        if (teardownTimer) { clearTimeout(teardownTimer); teardownTimer = undefined; }
+        terminate();
+        const teardownComplete = await waitForLedgerProcessGroupExit(child.pid, KILL_TEARDOWN_TIMEOUT_MS);
+        if (!teardownComplete) failure = new LedgerError("ledger-unavailable", "Git ledger inventory process teardown could not be proven.");
+        settle(code);
+      })(); });
+      child.stdin.end();
+      timer = setTimeout(() => fail(new LedgerError("ledger-unavailable", "Git ledger inventory process timed out and was killed.")), this.command.timeoutMs);
+    });
   }
   private async gitInput(args: string[], input: string): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -334,6 +396,15 @@ function gitEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 }
 
 function unavailable(stderr: string): LedgerError { const safe = boundedDiagnostic(stderr); return new LedgerError("ledger-unavailable", `Git ledger operation failed${safe ? `: ${safe}` : ""}`); }
+async function waitForLedgerProcessGroupExit(pid: number | undefined, timeoutMs: number): Promise<boolean> {
+  if (!pid || process.platform === "win32") return true;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try { process.kill(-pid, 0); } catch (error: unknown) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return true; }
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 function boundedOutput(value: unknown, limit: number): string { return typeof value === "string" ? truncateUtf8(value, limit) : ""; }
 function boundedDiagnostic(value: string): string { return truncateUtf8(redactGitTransportDiagnostic(value).replace(/[^\x20-\x7e\n\t]/g, "?"), 512).trim(); }
 function appendBoundedUtf8(current: string, chunk: string, limit: number): string { return truncateUtf8(current + chunk, limit); }

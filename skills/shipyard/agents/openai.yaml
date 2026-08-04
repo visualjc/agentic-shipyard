@@ -1,4 +1,4 @@
 display_name: Shipyard
-short_description: Safely dispatch Shipyard setup, status, and help.
-default_prompt: Check Shipyard status first, then use only the requested safe operation.
+short_description: Safely dispatch Shipyard setup, status, sync, review, and help.
+default_prompt: Check Shipyard status first, then dispatch only the requested setup, status, sync, review, or help operation.
 invocation_policy: explicit
