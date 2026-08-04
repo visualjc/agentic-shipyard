@@ -13,7 +13,7 @@ const workspace = (overrides: Partial<DeliveryWorkspace> = {}): DeliveryWorkspac
 class Registry {
   reads = 0;
   constructor(public document: DeliveryRegistryDocument | undefined) {}
-  lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; }
+  async lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; }
   async read() { this.reads += 1; return this.document; }
   async write(document: DeliveryRegistryDocument) { this.document = document; }
 }

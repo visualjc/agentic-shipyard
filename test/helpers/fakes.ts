@@ -8,6 +8,9 @@ export class MemoryFilesystem implements FilesystemAdapter {
   readonly directories = new Set<string>();
   onRead?: (path: string, contents: string | undefined) => Promise<void>;
   onRemove?: (path: string) => Promise<void>;
+  async realpath(path: string): Promise<string | undefined> { return path; }
+  async pathExists(path: string): Promise<boolean> { return this.files.has(path); }
+  async isDirectory(_path: string): Promise<boolean> { return true; }
   async readText(path: string): Promise<string | undefined> {
     const contents = this.files.get(path);
     const hook = this.onRead;

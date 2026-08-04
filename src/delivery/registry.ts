@@ -1,23 +1,25 @@
 import type { FilesystemAdapter } from "../adapters/filesystem.js";
-import { isAbsolute, normalize } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize } from "node:path";
 import { DeliveryError } from "./errors.js";
 import type { DeliveryRegistry, DeliveryRegistryDocument, DeliveryWorkspace } from "./types.js";
 
 /** Filesystem-backed adapter for explicitly configured machine-local registry state. */
 export class JsonDeliveryRegistry implements DeliveryRegistry {
-  private readonly path: string;
+  private readonly requestedPath: string;
+  private authority?: Promise<string>;
 
   constructor(private readonly filesystem: FilesystemAdapter, path: string) {
-    try { this.path = canonicalAbsolutePath(path); }
+    try { this.requestedPath = canonicalAbsolutePath(path); }
     catch { throw new DeliveryError("delivery-registry-invalid", "Delivery registry path must be a canonical absolute path."); }
   }
 
-  lockScope(): Readonly<{ path: string; scope: string }> {
-    return { path: `${this.path}.lock`, scope: this.path };
+  async lockScope(): Promise<Readonly<{ path: string; scope: string }>> {
+    const path = await this.registryPath();
+    return { path: `${path}.lock`, scope: path };
   }
 
   async read(): Promise<DeliveryRegistryDocument | undefined> {
-    const text = await this.filesystem.readText(this.path);
+    const text = await this.filesystem.readText(await this.registryPath());
     if (text === undefined) return undefined;
     try { return validateDeliveryRegistryDocument(JSON.parse(text)); }
     catch (error: unknown) {
@@ -29,11 +31,36 @@ export class JsonDeliveryRegistry implements DeliveryRegistry {
   async write(document: DeliveryRegistryDocument): Promise<void> {
     try {
       const validated = validateDeliveryRegistryDocument(document)!;
-      await this.filesystem.writeTextAtomic(this.path, `${JSON.stringify(validated, null, 2)}\n`);
+      await this.filesystem.writeTextAtomic(await this.registryPath(), `${JSON.stringify(validated, null, 2)}\n`);
     } catch (error: unknown) {
       if (error instanceof DeliveryError) throw error;
       throw invalidDocument();
     }
+  }
+
+  /**
+   * A registry file may be addressed through a symlinked state directory.
+   * Resolve the file itself when it exists; otherwise bind the future file to
+   * its existing physical parent so its data and lock always share authority.
+   */
+  private async resolveAuthority(): Promise<string> {
+    try {
+      const existing = await this.filesystem.realpath(this.requestedPath);
+      if (existing !== undefined) return canonicalAbsolutePath(existing);
+      // A dangling symlink must not be treated as an absent registry: its
+      // target is ambiguous and replacing it would silently change authority.
+      if (await this.filesystem.pathExists(this.requestedPath)) throw new Error();
+      const parent = await this.filesystem.realpath(dirname(this.requestedPath));
+      if (parent === undefined || !await this.filesystem.isDirectory(parent)) throw new Error();
+      return canonicalAbsolutePath(join(parent, basename(this.requestedPath)));
+    } catch {
+      throw new DeliveryError("delivery-registry-invalid", "Delivery registry path must resolve to an existing physical file or parent directory.");
+    }
+  }
+
+  private registryPath(): Promise<string> {
+    this.authority ??= this.resolveAuthority();
+    return this.authority;
   }
 }
 

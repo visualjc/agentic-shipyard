@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, chmod, mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -25,12 +25,13 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "shipyard-workspace-test-"));
   const repository = join(root, "repository");
   const worktrees = join(root, "worktrees");
-  await mkdir(repository); await mkdir(worktrees);
+  const state = join(root, "state");
+  await mkdir(repository); await mkdir(worktrees); await mkdir(state);
   await git(repository, ["init", "-b", "main"]);
   await git(repository, ["config", "user.name", "test"]); await git(repository, ["config", "user.email", "test@example.test"]);
   await git(repository, ["commit", "--allow-empty", "-m", "product"]);
   const commonDirectory = await realpath(await git(repository, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
-  const registry = new JsonDeliveryRegistry(nodeFilesystem, join(root, "state", "deliveries.json"));
+  const registry = new JsonDeliveryRegistry(nodeFilesystem, join(state, "deliveries.json"));
   const ledger = new GitLedgerStore(repository);
   const service = new WorkspaceService(registry, ledger, nodeWorkspaceGit, new MutationLockService(nodeFilesystem, nodeProcess));
   const request = (deliveryId: string) => ({
@@ -120,11 +121,19 @@ test("serializes concurrent creators, preserves both registry entries after retr
   } finally { await dispose(value); }
 });
 
-test("serializes different Git common directories that share one registry without losing either entry", async () => {
+test("serializes two Git repositories through symlinked registry aliases without losing either entry", async () => {
   const left = await fixture();
   const right = await fixture();
+  const stateRoot = await mkdtemp(join(tmpdir(), "shipyard-registry-alias-test-"));
   try {
     assert.notEqual(left.commonDirectory, right.commonDirectory);
+    const physicalState = join(stateRoot, "physical-state");
+    const aliasState = join(stateRoot, "state-alias");
+    await mkdir(physicalState);
+    await symlink(physicalState, aliasState);
+    const leftRegistry = new JsonDeliveryRegistry(nodeFilesystem, join(physicalState, "deliveries.json"));
+    const rightRegistry = new JsonDeliveryRegistry(nodeFilesystem, join(aliasState, "deliveries.json"));
+    assert.deepEqual(await leftRegistry.lockScope(), await rightRegistry.lockScope());
     const leftRequest = left.request("d-shared-left");
     const rightRequest = right.request("d-shared-right");
     const entered = Promise.withResolvers<void>(); const release = Promise.withResolvers<void>();
@@ -136,8 +145,8 @@ test("serializes different Git common directories that share one registry withou
       },
       transact: left.ledger.transact.bind(left.ledger),
     };
-    const leftService = new WorkspaceService(left.registry, blockingLedger, nodeWorkspaceGit, new MutationLockService(nodeFilesystem, nodeProcess));
-    const rightService = new WorkspaceService(left.registry, right.ledger, nodeWorkspaceGit, new MutationLockService(nodeFilesystem, nodeProcess));
+    const leftService = new WorkspaceService(leftRegistry, blockingLedger, nodeWorkspaceGit, new MutationLockService(nodeFilesystem, nodeProcess));
+    const rightService = new WorkspaceService(rightRegistry, right.ledger, nodeWorkspaceGit, new MutationLockService(nodeFilesystem, nodeProcess));
 
     const first = leftService.createOrResume(leftRequest);
     await entered.promise;
@@ -146,8 +155,8 @@ test("serializes different Git common directories that share one registry withou
     await first;
     await rightService.createOrResume(rightRequest);
 
-    assert.deepEqual((await left.registry.read())?.workspaces.map((workspace) => workspace.deliveryId).sort(), ["d-shared-left", "d-shared-right"]);
-  } finally { await dispose(left); await dispose(right); }
+    assert.deepEqual((await leftRegistry.read())?.workspaces.map((workspace) => workspace.deliveryId).sort(), ["d-shared-left", "d-shared-right"]);
+  } finally { await dispose(left); await dispose(right); await rm(stateRoot, { recursive: true, force: true }); }
 });
 
 test("hands off a present registered worktree for manual cleanup, then removes absent-worktree registry state while retaining ledger history", async () => {
@@ -173,7 +182,7 @@ test("does not delete a foreign replacement during cleanup's adversarial path sw
   let registryWrites = 0;
   let foreignReplacementExists = true;
   const registry = {
-    lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; },
+    async lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; },
     async read() { return { schemaVersion: 1 as const, workspaces: [{ schemaVersion: 1 as const, deliveryId: request.deliveryId, commonDirectory: request.commonDirectory, branch: request.branch, worktreePath: request.worktreePath }] }; },
     async write() { registryWrites += 1; },
   };
@@ -311,7 +320,7 @@ test("create intent rejects a same-SHA foreign branch race without registry adop
   const startSha = "a".repeat(40); const foreignSha = startSha;
   const request = { repositoryPath: "/repository", commonDirectory: "/repository/.git", deliveryId: "d-1", branch: "shipyard/d-1", worktreePath: "/worktrees/d-1", initialLedgerPath: "deliveries/d-1.json", initialLedgerContents: JSON.stringify({ deliveryId: "d-1" }) };
   let registryWrites = 0; let worktreeExists = false; let branchExists = false;
-  const registry = { lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; }, async read() { return undefined; }, async write() { registryWrites += 1; } };
+  const registry = { async lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; }, async read() { return undefined; }, async write() { registryWrites += 1; } };
   const records: Record<string, string> = {};
   const ledger = {
     async snapshot(paths: readonly string[]) { return { head: records[request.initialLedgerPath] ? "ledger" : undefined, records: Object.fromEntries(paths.flatMap((path) => records[path] === undefined ? [] : [[path, records[path]]])) }; },
@@ -341,7 +350,7 @@ test("rejects an unregistered matching worktree before writing the initial ledge
   const request = { repositoryPath: "/repository", commonDirectory: "/repository/.git", deliveryId: "d-1", branch: "shipyard/d-1", worktreePath: "/worktrees/d-1", initialLedgerPath: "deliveries/d-1.json", initialLedgerContents: JSON.stringify({ deliveryId: "d-1" }) };
   let registryWrites = 0; let ensureCalls = 0;
   const records: Record<string, string> = {};
-  const registry = { lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; }, async read() { return undefined; }, async write() { registryWrites += 1; } };
+  const registry = { async lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; }, async read() { return undefined; }, async write() { registryWrites += 1; } };
   const ledger = {
     async snapshot(paths: readonly string[]) { return { head: records[request.initialLedgerPath] ? "ledger" : undefined, records: Object.fromEntries(paths.flatMap((path) => records[path] === undefined ? [] : [[path, records[path]]])) }; },
     async transact(transaction: { writes: readonly { path: string; contents: string }[] }) { for (const write of transaction.writes) records[write.path] = write.contents; return "ledger"; },
@@ -368,7 +377,7 @@ test("rejects an unproven false worktree-creation result without adopting its pa
   const request = { repositoryPath: "/repository", commonDirectory: "/repository/.git", deliveryId: "d-1", branch: "shipyard/d-1", worktreePath: "/worktrees/d-1", initialLedgerPath: "deliveries/d-1.json", initialLedgerContents: JSON.stringify({ deliveryId: "d-1" }) };
   let registryWrites = 0;
   const records: Record<string, string> = {};
-  const registry = { lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; }, async read() { return undefined; }, async write() { registryWrites += 1; } };
+  const registry = { async lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; }, async read() { return undefined; }, async write() { registryWrites += 1; } };
   const ledger = {
     async snapshot(paths: readonly string[]) { return { head: records[request.initialLedgerPath] ? "ledger" : undefined, records: Object.fromEntries(paths.flatMap((path) => records[path] === undefined ? [] : [[path, records[path]]])) }; },
     async transact(transaction: { writes: readonly { path: string; contents: string }[] }) { for (const write of transaction.writes) records[write.path] = write.contents; return "ledger"; },
@@ -390,7 +399,7 @@ test("does not remove a swapped path when the branch changes after created-workt
   const request = { repositoryPath: "/repository", commonDirectory: "/repository/.git", deliveryId: "d-1", branch: "shipyard/d-1", worktreePath: "/worktrees/d-1", initialLedgerPath: "deliveries/d-1.json", initialLedgerContents: JSON.stringify({ deliveryId: "d-1" }) };
   let registryWrites = 0; let createdPathExists = false; let foreignReplacementExists = false; let removalAttempts = 0;
   const records: Record<string, string> = {};
-  const registry = { lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; }, async read() { return undefined; }, async write() { registryWrites += 1; } };
+  const registry = { async lockScope() { return { path: "/state/deliveries.json.lock", scope: "/state/deliveries.json" }; }, async read() { return undefined; }, async write() { registryWrites += 1; } };
   const ledger = {
     async snapshot(paths: readonly string[]) { return { head: records[request.initialLedgerPath] ? "ledger" : undefined, records: Object.fromEntries(paths.flatMap((path) => records[path] === undefined ? [] : [[path, records[path]]])) }; },
     async transact(transaction: { writes: readonly { path: string; contents: string }[] }) { for (const write of transaction.writes) records[write.path] = write.contents; return "ledger"; },

@@ -180,7 +180,7 @@ export class WorkspaceService {
    * Tracking takes only the latter, so it cannot form an inverse lock cycle.
    */
   private async withLocks<T>(commonDirectory: string, operation: () => Promise<T>): Promise<T> {
-    const registry = this.registry.lockScope();
+    const registry = await this.registry.lockScope();
     const registryLock = await this.locks.acquire(registry.path, registry.scope, "workspace-registry");
     try {
       const workspaceLock = await this.locks.acquire(`${commonDirectory}/shipyard-workspace.lock`, commonDirectory, "workspace");

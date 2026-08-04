@@ -1,4 +1,4 @@
-import { link, mkdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, readFile, realpath, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 export type ExclusiveDirectoryResult<T> =
@@ -7,6 +7,12 @@ export type ExclusiveDirectoryResult<T> =
 
 /** Narrow filesystem boundary. Production code and tests can supply different implementations. */
 export interface FilesystemAdapter {
+  /** Resolves an existing path to its physical filesystem authority. */
+  realpath(path: string): Promise<string | undefined>;
+  /** Detects a filesystem entry without following links. */
+  pathExists(path: string): Promise<boolean>;
+  /** Confirms that an existing physical path is a directory. */
+  isDirectory(path: string): Promise<boolean>;
   readText(path: string): Promise<string | undefined>;
   writeTextAtomic(path: string, contents: string): Promise<void>;
   /** Returns false when a file already exists; it must never overwrite it. */
@@ -23,6 +29,31 @@ export interface FilesystemAdapter {
 }
 
 export const nodeFilesystem: FilesystemAdapter = {
+  async realpath(path) {
+    try {
+      return await realpath(path);
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+  },
+  async pathExists(path) {
+    try {
+      await lstat(path);
+      return true;
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  },
+  async isDirectory(path) {
+    try {
+      return (await stat(path)).isDirectory();
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  },
   async readText(path) {
     try {
       return await readFile(path, "utf8");
