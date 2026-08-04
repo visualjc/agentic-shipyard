@@ -14,6 +14,12 @@ test("derives trusted refs only from a live canonical worktree and branch head",
   assert.deepEqual({ head: result.head, base: result.base, expectedHeadSha: result.expectedHeadSha }, { head: "shipyard/d-1", base: "main", expectedHeadSha: "a".repeat(40) });
 });
 
+test("accepts a canonical SHA-256 worktree and branch head", async () => {
+  const git = { worktreeIdentity: async () => ({ commonDirectory: "/repo/.git", branch: "shipyard/d-1" }), productHead: async () => "a".repeat(64), branchHead: async () => "a".repeat(64) };
+  const result = await new ActiveDevelopmentTrackingAuthorityResolver({ resolve: async () => delivery } as never, bound, git).resolve("/worktree", "d-1");
+  assert.equal(result.expectedHeadSha, "a".repeat(64));
+});
+
 test("rejects detached/wrong worktree identity, stale branch head, and unsafe default base before provider use", async () => {
   const cases = [
     { worktreeIdentity: async () => undefined, productHead: async () => "a".repeat(40), branchHead: async () => "a".repeat(40) },

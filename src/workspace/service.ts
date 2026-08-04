@@ -84,9 +84,15 @@ export class WorkspaceService {
       if (!provenance || !sameProvenance(provenance, request, actualCommonDirectory)) {
         throw new WorkspaceError("workspace-ledger-conflict", "The durable initial ledger record conflicts with this delivery.");
       }
-      // Without a registry entry, a branch/worktree can only be adopted if it
-      // still points at the exact product object recorded before ledger write.
+      // Without a registry entry, a pre-existing branch is recoverable only
+      // when the expected linked worktree proves this delivery already created
+      // it. Matching the recorded start object alone cannot attribute a branch
+      // that an external actor created during an interrupted attempt.
       if (matches.length === 0 && branchExists) {
+        const recoverableWorktree = await this.git.worktreeIdentity(request.worktreePath);
+        if (!recoverableWorktree || !sameIdentity(recoverableWorktree, workspace)) {
+          throw new WorkspaceError("workspace-conflict", "The canonical feature branch exists without an attributable linked worktree.");
+        }
         if (await this.git.branchHead(request.repositoryPath, request.branch) !== provenance.startProductSha) {
           throw new WorkspaceError("workspace-conflict", "The canonical feature branch does not match durable delivery provenance.");
         }

@@ -19,24 +19,25 @@ test("never removes a stale lock without host and process validation", async () 
   const process = new FakeProcess();
   const service = new MutationLockService(fs, process, 1_000);
   const cases: Array<[unknown, MutationLockError["code"]]> = [
-    [{ version: 1, repository: "/git/repo", operation: "sync", processId: 22, host: "other-host", acquiredAt: "2026-08-03T00:00:00.000Z" }, "lock-unsafe-recovery"],
-    [{ version: 1, repository: "/git/other", operation: "sync", processId: 22, host: "test-host", acquiredAt: "2026-08-03T00:00:00.000Z" }, "lock-invalid"],
-    [{ version: 1, repository: "/git/repo", operation: "sync", processId: 22, host: "test-host", acquiredAt: "not-a-date" }, "lock-invalid"],
+    [{ version: 1, repository: "/git/repo", operation: "sync", processId: 22, host: "other-host", token: "other-owner", acquiredAt: "2026-08-03T00:00:00.000Z" }, "lock-unsafe-recovery"],
+    [{ version: 1, repository: "/git/other", operation: "sync", processId: 22, host: "test-host", token: "wrong-repo", acquiredAt: "2026-08-03T00:00:00.000Z" }, "lock-invalid"],
+    [{ version: 1, repository: "/git/repo", operation: "sync", processId: 22, host: "test-host", token: "bad-time", acquiredAt: "not-a-date" }, "lock-invalid"],
   ];
   for (const [record, expected] of cases) {
     fs.files.set("/locks/repo", JSON.stringify(record));
     await assert.rejects(service.acquire("/locks/repo", "/git/repo", "sync"), (error: unknown) => error instanceof MutationLockError && error.code === expected);
   }
   process.alive.add(22);
-  fs.files.set("/locks/repo", JSON.stringify({ version: 1, repository: "/git/repo", operation: "sync", processId: 22, host: "test-host", acquiredAt: "2026-08-03T00:00:00.000Z" }));
+  fs.files.set("/locks/repo", JSON.stringify({ version: 1, repository: "/git/repo", operation: "sync", processId: 22, host: "test-host", token: "live-owner", acquiredAt: "2026-08-03T00:00:00.000Z" }));
   await assert.rejects(service.acquire("/locks/repo", "/git/repo", "sync"), (error: unknown) => error instanceof MutationLockError && error.code === "lock-held");
 });
 
 test("rejects malformed primary records before recovery without removing them", async () => {
-  const base = { version: 1, repository: "/git/repo", operation: "sync", processId: 22, host: "test-host", acquiredAt: "2026-08-03T00:00:00.000Z" };
+  const base = { version: 1, repository: "/git/repo", operation: "sync", processId: 22, host: "test-host", token: "dead-owner", acquiredAt: "2026-08-03T00:00:00.000Z" };
   const malformed: unknown[] = [
     "{partial", { ...base, processId: 0 }, { ...base, processId: -1 }, { ...base, processId: 1.5 },
     { ...base, repository: "" }, { ...base, operation: "" }, { ...base, host: "" },
+    { ...base, token: "" }, { version: 1, repository: "/git/repo", operation: "sync", processId: 22, host: "test-host", acquiredAt: "2026-08-03T00:00:00.000Z" },
     { ...base, acquiredAt: "2026-08-03T00:00:00Z" }, { ...base, acquiredAt: "invalid" }, { ...base, extra: true },
   ];
   for (const record of malformed) {
@@ -46,6 +47,20 @@ test("rejects malformed primary records before recovery without removing them", 
     await assert.rejects(new MutationLockService(fs, new FakeProcess()).acquire("/locks/repo", "/git/repo", "sync"), (error: unknown) => error instanceof MutationLockError && error.code === "lock-invalid");
     assert.equal(fs.files.get("/locks/repo"), text);
   }
+});
+
+test("a repeated old release cannot remove a same-clock replacement primary lock", async () => {
+  const fs = new MemoryFilesystem();
+  const process = new FakeProcess();
+  const service = new MutationLockService(fs, process, 1_000);
+  const old = await service.acquire("/locks/repo", "/git/repo", "sync");
+  await old.release();
+  const replacement = await service.acquire("/locks/repo", "/git/repo", "sync");
+
+  assert.notEqual(old.record.token, replacement.record.token);
+  await assert.rejects(old.release(), (error: unknown) => error instanceof MutationLockError && error.code === "lock-unsafe-recovery");
+  assert.deepEqual(JSON.parse(fs.files.get("/locks/repo")!), replacement.record);
+  await replacement.release();
 });
 
 test("serializes release against acquisition so a replacement lock survives", async () => {
@@ -69,14 +84,14 @@ test("serializes stale recovery and refuses to release a different identity", as
   const fs = new MemoryFilesystem();
   const process = new FakeProcess();
   const service = new MutationLockService(fs, process, 1_000);
-  fs.files.set("/locks/repo", JSON.stringify({ version: 1, repository: "/git/repo", operation: "old", processId: 22, host: "test-host", acquiredAt: "2026-08-03T00:00:00.000Z" }));
+  fs.files.set("/locks/repo", JSON.stringify({ version: 1, repository: "/git/repo", operation: "old", processId: 22, host: "test-host", token: "dead-owner", acquiredAt: "2026-08-03T00:00:00.000Z" }));
   fs.onRead = async () => {
     await assert.rejects(service.acquire("/locks/repo", "/git/repo", "racer"), (error: unknown) => error instanceof MutationLockError && error.code === "lock-held");
   };
   const recovered = await service.acquire("/locks/repo", "/git/repo", "recovered");
   assert.equal(JSON.parse(fs.files.get("/locks/repo")!).operation, "recovered");
 
-  const newer = { ...recovered.record, operation: "newer", acquiredAt: "2026-08-04T00:00:01.000Z" };
+  const newer = { ...recovered.record, token: "replacement-owner" };
   fs.files.set("/locks/repo", JSON.stringify(newer));
   await assert.rejects(recovered.release(), (error: unknown) => error instanceof MutationLockError && error.code === "lock-unsafe-recovery");
   assert.deepEqual(JSON.parse(fs.files.get("/locks/repo")!), newer);

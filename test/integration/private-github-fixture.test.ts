@@ -29,7 +29,7 @@ test("private fixture creates then idempotently discovers one approved developme
   const sha = required("SHIPYARD_PRIVATE_GITHUB_HEAD_SHA");
   assert.match(head, /^[A-Za-z0-9][A-Za-z0-9._/-]*$/); assert.ok(!head.includes(":") && !head.includes(".."));
   assert.match(base, /^[A-Za-z0-9][A-Za-z0-9._/-]*$/); assert.ok(!base.includes(":") && !base.includes(".."));
-  assert.match(sha, /^[a-f0-9]{40}$/);
+  assert.match(sha, /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
   const root = await mkdtemp(join(tmpdir(), "shipyard-private-tracker-"));
   const api = new GitHubRestAdapter({ resolve: async () => ({ authorizationValue: token }) }, new FetchGitHubRestTransport());
   const topology = { kind: "single-repository" as const, repository: { owner, name, remote: { name: "origin", url: `https://github.com/${repository}.git` }, defaultBranch: base } };

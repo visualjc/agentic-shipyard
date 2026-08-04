@@ -179,7 +179,7 @@ test("setup refuses unsafe stale-lock recovery with actionable owner guidance", 
     const commonDirectory = await runtime.git.commonDirectory(fixture.main);
     const lockPath = runtime.setupLockPath(commonDirectory);
     await mkdir(join(fixture.home, "locks"), { recursive: true });
-    await writeFile(lockPath, JSON.stringify({ version: 1, repository: commonDirectory, operation: "setup", processId: 987654, host: "another-host", acquiredAt: "2000-01-01T00:00:00.000Z" }));
+    await writeFile(lockPath, JSON.stringify({ version: 1, repository: commonDirectory, operation: "setup", processId: 987654, host: "another-host", token: "stale-cross-host-owner", acquiredAt: "2000-01-01T00:00:00.000Z" }));
     const setupArgs = ["--home", fixture.home, "--profile", "demo", "--topology", "staged-pair", "--development-name", "origin", "--development-url", fixture.origin, "--destination-name", "destination", "--destination-url", fixture.destination];
     const result = await run(setupArgs, "setup", fixture.main);
     assert.equal(result.code, 1);

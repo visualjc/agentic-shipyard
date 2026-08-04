@@ -38,7 +38,7 @@ export class ActiveDevelopmentTrackingAuthorityResolver implements DevelopmentTr
     const identity = await this.git.worktreeIdentity(delivery.workspace.worktreePath);
     if (!identity || identity.commonDirectory !== profile.commonDirectory || identity.branch !== head) throw new GitHubTrackerError("authority-mismatch", "The live delivery worktree no longer matches its registered common directory and branch.");
     const [expectedHeadSha, branchHead] = await Promise.all([this.git.productHead(delivery.workspace.worktreePath), this.git.branchHead(delivery.workspace.worktreePath, head)]);
-    if (!/^[0-9a-f]{40}$/.test(expectedHeadSha) || branchHead !== expectedHeadSha) throw new GitHubTrackerError("authority-mismatch", "The live delivery worktree HEAD is detached, stale, or differs from its canonical branch head.");
+    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(expectedHeadSha) || branchHead !== expectedHeadSha) throw new GitHubTrackerError("authority-mismatch", "The live delivery worktree HEAD is detached, stale, or differs from its canonical branch head.");
     return freeze({ commonDirectory: profile.commonDirectory, actorLogin: profile.actorLogin, repository: structuredClone(repository), head, base: repository.defaultBranch, expectedHeadSha });
   }
 }

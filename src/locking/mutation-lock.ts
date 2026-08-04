@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { FilesystemAdapter } from "../adapters/filesystem.js";
 import { ProcessAdapter } from "../adapters/process.js";
 
@@ -7,6 +8,7 @@ export interface MutationLockRecord {
   operation: string;
   processId: number;
   host: string;
+  token: string;
   acquiredAt: string;
 }
 /**
@@ -39,7 +41,7 @@ export class MutationLockService {
   constructor(private readonly filesystem: FilesystemAdapter, private readonly process: ProcessAdapter, private readonly staleAfterMs = 10 * 60_000) {}
 
   async acquire(path: string, repository: string, operation: string): Promise<AcquiredMutationLock> {
-    const record: MutationLockRecord = { version: 1, repository, operation, processId: this.process.processId(), host: this.process.hostName(), acquiredAt: this.process.now().toISOString() };
+    const record: MutationLockRecord = { version: 1, repository, operation, processId: this.process.processId(), host: this.process.hostName(), token: randomUUID(), acquiredAt: this.process.now().toISOString() };
     await this.withLifecycleGuard(path, async () => {
       if (!await this.filesystem.createTextExclusive(path, JSON.stringify(record))) {
         await this.recoverStaleWhileGuarded(path, repository);
@@ -48,7 +50,11 @@ export class MutationLockService {
         }
       }
     });
+    let released = false;
     return { record, release: async () => {
+      if (released) {
+        throw new MutationLockError("lock-unsafe-recovery", "This acquired mutation lock was already released.");
+      }
       await this.withLifecycleGuard(path, async () => {
         const current = await this.read(path);
         if (!sameIdentity(current, record)) {
@@ -56,6 +62,7 @@ export class MutationLockService {
         }
         await this.filesystem.remove(path);
       }, true);
+      released = true;
     }};
   }
 
@@ -198,7 +205,7 @@ export class MutationLockService {
       const parsed: unknown = JSON.parse(text);
       if (!parsed || typeof parsed !== "object") throw new Error();
       const record = parsed as Partial<MutationLockRecord>;
-      if (!hasExactKeys(parsed, ["version", "repository", "operation", "processId", "host", "acquiredAt"]) || record.version !== 1 || !nonEmptyString(record.repository) || !nonEmptyString(record.operation) || !positiveInteger(record.processId) || !nonEmptyString(record.host) || !canonicalTimestamp(record.acquiredAt)) throw new Error();
+      if (!hasExactKeys(parsed, ["version", "repository", "operation", "processId", "host", "token", "acquiredAt"]) || record.version !== 1 || !nonEmptyString(record.repository) || !nonEmptyString(record.operation) || !positiveInteger(record.processId) || !nonEmptyString(record.host) || !nonEmptyString(record.token) || !canonicalTimestamp(record.acquiredAt)) throw new Error();
       return record as MutationLockRecord;
     } catch { throw new MutationLockError("lock-invalid", "Mutation lock file is malformed."); }
   }
@@ -219,7 +226,7 @@ function canonicalTimestamp(value: unknown): value is string {
 
 function sameIdentity(left: MutationLockRecord | undefined, right: MutationLockRecord): boolean {
   return left !== undefined && left.repository === right.repository && left.operation === right.operation &&
-    left.host === right.host && left.processId === right.processId && left.acquiredAt === right.acquiredAt;
+    left.host === right.host && left.processId === right.processId && left.token === right.token && left.acquiredAt === right.acquiredAt;
 }
 
 function sameLifecycleOwner(left: LifecycleOwner | undefined, right: LifecycleOwner): boolean {

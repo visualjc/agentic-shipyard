@@ -187,6 +187,29 @@ test("does not adopt a foreign branch created after the durable initial record",
   } finally { await dispose(value); }
 });
 
+test("retry after a same-SHA branch race fails closed without a registry entry", async () => {
+  const value = await fixture();
+  try {
+    const request = value.request("d-retry-race");
+    let failAfterLedger = true;
+    const ledgerFault = {
+      snapshot: value.ledger.snapshot.bind(value.ledger),
+      async transact(transaction: Parameters<GitLedgerStore["transact"]>[0]) {
+        const result = await value.ledger.transact(transaction);
+        if (failAfterLedger) { failAfterLedger = false; throw new Error("after-ledger"); }
+        return result;
+      },
+    };
+    await assert.rejects(new WorkspaceService(value.registry, ledgerFault, nodeWorkspaceGit, new MutationLockService(nodeFilesystem, nodeProcess)).createOrResume(request), /after-ledger/);
+    const startSha = await nodeWorkspaceGit.productHead(value.repository);
+    await git(value.repository, ["branch", request.branch, startSha]);
+
+    await assert.rejects(value.service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
+    assert.equal(await nodeWorkspaceGit.worktreeExists(request.worktreePath), false);
+    assert.equal(await value.registry.read(), undefined);
+  } finally { await dispose(value); }
+});
+
 test("create intent rejects a same-SHA foreign branch race without registry adoption or cleanup", async () => {
   const startSha = "a".repeat(40); const foreignSha = startSha;
   const request = { repositoryPath: "/repository", commonDirectory: "/repository/.git", deliveryId: "d-1", branch: "shipyard/d-1", worktreePath: "/worktrees/d-1", initialLedgerPath: "deliveries/d-1.json", initialLedgerContents: JSON.stringify({ deliveryId: "d-1" }) };
