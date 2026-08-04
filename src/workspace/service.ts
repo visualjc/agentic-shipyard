@@ -323,12 +323,23 @@ export function createNodeWorkspaceGit(executable = DEFAULT_NODE_GIT_EXECUTABLE)
     catch { return false; }
   },
   async verifyReadyWorkspace(repositoryPath, workspace) {
-    const ownership = await readProof(repositoryPath, "ownership", workspace.creationToken);
-    const readiness = await readProof(repositoryPath, "readiness", workspace.creationToken);
-    return ownership.exists && ownership.record !== undefined && readiness.exists && readiness.record !== undefined
-      && proofMatchesWorkspace(ownership.record, "ownership", workspace)
-      && proofMatchesWorkspace(readiness.record, "readiness", workspace)
-      && ownership.record.startProductSha === readiness.record.startProductSha;
+    try {
+      const ownership = await readProof(repositoryPath, "ownership", workspace.creationToken);
+      const readiness = await readProof(repositoryPath, "readiness", workspace.creationToken);
+      if (!(ownership.exists && ownership.record !== undefined && readiness.exists && readiness.record !== undefined
+        && proofMatchesWorkspace(ownership.record, "ownership", workspace)
+        && proofMatchesWorkspace(readiness.record, "readiness", workspace)
+        && ownership.record.startProductSha === readiness.record.startProductSha)) return false;
+      if (!await workspaceGit.branchExists(repositoryPath, workspace.branch)) return false;
+      if (!await workspaceGit.worktreeExists(workspace.worktreePath)) return false;
+      const identity = await workspaceGit.worktreeIdentity(workspace.worktreePath);
+      if (identity?.commonDirectory !== workspace.commonDirectory || identity.branch !== workspace.branch) return false;
+      const [branchHead, worktreeHead] = await Promise.all([
+        workspaceGit.branchHead(repositoryPath, workspace.branch),
+        workspaceGit.productHead(workspace.worktreePath),
+      ]);
+      return branchHead !== undefined && branchHead === worktreeHead;
+    } catch { return false; }
   },
   async productHead(repositoryPath) { return gitRequired(repositoryPath, ["rev-parse", "--verify", "HEAD"]); },
   async ensureWorktree(repositoryPath, branch, path, intent) {

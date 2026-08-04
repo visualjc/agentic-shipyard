@@ -6,8 +6,12 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 import { nodeFilesystem } from "../../../src/adapters/filesystem.js";
+import { nodeGit } from "../../../src/adapters/git.js";
 import { GitLedgerStore } from "../../../src/adapters/ledger-git.js";
+import { BindingService } from "../../../src/binding/service.js";
+import { DeliveryError } from "../../../src/delivery/errors.js";
 import { JsonDeliveryRegistry } from "../../../src/delivery/registry.js";
+import { DeliveryResolver } from "../../../src/delivery/resolver.js";
 import type { DeliveryRegistryDocument, DeliveryWorkspace } from "../../../src/delivery/types.js";
 import { createWorkspaceProofRecord, serializeWorkspaceProofRecord } from "../../../src/workspace/proof.js";
 import type { WorkspaceProofRecord } from "../../../src/workspace/proof.js";
@@ -16,9 +20,10 @@ import { WorkspaceError } from "../../../src/workspace/errors.js";
 import { nodeWorkspaceGit, WorkspaceService } from "../../../src/workspace/service.js";
 import type { WorktreeEnsureIntent } from "../../../src/workspace/service.js";
 import { nodeProcess } from "../../../src/adapters/process.js";
-import { FakeProcess, MemoryFilesystem } from "../../helpers/fakes.js";
+import { FakeProcess, MemoryBindingStore, MemoryFilesystem } from "../../helpers/fakes.js";
 
 const exec = promisify(execFile);
+const remoteUrl = "https://example.test/widget.git";
 const missingOwnershipMethods = {
   async ownershipProof() { return { exists: false } as const; },
   async verifyReadyWorkspace() { return false; },
@@ -36,6 +41,7 @@ async function fixture(objectFormat: "sha1" | "sha256" = "sha1") {
   await mkdir(repository); await mkdir(worktrees); await mkdir(state);
   await git(repository, ["init", `--object-format=${objectFormat}`, "-b", "main"]);
   await git(repository, ["config", "user.name", "test"]); await git(repository, ["config", "user.email", "test@example.test"]);
+  await git(repository, ["remote", "add", "origin", remoteUrl]);
   await git(repository, ["commit", "--allow-empty", "-m", "product"]);
   const commonDirectory = await realpath(await git(repository, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
   const registry = new JsonDeliveryRegistry(nodeFilesystem, join(state, "deliveries.json"));
@@ -49,6 +55,11 @@ async function fixture(objectFormat: "sha1" | "sha256" = "sha1") {
 }
 
 async function dispose(value: Fixture): Promise<void> { await rm(value.root, { recursive: true, force: true }); }
+function deliveryResolver(value: Fixture): DeliveryResolver {
+  const topology = { kind: "single-repository", repository: { owner: "test", name: "widget", remote: { name: "origin", url: remoteUrl }, defaultBranch: "main" } } as const;
+  const binding = { schemaVersion: 1, profileName: "test", commonDirectory: value.commonDirectory, topology, profileFingerprint: "0".repeat(64), boundAt: "2026-08-04T00:00:00.000Z" } as const;
+  return new DeliveryResolver(new BindingService(new MemoryBindingStore({ schemaVersion: 1, bindings: [binding] }), nodeGit), value.registry, nodeWorkspaceGit);
+}
 async function initialRecord(value: Fixture, request: ReturnType<Fixture["request"]>) {
   return JSON.parse((await value.ledger.snapshot([request.initialLedgerPath])).records[request.initialLedgerPath]!);
 }
@@ -82,6 +93,54 @@ test("creates, resumes after interruption, and recreates a missing linked Git wo
     assert.equal((await value.registry.read())?.workspaces[0]?.creationToken, firstWorkspace.creationToken);
     assert.deepEqual((await value.registry.read())?.workspaces.map((workspace) => workspace.deliveryId), ["d-1"]);
   } finally { await dispose(value); }
+});
+
+test("resolver requires a live ready branch and linked worktree across deletion and service recreation", async () => {
+  const value = await fixture();
+  try {
+    const request = value.request("d-resolver-live");
+    await value.service.createOrResume(request);
+    const resolver = deliveryResolver(value);
+    const resolution = { repositoryPath: value.repository, deliveryId: request.deliveryId };
+    assert.equal((await resolver.resolve(resolution)).workspace.state, "ready");
+
+    await git(request.worktreePath, ["commit", "--allow-empty", "-m", "legitimate delivery work"]);
+    assert.equal((await resolver.resolve(resolution)).workspace.deliveryId, request.deliveryId);
+
+    await git(value.repository, ["worktree", "remove", request.worktreePath]);
+    await assert.rejects(resolver.resolve(resolution), (error: unknown) => error instanceof DeliveryError && error.code === "delivery-incomplete");
+
+    await value.service.createOrResume(request);
+    assert.equal((await resolver.resolve(resolution)).workspace.deliveryId, request.deliveryId);
+
+    await git(value.repository, ["worktree", "remove", request.worktreePath]);
+    await git(value.repository, ["branch", "-D", request.branch]);
+    await assert.rejects(resolver.resolve(resolution), (error: unknown) => error instanceof DeliveryError && error.code === "delivery-incomplete");
+  } finally { await dispose(value); }
+});
+
+test("ready verification rejects detached, wrong-branch, and foreign linked-worktree identities", async (context) => {
+  const scenarios = [
+    { name: "detached", mutate: async (value: Fixture, request: ReturnType<Fixture["request"]>) => { await git(request.worktreePath, ["checkout", "--detach"]); } },
+    { name: "wrong branch", mutate: async (value: Fixture, request: ReturnType<Fixture["request"]>) => { await git(request.worktreePath, ["checkout", "-b", "shipyard/wrong-identity"]); } },
+    { name: "foreign common directory", mutate: async (value: Fixture, request: ReturnType<Fixture["request"]>) => {
+      await git(value.repository, ["worktree", "remove", request.worktreePath]);
+      await mkdir(request.worktreePath);
+      await git(request.worktreePath, ["init", "-b", request.branch]);
+      await git(request.worktreePath, ["config", "user.name", "test"]); await git(request.worktreePath, ["config", "user.email", "test@example.test"]);
+      await git(request.worktreePath, ["commit", "--allow-empty", "-m", "foreign"]);
+    } },
+  ];
+  for (const scenario of scenarios) await context.test(scenario.name, async () => {
+    const value = await fixture();
+    try {
+      const request = value.request(`d-${scenario.name.replaceAll(" ", "-")}`);
+      const workspace = await value.service.createOrResume(request);
+      assert.equal(await nodeWorkspaceGit.verifyReadyWorkspace(value.repository, workspace), true);
+      await scenario.mutate(value, request);
+      assert.equal(await nodeWorkspaceGit.verifyReadyWorkspace(value.repository, workspace), false);
+    } finally { await dispose(value); }
+  });
 });
 
 test("rejects non-string or empty initial ledger contents before touching any state", async () => {

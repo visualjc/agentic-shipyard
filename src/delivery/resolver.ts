@@ -33,7 +33,7 @@ export class DeliveryResolver {
       if (matches[0].commonDirectory !== binding.commonDirectory) throw mismatch();
     }
     if (matches[0].state !== "ready") throw new DeliveryError("delivery-incomplete", "The delivery workspace claim is still being created; resume workspace initialization first.");
-    if (!await this.readiness.verifyReadyWorkspace(request.repositoryPath, matches[0])) throw new DeliveryError("delivery-incomplete", "The ready delivery workspace is missing its exact local ownership or readiness proof.");
+    if (!await this.readiness.verifyReadyWorkspace(request.repositoryPath, matches[0])) throw new DeliveryError("delivery-incomplete", "The ready delivery workspace is missing its exact local proofs or live branch and worktree identity.");
     return immutableSnapshot(binding, matches[0]);
   }
 }
