@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFile, spawn } from "node:child_process";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -23,7 +23,7 @@ async function fixture(format = "sha1") {
 }
 for (const format of ["sha1", "sha256"]) test(`concrete adapter fast-forwards an exact clean ${format} destination baseline`, async (t) => {
   let f: Awaited<ReturnType<typeof fixture>>; try { f = await fixture(format); } catch (error) { if (format === "sha256") return t.skip(`Git lacks sha256 support: ${String(error)}`); throw error; }
-  try { const adapter = new NodeSyncGit(); const before = await adapter.observe(f.repo, "upstream", "main", "main"); assert.equal(before.ancestry, "behind"); await adapter.fastForward(f.repo, "upstream", "main", before.developmentSha, before.destinationSha); const after = await adapter.observe(f.repo, "upstream", "main", "main"); assert.equal(after.ancestry, "equal"); assert.equal(after.developmentSha, before.destinationSha); assert.equal(after.clean, true); assert.equal(await (await import("node:fs/promises")).readFile(join(f.repo, "app.ts"), "utf8"), "two\n"); } finally { await rm(f.root, { recursive: true, force: true }); }
+  try { const adapter = new NodeSyncGit(); const before = await adapter.observe(f.repo, "upstream", "main", "main"); assert.equal(before.ancestry, "behind"); await adapter.fastForward(f.repo, "upstream", "main", "main", before.developmentSha, before.destinationSha); const after = await adapter.observe(f.repo, "upstream", "main", "main"); assert.equal(after.ancestry, "equal"); assert.equal(after.developmentSha, before.destinationSha); assert.equal(after.clean, true); assert.equal(await (await import("node:fs/promises")).readFile(join(f.repo, "app.ts"), "utf8"), "two\n"); } finally { await rm(f.root, { recursive: true, force: true }); }
 });
 
 test("concrete adapter imports an exact named tag without moving main", async () => {
@@ -53,8 +53,73 @@ test("dirty, wrong-branch, divergent, and path-policy failures preserve the exac
       const profile: Profile = { schemaVersion: 1, name: "test", actor: { login: "actor" }, topology: { kind: "single-repository", repository }, allowedOperations: ["sync"], pathPolicy: { schemaVersion: 1, rules: [{ owner: "product", pattern: scenario === "path-policy" ? "src/**" : "**" }] } };
       const authority = { profileName: "test", commonDirectory: `${f.repo}/.git`, profileFingerprint: profileFingerprint(profile), actorLogin: "actor", topology: profile.topology } as const;
       const destinationSha = await command(f.repo, ["rev-parse", "refs/shipyard/staged-destination"]); const fs = new MemoryFilesystem();
-      const service = new SyncService({ authority: { resolve: async () => authority }, profiles: { read: async () => profile }, git: new NodeSyncGit(), transport: { stage: async () => ({ repositoryPath: f.repo, destinationRef: "refs/shipyard/staged-destination", destinationSha, release: async () => {} }) }, ledger: { snapshot: async () => ({ head: undefined, records: {} }), transact: async () => { throw new Error("ledger must not run"); } }, locks: new MutationLockService(fs, new FakeProcess()), lockPath: () => "/lock" });
+      const service = new SyncService({ authority: { resolve: async () => authority }, profiles: { read: async () => profile }, git: new NodeSyncGit(), transport: { stage: async () => ({ repositoryPath: f.repo, destinationRef: "refs/shipyard/staged-destination", destinationSha, release: async () => {} }) }, ledger: { objectFormat: async () => "sha1", snapshot: async () => ({ head: undefined, records: {} }), read: async () => ({}), transact: async () => { throw new Error("ledger must not run"); } }, locks: new MutationLockService(fs, new FakeProcess()), lockPath: () => "/lock" });
       const before = await command(f.repo, ["for-each-ref", "--format=%(refname):%(objectname)"]); await assert.rejects(service.sync({ repositoryPath: f.repo })); const after = await command(f.repo, ["for-each-ref", "--format=%(refname):%(objectname)"]); assert.equal(after, before);
     } finally { await rm(f.root, { recursive: true, force: true }); }
   });
 });
+
+test("prepared-ref, tree-application, and ref-commit failures restore refs, index, and worktree exactly", async (t) => {
+  for (const mode of ["prepare", "read-tree", "commit"] as const) await t.test(mode, async () => {
+    const f = await fixture(); const wrapper = join(f.root, `git-${mode}`);
+    try {
+      const script = `#!/bin/sh\nif [ "$*" = "-C ${f.repo} update-ref --stdin" ]; then\n${mode === "prepare" || mode === "commit" ? `while IFS= read -r line; do case "$line" in start) echo 'start: ok';; prepare) ${mode === "prepare" ? "exit 1" : "echo 'prepare: ok'"};; commit) exit 1;; abort) echo 'abort: ok'; exit 0;; esac; done; exit 0` : "exec /usr/bin/git \"$@\""}\nfi\n${mode === "read-tree" ? `case "$*" in *"read-tree -u -m"*) exit 1;; esac` : ""}\nexec /usr/bin/git "$@"\n`;
+      await writeFile(wrapper, script); await chmod(wrapper, 0o700); const adapter = new NodeSyncGit(wrapper); const beforeObservation = await adapter.observe(f.repo, "upstream", "main", "main"); const before = await exactState(f.repo);
+      await assert.rejects(adapter.fastForward(f.repo, "upstream", "main", "main", beforeObservation.developmentSha, beforeObservation.destinationSha)); assert.deepEqual(await exactState(f.repo), before);
+    } finally { await rm(f.root, { recursive: true, force: true }); }
+  });
+});
+
+test("hung, flooding, early-closing, and spawn-failing ref transaction children terminate safely", async (t) => {
+  for (const mode of ["hang", "flood", "early"] as const) await t.test(mode, async () => {
+    const f = await fixture(); const wrapper = join(f.root, `git-${mode}`);
+    try {
+      const action = mode === "hang" ? "while :; do :; done" : mode === "flood" ? "while :; do echo flood; done" : "exit 0";
+      await writeFile(wrapper, `#!/bin/sh\nif [ "$*" = "-C ${f.repo} update-ref --stdin" ]; then\nwhile IFS= read -r line; do case "$line" in start) echo 'start: ok';; prepare) ${action};; esac; done\nfi\nexec /usr/bin/git "$@"\n`); await chmod(wrapper, 0o700);
+      const adapter = new NodeSyncGit(wrapper, { transactionTimeoutMs: 200, transactionMaxOutputBytes: 128 }); const observation = await adapter.observe(f.repo, "upstream", "main", "main"); const before = await exactState(f.repo);
+      await assert.rejects(adapter.fastForward(f.repo, "upstream", "main", "main", observation.developmentSha, observation.destinationSha), mode === "hang" ? /timed out/i : mode === "flood" ? /output limit/i : /before prepare/i); assert.deepEqual(await exactState(f.repo), before);
+    } finally { await rm(f.root, { recursive: true, force: true }); }
+  });
+  await t.test("spawn-error", async () => {
+    const f = await fixture();
+    try {
+      const transactionSpawner = ((_executable: string, args: readonly string[], options: Parameters<typeof spawn>[2]) => spawn("/definitely/missing/shipyard-git", [...args], options)) as unknown as typeof spawn;
+      const adapter = new NodeSyncGit(git, { transactionSpawner, transactionTimeoutMs: 1_000 }); const observation = await adapter.observe(f.repo, "upstream", "main", "main"); const before = await exactState(f.repo);
+      await assert.rejects(adapter.fastForward(f.repo, "upstream", "main", "main", observation.developmentSha, observation.destinationSha), /could not be started/i); assert.deepEqual(await exactState(f.repo), before);
+    } finally { await rm(f.root, { recursive: true, force: true }); }
+  });
+});
+
+test("ref transaction diagnostics redact credentials and remain bounded", async () => {
+  const f = await fixture(); const wrapper = join(f.root, "git-diagnostic");
+  try {
+    await writeFile(wrapper, `#!/bin/sh\nif [ "$*" = "-C ${f.repo} update-ref --stdin" ]; then\nwhile IFS= read -r line; do case "$line" in prepare) echo 'https://user:secret@example.test AUTHORIZATION: bearer token-value' >&2; exit 9;; esac; done\nfi\nexec /usr/bin/git "$@"\n`); await chmod(wrapper, 0o700); const adapter = new NodeSyncGit(wrapper); const observation = await adapter.observe(f.repo, "upstream", "main", "main"); let message = "";
+    try { await adapter.fastForward(f.repo, "upstream", "main", "main", observation.developmentSha, observation.destinationSha); assert.fail("expected transaction failure"); } catch (error) { message = String(error); }
+    assert.doesNotMatch(message, /user:secret|token-value/); assert.match(message, /REDACTED/); assert.ok(message.length < 700);
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
+test("staged object materialization never creates a temporary ref, including fetch and verification failures", async (t) => {
+  for (const mode of ["success", "fetch", "verify", "delete-trap"] as const) await t.test(mode, async () => {
+    const f = await fixture(); const wrapper = join(f.root, `git-materialize-${mode}`);
+    try {
+      await command(f.repo, ["update-ref", "refs/shipyard/staged-destination", "refs/remotes/upstream/main"]); const destinationSha = await command(f.repo, ["rev-parse", "refs/shipyard/staged-destination"]);
+      const guard = mode === "fetch" ? `case "$*" in *"fetch --no-tags --no-write-fetch-head"*) exit 7;; esac` : mode === "delete-trap" ? `case "$*" in *"update-ref -d refs/shipyard/staged-import"*) exit 8;; esac` : "";
+      await writeFile(wrapper, `#!/bin/sh\n${guard}\nexec /usr/bin/git "$@"\n`); await chmod(wrapper, 0o700); const adapter = new NodeSyncGit(wrapper); const before = await exactState(f.repo); const expected = mode === "verify" ? "f".repeat(40) : destinationSha;
+      if (mode === "fetch" || mode === "verify") await assert.rejects(adapter.materializeStaged(f.repo, f.repo, "refs/shipyard/staged-destination", expected)); else await adapter.materializeStaged(f.repo, f.repo, "refs/shipyard/staged-destination", expected);
+      assert.deepEqual(await exactState(f.repo), before); assert.equal(await command(f.repo, ["for-each-ref", "--format=%(refname)", "refs/shipyard/staged-import"]), "");
+    } finally { await rm(f.root, { recursive: true, force: true }); }
+  });
+});
+
+test("source ledger failure leaves every product ref, index, and worktree byte unchanged", async () => {
+  const f = await fixture();
+  try {
+    await command(f.repo, ["update-ref", "refs/shipyard/staged-development", "main"]); await command(f.repo, ["update-ref", "refs/shipyard/staged-destination", "refs/remotes/upstream/main"]); await command(f.repo, ["update-ref", "refs/shipyard/staged-source", "refs/remotes/upstream/main"]);
+    const repository = { owner: "acme", name: "destination", remote: { name: "upstream", url: await command(f.repo, ["remote", "get-url", "upstream"]) }, defaultBranch: "main" }; const profile: Profile = { schemaVersion: 1, name: "test", actor: { login: "actor" }, topology: { kind: "single-repository", repository }, allowedOperations: ["sync"], pathPolicy: { schemaVersion: 1, rules: [{ owner: "product", pattern: "**" }] } }; const authority = { profileName: "test", commonDirectory: `${f.repo}/.git`, profileFingerprint: profileFingerprint(profile), actorLogin: "actor", topology: profile.topology } as const;
+    const sourceSha = await command(f.repo, ["rev-parse", "refs/shipyard/staged-source"]); const destinationSha = await command(f.repo, ["rev-parse", "refs/shipyard/staged-destination"]); const fs = new MemoryFilesystem(); const service = new SyncService({ authority: { resolve: async () => authority }, profiles: { read: async () => profile }, git: new NodeSyncGit(), transport: { stage: async () => ({ repositoryPath: f.repo, destinationRef: "refs/shipyard/staged-destination", destinationSha, sourceRef: "refs/shipyard/staged-source", sourceSha, release: async () => {} }) }, ledger: { objectFormat: async () => "sha1", snapshot: async () => ({ head: undefined, records: {} }), read: async () => ({}), transact: async () => { throw new Error("injected ledger failure"); } }, locks: new MutationLockService(fs, new FakeProcess()), lockPath: () => "/lock" });
+    const before = await exactState(f.repo); await assert.rejects(service.sync({ repositoryPath: f.repo, sourceRef: "refs/heads/release" }), /injected ledger failure/); assert.deepEqual(await exactState(f.repo), before); await assert.rejects(command(f.repo, ["rev-parse", "--verify", "refs/shipyard/source/upstream"]));
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
+async function exactState(repository: string) { return { refs: await command(repository, ["for-each-ref", "--format=%(refname):%(objectname)"]), index: await command(repository, ["write-tree"]), status: await command(repository, ["status", "--porcelain=v1"]), app: await readFile(join(repository, "app.ts"), "utf8") }; }

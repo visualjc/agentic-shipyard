@@ -15,14 +15,23 @@ ambiguous path ownership, unsafe source name, stale provenance, or uncertain
 lock state stops the operation. Clean or inspect the reported condition and
 run a new explicit command; Shipyard does not retry or repair it automatically.
 
-For a validated clean fast-forward, the local adapter applies the exact staged
-tree with Git plumbing and advances `main` with an expected-old-SHA compare and
-swap. It does not invoke `git merge`, hooks, conflict resolution, or a ref
-rewrite outside that exact fast-forward.
+For a validated clean fast-forward, the local adapter first fetches only the
+verified object, without creating a temporary ref. It prepares one Git ref
+transaction for development `main` and its destination-tracking ref, applies
+the exact staged tree while those expected-old-SHA locks are held, and commits
+both refs together. A bounded transaction child, tree-application failure, or
+ref race aborts and restores the pre-operation state. It does not invoke
+`git merge`, hooks, conflict resolution, or a ref rewrite outside that exact
+fast-forward.
 
 Source refs are local policy-read-only objects. Before using one, resolve the
 same bound destination remote and requested name again and require its exact
-recorded SHA. They are never included in Shipyard product publication refspecs.
+recorded SHA plus the pinned receipt and current canonical ledger bytes. A new
+source receipt becomes durable before the local source ref is created. If that
+first ref creation fails, rerun the identical explicit import to resume; if an
+older immutable ref names another SHA, Shipyard preserves its canonical record
+and stops before writing the ledger. Source refs are never included in
+Shipyard product publication refspecs.
 
 The deterministic port matrix covers both full SHA-1 and SHA-256 object IDs.
 On this macOS Git build, remote SHA-256 receive is unsupported, so the real

@@ -7,6 +7,8 @@
 - Remote/profile drift: verify the complete topology and rebind explicitly.
 - Path-policy failure: correct and review the one-owner profile policy.
 - Source provenance drift: import the exact named source again; never publish
-  or overwrite it through a product push.
+  or overwrite it through a product push. If the receipt was committed but
+  first local ref creation failed, rerun that identical explicit import to
+  finish the recoverable step.
 - Held or uncertain lock: identify its recorded owner and recover manually.
   Shipyard never removes an uncertain durable mutation lock automatically.

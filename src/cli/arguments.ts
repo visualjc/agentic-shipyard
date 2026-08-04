@@ -35,3 +35,11 @@ export function optionalOption(arguments_: ParsedArguments, name: string): strin
   const value = arguments_.values.get(name);
   return typeof value === "string" ? value : undefined;
 }
+
+/** Optional by absence only: presence requires one non-empty explicit value. */
+export function explicitOptionalOption(arguments_: ParsedArguments, name: string): string | undefined {
+  if (!arguments_.values.has(name)) return undefined;
+  const value = arguments_.values.get(name);
+  if (value === true || typeof value !== "string" || value.trim() === "") throw new Error(`Option --${name} requires a non-empty value.`);
+  return value;
+}

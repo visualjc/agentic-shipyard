@@ -16,9 +16,11 @@ export type BaselineObservation = Readonly<{
 export interface SyncGit {
   observe(repositoryPath: string, destinationRemote: string, developmentBranch: string, destinationBranch: string): Promise<BaselineObservation>;
   observeStaged(repositoryPath: string, stagedRepositoryPath: string, destinationRemote: string, developmentBranch: string): Promise<BaselineObservation>;
-  fastForward(repositoryPath: string, destinationRemote: string, destinationBranch: string, expectedDevelopmentSha: string, expectedDestinationSha: string): Promise<void>;
+  materializeStaged(repositoryPath: string, stagedRepositoryPath: string, stagedRef: string, expectedSha: string): Promise<void>;
+  fastForward(repositoryPath: string, destinationRemote: string, developmentBranch: string, destinationBranch: string, expectedDevelopmentSha: string, expectedDestinationSha: string): Promise<void>;
   importStaged(repositoryPath: string, stagedRepositoryPath: string, stagedRef: string, localRef: string, expectedSha: string): Promise<string>;
   importSource(repositoryPath: string, destinationRemote: string, sourceRef: string, localRef: string): Promise<string>;
   resolveSource(repositoryPath: string, destinationRemote: string, sourceRef: string): Promise<string>;
   resolveLocal(repositoryPath: string, localRef: string): Promise<string>;
+  resolveLocalOptional(repositoryPath: string, localRef: string): Promise<string | undefined>;
 }
