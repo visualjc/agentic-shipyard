@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import test from "node:test";
 
 const root = process.cwd();
-const skills = ["shipyard", "shipyard-setup", "shipyard-status", "shipyard-sync", "shipyard-help", "shipyard-review"];
+const skills = ["shipyard", "shipyard-setup", "shipyard-status", "shipyard-sync", "shipyard-help", "shipyard-review", "shipyard-promote", "shipyard-finalize"];
 
 test("official Codex discovery paths point only at canonical skills with invocation metadata", async () => {
   for (const skill of skills) {

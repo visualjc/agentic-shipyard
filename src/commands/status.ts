@@ -8,9 +8,11 @@ import { requireProfileAuthorization, sameTopology, type ProfileReader } from ".
 import { profileFingerprint } from "../profile/fingerprint.js";
 import { RepositoryIdentityError } from "./setup.js";
 import { syncStatusContributor, type SyncStatusReader } from "../sync/status.js";
+import type { DependencyStatusService } from "../dependencies/service.js";
+import type { CapabilityLane } from "../dependencies/types.js";
 
 /** Status intentionally resolves binding only: it does not acquire a lock or write any state. */
-export async function status(bindings: Pick<BindingService, "resolve">, git: GitAdapter, profiles: ProfileReader, repositoryPath: string, syncReader: SyncStatusReader, graphs?: GraphLaneStatusReader) {
+export async function status(bindings: Pick<BindingService, "resolve">, git: GitAdapter, profiles: ProfileReader, repositoryPath: string, syncReader: SyncStatusReader, graphs?: GraphLaneStatusReader, dependencies?: Pick<DependencyStatusService, "inspect">, lane: CapabilityLane = "large") {
   try { await git.commonDirectory(repositoryPath); }
   catch { throw new RepositoryIdentityError("Git common-directory identity could not be established."); }
   const binding = await bindings.resolve(repositoryPath);
@@ -20,11 +22,13 @@ export async function status(bindings: Pick<BindingService, "resolve">, git: Git
   const destination = binding.topology.kind === "staged-pair" ? binding.topology.destination : binding.topology.repository;
   const development = binding.topology.kind === "staged-pair" ? binding.topology.development : binding.topology.repository;
   const sync = await syncReader.read({ repositoryPath, destinationRemote: destination.remote.name, developmentBranch: development.defaultBranch, destinationBranch: destination.defaultBranch, expectedRemoteUrl: destination.remote.url, profile });
+  const dependency = dependencies ? await dependencies.inspect({ host: "codex", lane }) : undefined;
   const base = composeStatus(createStatusProjection({
     phase: "ready",
-    nextSafeAction: "Inspect local synchronization facts.",
+    nextSafeAction: dependency && !dependency.ready ? dependency.nextSafeAction : "Inspect local synchronization facts.",
     providerRefs: { profile: binding.profileName, topology: binding.topology.kind, destinationRemote: destination.remote.name, destinationBranch: destination.defaultBranch },
-  }), [syncStatusContributor(sync)]);
+    ...(dependency ? { dependencies: dependency.findings } : {}),
+  }), [syncStatusContributor(sync), ...(dependency && !dependency.ready ? [() => ({ blockers: [{ code: "dependency-not-ready", message: "Required Codex planning dependencies are not ready." }] })] : [])]);
   if (!graphs) return base;
   let graph; try { graph = await graphs.status(profile, repositoryPath); }
   catch { graph = { enabled: profile.graph?.enabled === true, adapter: profile.graph?.enabled ? profile.graph.adapter : undefined, receipt: profile.graph?.enabled ? profile.graph.reviewedToolSource : undefined, decision: graphDecision("unavailable", "Graph status boundary failed safely.") }; }

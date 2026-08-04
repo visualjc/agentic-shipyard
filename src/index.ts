@@ -4,6 +4,18 @@ export { ContractValidationError, validateBinding, validateLifecycleState, valid
 export type { ContractErrorCode } from "./contracts/errors.js";
 export { composeStatus, createStatusProjection } from "./status/projection.js";
 export type { StatusBlocker, StatusContributor, StatusProjection, SyncFreshness } from "./status/projection.js";
+export { orchestrate } from "./commands/orchestrate.js";
+export type { OrchestrationOperation } from "./commands/orchestrate.js";
+export { review } from "./commands/review.js";
+export type { GovernedReviewOperation } from "./commands/review.js";
+export { promote } from "./commands/promote.js";
+export type { GovernedPromotionOperation } from "./commands/promote.js";
+export { finalize } from "./commands/finalize.js";
+export type { GovernedFinalizationOperation } from "./commands/finalize.js";
+export { ShipyardOrchestrator } from "./orchestration/service.js";
+export type { PlanningAuthority, PlanningAuthorityFacts } from "./orchestration/authority.js";
+export type { PlanningStatus } from "./orchestration/status.js";
+export type { Lane, LaneDecision, LaneRecord } from "./orchestration/types.js";
 export { graphStatusContributor } from "./graph/status.js";
 export { createGitGraphSourceReader, graphFingerprint, snapshotGraphSource } from "./graph/fingerprint.js";
 export { graphCacheIdentity, graphDecision, graphLockPath, evaluateGraphFreshness, evaluateGraphLock, validateGraphDescriptor } from "./graph/freshness.js";

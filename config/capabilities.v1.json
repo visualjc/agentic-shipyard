@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "dependencies": [
+    {
+      "id": "matt-skills",
+      "source": { "kind": "git-commit", "repository": "https://github.com/mattpocock/skills", "commit": "2ab958093e83e0ec752e6c1c5932da465bf23e0c" },
+      "content": { "kind": "matt-skill-trees", "skills": [
+        {"name":"ask-matt","sourcePath":"skills/engineering/ask-matt","treeSha":"c7d57789b230d6f88d26ca81ab9d03bad160171f","requiredFiles":["SKILL.md","agents/openai.yaml"]},
+        {"name":"code-review","sourcePath":"skills/engineering/code-review","treeSha":"474a27d46efb1eff9724a29ae1edc9cd8a75d911","requiredFiles":["SKILL.md","agents/openai.yaml"]},
+        {"name":"codebase-design","sourcePath":"skills/engineering/codebase-design","treeSha":"7347168e8de2de105e2e55f07ecb33d25fd56f44","requiredFiles":["SKILL.md","agents/openai.yaml"]},
+        {"name":"diagnosing-bugs","sourcePath":"skills/engineering/diagnosing-bugs","treeSha":"27bf00e3ccc53491e938e8b5602be39238ce68f3","requiredFiles":["SKILL.md","agents/openai.yaml"]},
+        {"name":"domain-modeling","sourcePath":"skills/engineering/domain-modeling","treeSha":"959e63161ff78b4b1cd553b2c0e09e0c68418e5f","requiredFiles":["SKILL.md","agents/openai.yaml"]},
+        {"name":"grill-with-docs","sourcePath":"skills/engineering/grill-with-docs","treeSha":"5fdcdeedf2d0c73b3ecb1da0a464dd885590f8d6","requiredFiles":["SKILL.md","agents/openai.yaml"]},
+        {"name":"implement","sourcePath":"skills/engineering/implement","treeSha":"f07d230f645fc9ac390cf13a450bbff12ad791a3","requiredFiles":["SKILL.md","agents/openai.yaml"]},
+        {"name":"improve-codebase-architecture","sourcePath":"skills/engineering/improve-codebase-architecture","treeSha":"bce229692e60dff3462e49bc5e774e83bef348e6","requiredFiles":["SKILL.md","agents/openai.yaml"]},
+        {"name":"prototype","sourcePath":"skills/engineering/prototype","treeSha":"dd3d782b69ccb67493fbe76b84149399da3c9fee","requiredFiles":["SKILL.md","agents/openai.yaml"]},
+        {"name":"research","sourcePath":"skills/engineering/research","treeSha":"972a34cd8128b7952b7eb279b06715862db906a7","requiredFiles":["SKILL.md","agents/openai.yaml"]},
+        {"name":"resolving-merge-conflicts","sourcePath":"skills/engineering/resolving-merge-conflicts","treeSha":"6aa1ed0b40fac0ebea5c0cf6f2addf82c99b6323","requiredFiles":["SKILL.md","agents/openai.yaml"]},
+        {"name":"setup-matt-pocock-skills","sourcePath":"skills/engineering/setup-matt-pocock-skills","treeSha":"634cf9b010bca5701642aca736dce899822f08f7","requiredFiles":["SKILL.md","agents/openai.yaml"]},
+        {"name":"tdd","sourcePath":"skills/engineering/tdd","treeSha":"0a727bd358b855cbcc1c35cfff21ef31f9ffb8de","requiredFiles":["SKILL.md","agents/openai.yaml"]},
+        {"name":"to-spec","sourcePath":"skills/engineering/to-spec","treeSha":"bf698b96b5d8798d110d9872e32b9310728555b0","requiredFiles":["SKILL.md","agents/openai.yaml"]},
+        {"name":"to-tickets","sourcePath":"skills/engineering/to-tickets","treeSha":"80c1bedbdaa72a4abd524055013accb4fe0ea8c4","requiredFiles":["SKILL.md","agents/openai.yaml"]},
+        {"name":"triage","sourcePath":"skills/engineering/triage","treeSha":"258364be8354f726bf4080077cd92d86d08c69eb","requiredFiles":["SKILL.md","agents/openai.yaml"]},
+        {"name":"wayfinder","sourcePath":"skills/engineering/wayfinder","treeSha":"33ed747fb30668c0e7b61698af5268c25c0d75cb","requiredFiles":["SKILL.md","agents/openai.yaml"]},
+        {"name":"grill-me","sourcePath":"skills/productivity/grill-me","treeSha":"c817f6f36acd483294144694a935a76d3e3eb101","requiredFiles":["SKILL.md","agents/openai.yaml"]},
+        {"name":"grilling","sourcePath":"skills/productivity/grilling","treeSha":"10b0db61f9b3869243db8a1a0ee84f862139b94e","requiredFiles":["SKILL.md","agents/openai.yaml"]},
+        {"name":"handoff","sourcePath":"skills/productivity/handoff","treeSha":"184d485ae68a2132893a94239b2b85d253e6152b","requiredFiles":["SKILL.md","agents/openai.yaml"]}
+      ]},
+      "hosts":["codex"], "lanes":["large","small","bug","review-only"],
+      "invocation":{"command":"skills","frontmatterName":"wayfinder","requiredFiles":["SKILL.md","agents/openai.yaml"]},
+      "canonicalDiscovery":[".agents/skills/ask-matt",".agents/skills/code-review",".agents/skills/codebase-design",".agents/skills/diagnosing-bugs",".agents/skills/domain-modeling",".agents/skills/grill-with-docs",".agents/skills/implement",".agents/skills/improve-codebase-architecture",".agents/skills/prototype",".agents/skills/research",".agents/skills/resolving-merge-conflicts",".agents/skills/setup-matt-pocock-skills",".agents/skills/tdd",".agents/skills/to-spec",".agents/skills/to-tickets",".agents/skills/triage",".agents/skills/wayfinder",".agents/skills/grill-me",".agents/skills/grilling",".agents/skills/handoff"]
+    },
+    {"id":"ccpm","source":{"kind":"git-commit","repository":"https://github.com/visualjc/ccpm","commit":"cdb97474904ab2cdc7d391aa17393b444a28be3e"},"content":{"kind":"git-tree","subpath":"skill/ccpm","treeSha":"72ea8594a5e4e592569b1c02e0918dc30760705f","requiredFiles":["SKILL.md","references"]},"hosts":["codex"],"lanes":["large"],"invocation":{"command":"ccpm","frontmatterName":"ccpm","requiredFiles":["SKILL.md","references"]},"canonicalDiscovery":[".agents/skills/ccpm"]},
+    {"id":"codex","content":{"kind":"none"},"runtime":{"kind":"runtime-version","host":"codex","version":"0.144.4"},"hosts":["codex"],"lanes":["large","small","bug","review-only"],"invocation":{"command":"skills","frontmatterName":"codex","requiredFiles":[]},"canonicalDiscovery":[]}
+  ]
+}

@@ -26,6 +26,8 @@ test("packed package contains runnable public API, commands, skills, and focused
     "shipyard-sync": "./bin/shipyard-sync",
     "shipyard-help": "./bin/shipyard-help",
     "shipyard-review": "./bin/shipyard-review",
+    "shipyard-promote": "./bin/shipyard-promote",
+    "shipyard-finalize": "./bin/shipyard-finalize",
     "shipyard-skills-install": "./bin/shipyard-skills-install",
   });
 
@@ -53,18 +55,35 @@ test("packed package contains runnable public API, commands, skills, and focused
     "skills/shipyard-sync/SKILL.md",
     "skills/shipyard-help/SKILL.md",
     "skills/shipyard-review/SKILL.md",
+    "skills/shipyard-promote/SKILL.md",
+    "skills/shipyard-finalize/SKILL.md",
     "skills/shipyard/agents/openai.yaml",
     "skills/shipyard-setup/agents/openai.yaml",
     "skills/shipyard-status/agents/openai.yaml",
     "skills/shipyard-sync/agents/openai.yaml",
     "skills/shipyard-help/agents/openai.yaml",
     "skills/shipyard-review/agents/openai.yaml",
+    "skills/shipyard-promote/agents/openai.yaml",
+    "skills/shipyard-finalize/agents/openai.yaml",
+    "skills/shipyard/references/orchestration.md",
+    "skills/shipyard-setup/references/setup.md",
+    "skills/shipyard-status/references/status.md",
+    "skills/shipyard-sync/references/sync.md",
+    "skills/shipyard-help/references/help.md",
+    "skills/shipyard-review/references/review.md",
+    "skills/shipyard-promote/references/promotion.md",
+    "skills/shipyard-finalize/references/finalization.md",
+    "config/capabilities.v1.json",
+    "docs/dependencies.md",
     "docs/setup.md",
     "docs/status.md",
     "docs/synchronization.md",
     "docs/sync-recovery.md",
     "docs/help.md",
     "docs/review.md",
+    "docs/planning-lanes.md",
+    "docs/promotion.md",
+    "docs/finalization.md",
     "docs/staged-promotion.md",
     "docs/staged-finalization.md",
     "docs/recovery.md",
@@ -72,6 +91,7 @@ test("packed package contains runnable public API, commands, skills, and focused
     "docs/single-repository-recovery.md",
     "docs/metadata-ownership.md",
     "docs/skills.md",
+    "docs/unsupported-hosts.md",
   ];
   for (const path of expectedContent) assert.ok(entries.has(path), `missing package content ${path}`);
   assert.equal([...entries.keys()].some((path) => path.startsWith("src/") || path.startsWith("test/") || path.startsWith("dist/test/")), false);
@@ -127,7 +147,7 @@ test("packaged skill installer creates only exact canonical discovery symlinks",
     for (const root of [projectRoot, userRoot]) {
       await execFileAsync(process.execPath, [installer, root === projectRoot ? "--target" : "--home", root], { encoding: "utf8" });
       await execFileAsync(process.execPath, [installer, root === projectRoot ? "--target" : "--home", root], { encoding: "utf8" });
-      for (const skill of ["shipyard", "shipyard-setup", "shipyard-status", "shipyard-sync", "shipyard-help", "shipyard-review"]) {
+      for (const skill of ["shipyard", "shipyard-setup", "shipyard-status", "shipyard-sync", "shipyard-help", "shipyard-review", "shipyard-promote", "shipyard-finalize"]) {
         const link = join(root, ".agents", "skills", skill);
         assert.ok((await lstat(link)).isSymbolicLink());
         assert.equal(await readlink(link), await (await import("node:fs/promises")).realpath(join(installedSkills, skill)));

@@ -1,4 +1,4 @@
 display_name: Shipyard Sync
-short_description: Safely synchronize a Shipyard baseline or exact source ref.
-default_prompt: Synchronize the bound Shipyard baseline or explicitly named destination source without promotion or repair.
+short_description: Run only the bounded Shipyard synchronization operation.
+default_prompt: Request Shipyard synchronization and stop on its reported blocker or next action.
 invocation_policy: explicit

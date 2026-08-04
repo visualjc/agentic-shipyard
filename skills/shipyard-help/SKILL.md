@@ -1,13 +1,13 @@
 ---
 name: shipyard-help
-description: Load focused documentation for a Shipyard command.
+description: Load focused read-only help for a public Codex-only Shipyard command.
 metadata:
-  invocation: shipyard-help [setup|status|sync|review|help]
+  invocation: shipyard-help <command>
 ---
 
 # Shipyard help
 
-Use focused help before an unfamiliar operation. Help never resolves a binding,
-contacts a provider, acquires a lock, or writes state.
+Use focused help before an unfamiliar public command. Help is read-only and
+does not resolve authority, choose an account, or perform any delivery action.
 
 Read [the help reference](references/help.md).

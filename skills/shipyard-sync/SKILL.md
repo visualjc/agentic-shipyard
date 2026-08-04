@@ -1,12 +1,14 @@
 ---
 name: shipyard-sync
-description: Fast-forward a clean Shipyard baseline or import one exact destination source ref.
+description: Request the bounded Shipyard synchronization operation.
 metadata:
-  invocation: shipyard-sync [--source-ref REF] [--repo PATH] [--home PATH]
+  invocation: shipyard-sync
 ---
 
 # Shipyard sync
 
-Use only for explicit baseline synchronization or one named source import.
-Read [the synchronization reference](references/sync.md). Never use this
-operation for promotion, finalization, rebasing, repair, or force-pushing.
+Use sync only for the explicit bounded synchronization operation returned by
+Shipyard. It is not planning, review, promotion, finalization, repair, or a
+generic repository command.
+
+Read [the sync reference](references/sync.md).

@@ -17,7 +17,8 @@ node bin/shipyard-help setup
 node bin/shipyard-setup --profile NAME --topology single-repository \
   --development-name origin --development-url URL
 node bin/shipyard-status
-SHIPYARD_GIT_TOKEN=... node bin/shipyard-sync
+node bin/shipyard "describe the work to plan"
+node bin/shipyard-sync
 ```
 
 Bindings are machine-local (`$SHIPYARD_HOME/bindings.json`, defaulting to
@@ -28,6 +29,21 @@ version 1 profile must already exist in `$SHIPYARD_HOME/profiles/<name>.json`,
 match the complete requested remote topology, and authorize setup. Setup takes
 the common-directory lock first and then one Shipyard-home binding-store lock,
 so concurrent setup in different repositories cannot lose a binding update.
+
+`shipyard <request>` is live for an existing bound profile. Its first use
+atomically bootstraps the isolated private ledger, then records a bounded
+classification and returns the actual focused skill route (for example,
+`$wayfinder` or `$grill-with-docs`). It does not invoke a planner, alter a
+product ref, or create GitHub state. `shipyard-review`, `shipyard-promote`, and
+`shipyard-finalize` remain fail-closed unless a separately reviewed,
+credential-bearing release composition is supplied; they never infer a
+provider or account from the environment.
+
+The live classifier requires a reviewed machine-local
+`$SHIPYARD_HOME/planning-host.json` containing absolute `executable`,
+`runtimePath`, and isolated `codeHome` paths. Shipyard probes exactly Codex CLI
+`0.144.4` and uses fixed `gpt-5.6-terra` / medium, read-only, ephemeral
+classification; it never falls back to ambient Codex configuration.
 
 Focused Codex skills are in `skills/shipyard*` and are discovered in this repo
 through source-checkout `.agents/skills` symlinks (npm users run the packaged installer); see [skills](docs/skills.md), [setup](docs/setup.md),

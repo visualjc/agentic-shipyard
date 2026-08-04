@@ -1,4 +1,4 @@
 display_name: Shipyard Review
-short_description: Independent exact-SHA evidence review.
-default_prompt: Review this exact SHA through the trusted reviewer envelope.
+short_description: Request independent exact-SHA review through Codex v1.
+default_prompt: Request an exact-SHA Shipyard review and report its next safe action.
 invocation_policy: explicit

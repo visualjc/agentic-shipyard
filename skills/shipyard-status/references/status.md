@@ -1,10 +1,10 @@
 # Status reference
 
-Current v1 status reports the binding profile/topology, independent
-`syncFreshness` and `graphFreshness` fields, and a safe next action. A graph
-that is disabled by default does not replace sync blockers or their action.
-Later slices contribute delivery, evidence, lock, provider, and graph fields
-through the shared status projection; blockers accumulate without replacing
-the action established by an earlier blocker.
+`shipyard-status` is read-only. It reports the binding, selected-lane
+dependency state, discovery duplicates, and a sanitized next safe action.
+Ready means the tested receipt and Codex v1 host match exactly. Missing,
+modified, duplicate, incompatible, and unverified dependencies block the lane;
+Shipyard never updates or repairs them.
 
-Next safe action: run `shipyard-help` to select a supported operation.
+Claude Code and Cursor/Pstack are deferred and unsupported in v1. Next safe
+action: run the command returned by `shipyard-status`.

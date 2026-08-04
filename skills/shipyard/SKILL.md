@@ -1,18 +1,19 @@
 ---
 name: shipyard
-description: Dispatch a Shipyard setup, status, sync, review, or focused help command safely.
+description: Start or resume a governed Shipyard planning lane in Codex v1.
 metadata:
-  invocation: shipyard <setup|status|sync|review|help>
+  invocation: shipyard <request>
 ---
 
 # Shipyard
 
-Start with `shipyard-status` when a repository may already be bound. Use
-`shipyard-setup` only after the user supplies a complete existing topology.
-Never infer a profile, rewrite a remote, provision a repository, or pass
-`--rebind` without explicit intent.
+Use this skill to describe work that needs a governed delivery lane. From an
+existing bound v1 profile, `shipyard <request>` atomically bootstraps its
+isolated private ledger if needed, records a bounded classification, and
+returns the actual focused skill route. This narrow operation does not invoke
+a planner, alter product Git state, or create tracker state.
 
-Read [setup](../shipyard-setup/references/setup.md),
-[status](../shipyard-status/references/status.md),
-[sync](../shipyard-sync/references/sync.md), or
-[review](../shipyard-review/references/review.md) only for that operation.
+Codex CLI is the only supported live host in v1. Claude Code and Cursor/Pstack
+are deferred and unsupported.
+
+Read [the orchestration reference](references/orchestration.md).

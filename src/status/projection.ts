@@ -16,6 +16,16 @@ export type StatusProjection = Readonly<{
   syncFreshness?: SyncFreshness;
   graphFreshness?: GraphState;
   graph?: Readonly<{ enabled: boolean; adapter?: string; receipt?: string; state: GraphState; reason: string; nextAction: "inspect-source-directly" }>;
+  /** FR-018 detached orchestration handoff.  These contain display-only IDs
+   * and receipts, never a filesystem path, credential, adapter, or operation. */
+  planning?: Readonly<{
+    recordId: string;
+    lane: "large" | "small" | "bug" | "review-only";
+    phase: string;
+    resumeCheckpoint?: string;
+    provider?: "codex";
+  }>;
+  dependencies?: readonly Readonly<{ dependency: string; state: string; remediation: string }>[];
   blockers: readonly StatusBlocker[];
   nextSafeAction: string;
 }>;
@@ -24,7 +34,7 @@ export type StatusProjection = Readonly<{
 export type StatusContributor = (projection: StatusProjection) => Partial<Omit<StatusProjection, "blockers">> & { blockers?: readonly StatusBlocker[] };
 
 export function createStatusProjection(input: Pick<StatusProjection, "phase" | "nextSafeAction"> & Partial<Omit<StatusProjection, "phase" | "nextSafeAction" | "blockers">>): StatusProjection {
-  return Object.freeze({ ...input, blockers: Object.freeze([]) });
+  return Object.freeze({ ...input, ...(input.dependencies ? { dependencies: Object.freeze(input.dependencies.map((item) => Object.freeze({ ...item }))) } : {}), blockers: Object.freeze([]) });
 }
 
 export function composeStatus(base: StatusProjection, contributors: readonly StatusContributor[]): StatusProjection {

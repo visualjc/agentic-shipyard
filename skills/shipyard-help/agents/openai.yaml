@@ -1,4 +1,4 @@
 display_name: Shipyard Help
-short_description: Provide focused safe guidance for one Shipyard operation.
-default_prompt: Explain the requested Shipyard operation without making changes.
+short_description: Load focused read-only help for a public Shipyard command.
+default_prompt: Explain the selected Shipyard command and its next safe action without changing state.
 invocation_policy: explicit

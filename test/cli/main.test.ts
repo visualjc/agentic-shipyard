@@ -5,10 +5,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
-import { run } from "../../src/cli/main.js";
+import { run as runCli } from "../../src/cli/main.js";
 import { createRuntime } from "../../src/cli/runtime.js";
 
 const execFile = promisify(execFileCallback);
+const readyDependencyStatus = Object.freeze({ async inspect() { return { schemaVersion: 1 as const, findings: [], ready: true, nextSafeAction: "shipyard" }; } });
+/** Existing CLI topology tests are hermetic: dependency behavior has its own
+ * disposable integration matrix below, not the user's actual ~/.agents. */
+const run: typeof runCli = (argv, invokedAs = "shipyard", cwd = process.cwd()) => {
+  const index = argv.findIndex((value) => value === "--home");
+  const home = index >= 0 && typeof argv[index + 1] === "string" ? argv[index + 1] : undefined;
+  return runCli(argv, invokedAs, cwd, { ...createRuntime(home), dependencyStatus: readyDependencyStatus });
+};
 
 test("setup validates existing remotes, requires rebind, and status/help are read-only", async () => {
   const fixture = await createRepository();
@@ -214,6 +222,34 @@ test("non-Git setup and status return actionable repository identity guidance", 
     assert.match(statusResult.output, /existing Git repository/);
   } finally { await fixture.dispose(); }
 });
+
+test("actual CLI setup and status surface disposable dependency receipts without writing during status", async () => {
+  const fixture = await createRepository();
+  try {
+    const setupArgs = ["--home", fixture.home, "--profile", "demo", "--topology", "staged-pair", "--development-name", "origin", "--development-url", fixture.origin, "--destination-name", "destination", "--destination-url", fixture.destination];
+    const base = createRuntime(fixture.home);
+    const ready = { ...base, dependencyStatus: receipt("ready") };
+    assert.equal((await runCli(setupArgs, "setup", fixture.main, ready)).code, 0);
+    const binding = await readFile(join(fixture.home, "bindings.json"), "utf8");
+    for (const state of ["missing", "modified", "duplicate", "unverified", "incompatible"] as const) {
+      const result = await runCli(["--home", fixture.home, "--lane", "large"], "status", fixture.main, { ...base, dependencyStatus: receipt(state) });
+      assert.equal(result.code, 0, result.output);
+      assert.match(result.output, new RegExp(`\\"state\\": \\"${state}\\"`));
+      assert.match(result.output, /dependency-not-ready/);
+      assert.equal(await readFile(join(fixture.home, "bindings.json"), "utf8"), binding, "status must not repair or rewrite a binding");
+    }
+    const blockedHome = `${fixture.home}-blocked`;
+    await mkdir(join(blockedHome, "profiles"), { recursive: true });
+    await writeFile(join(blockedHome, "profiles", "demo.json"), await readFile(join(fixture.home, "profiles", "demo.json"), "utf8"));
+    const blocked = await runCli(["--home", blockedHome, "--profile", "demo", "--topology", "staged-pair", "--development-name", "origin", "--development-url", fixture.origin, "--destination-name", "destination", "--destination-url", fixture.destination], "setup", fixture.main, { ...createRuntime(blockedHome), dependencyStatus: receipt("missing") });
+    assert.equal(blocked.code, 1); assert.match(blocked.output, /dependencies are not ready/i);
+    await assert.rejects(access(join(blockedHome, "bindings.json")));
+  } finally { await fixture.dispose(); }
+});
+
+function receipt(state: "ready" | "missing" | "modified" | "duplicate" | "unverified" | "incompatible") {
+  return Object.freeze({ async inspect() { return { schemaVersion: 1 as const, findings: state === "ready" ? [] : [{ dependency: "codex" as const, state, remediation: `repair ${state}` }], ready: state === "ready", nextSafeAction: state === "ready" ? "shipyard" : "shipyard-setup" }; } });
+}
 
 async function createRepository(withProfile = true) {
   const root = await mkdtemp(join(tmpdir(), "shipyard-cli-"));
