@@ -1,0 +1,1 @@
+export class ReviewError extends Error { readonly name = "ReviewError"; constructor(readonly code: "review-unsupported-host" | "review-role-mismatch" | "review-invalid-result" | "review-process-reused" | "review-process-failed" | "review-process-timeout", message: string) { super(message); } }

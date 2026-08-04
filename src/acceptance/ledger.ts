@@ -1,0 +1,8 @@
+import type { LedgerStore } from "../ledger/types.js";
+import { canonicalJson } from "../evidence/schema.js";
+import { validateAcceptanceEvidence, validateFindingResolution, validateReviewRequest, validateReviewResult } from "../evidence/schema.js";
+const delivery=(id:string)=>{if(!/^[A-Za-z0-9][A-Za-z0-9-]*$/.test(id))throw new Error("Delivery ID must be one safe segment.");return id;};
+const name=(n:string)=>{if(n==="acceptance.json"||/^review-request-[A-Za-z0-9-]+\.json$/.test(n)||/^review-result-[A-Za-z0-9-]+\.json$/.test(n)||/^finding-resolution-[A-Za-z0-9-]+\.json$/.test(n))return n;throw new Error("Evidence record name is not canonical.");};
+export const evidencePath = (deliveryId:string, recordName:string) => `deliveries/${delivery(deliveryId)}/evidence/${name(recordName)}`;
+function validated(recordName:string,document:unknown):unknown {if(recordName==="acceptance.json")return validateAcceptanceEvidence(document);if(recordName.startsWith("review-request-"))return validateReviewRequest(document);if(recordName.startsWith("review-result-"))return validateReviewResult(document);return validateFindingResolution(document);}
+export async function persistEvidence(ledger: LedgerStore, deliveryId: string, recordName: string, document: unknown): Promise<string> { const path=evidencePath(deliveryId,recordName),contents=canonicalJson(validated(recordName,document)),snapshot=await ledger.snapshot([path]); if(snapshot.records[path]===contents&&snapshot.head)return snapshot.head; if(snapshot.records[path]!==undefined)throw new Error("Immutable evidence record already exists with different canonical contents."); return ledger.transact({expectedHead:snapshot.head,writes:[{path,contents}],message:"shipyard evidence"}); }

@@ -1,0 +1,4 @@
+display_name: Shipyard Review
+short_description: Independent exact-SHA evidence review.
+default_prompt: Review this exact SHA through the trusted reviewer envelope.
+invocation_policy: explicit

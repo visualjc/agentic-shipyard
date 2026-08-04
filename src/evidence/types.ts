@@ -1,0 +1,10 @@
+export const EVIDENCE_SCHEMA_VERSION = 1 as const;
+export type EvidenceState = "pass" | "blocked" | "not-applicable";
+export type AcceptanceItem = Readonly<{ id: string; kind: "acceptance" | "definition-of-done"; state: EvidenceState; evidenceRefs: readonly string[]; verifier: string; verifiedAt: string; justification?: string }>;
+export type AcceptanceEvidence = Readonly<{ schemaVersion: 1; issueId: string; productSha: string; items: readonly AcceptanceItem[] }>;
+export type ReviewRequest = Readonly<{ schemaVersion: 1; issueId: string; productSha: string; reviewId: string; reviewerEnvelopePath: string; intentRefs: readonly string[]; evidenceRefs: readonly string[] }>;
+export type ReviewFinding = Readonly<{ id: string; severity: "critical" | "high" | "medium" | "low"; disposition: "accepted" | "rejected" | "informational" | "resolved"; evidenceRefs: readonly string[]; recordedAt: string }>;
+export type ReviewResult = Readonly<{ schemaVersion: 1; reviewId: string; productSha: string; reviewer: string; startedAt: string; finishedAt: string; process: Readonly<{ processId: number; sessionId: string; fresh: true }>; findings: readonly ReviewFinding[]; successful: boolean }>;
+export type FindingResolution = Readonly<{ schemaVersion: 1; findingId: string; reviewId: string; resolvedProductSha: string; resolver: string; resolvedAt: string; evidenceRefs: readonly string[] }>;
+export type EvidenceManifest = Readonly<{ issueId: string; items: readonly Readonly<{ id: string; kind: AcceptanceItem["kind"]; notApplicableEligible?: boolean }>[] }>;
+export type EvidenceDecision = Readonly<{ acceptanceFresh: boolean; reviewFresh: boolean; blockingFindingIds: readonly string[]; staleRecordIds: readonly string[]; blockers: readonly string[]; nextAction: "gather-evidence" | "resolve-finding" | "renew-acceptance-and-review" | "proceed-to-promotion-gate"; promotionEligible: boolean }>;

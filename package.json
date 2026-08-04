@@ -15,6 +15,7 @@
     "shipyard-status": "./bin/shipyard-status",
     "shipyard-sync": "./bin/shipyard-sync",
     "shipyard-help": "./bin/shipyard-help",
+    "shipyard-review": "./bin/shipyard-review",
     "shipyard-skills-install": "./bin/shipyard-skills-install"
   },
   "files": [

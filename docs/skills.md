@@ -15,7 +15,7 @@ shipyard-skills-install --target /path/to/project
 shipyard-skills-install --home "$HOME"
 ```
 
-Either command installs all four packages. `--target` defaults to the current
+Either command installs all five packages. `--target` defaults to the current
 directory when neither option is given. Do not install a second package with
 the same name: Codex may select a different discovered definition. Verify the layout with:
 
