@@ -10,6 +10,7 @@ export type CommandRuntime = Readonly<{
   locks: MutationLockService;
   profiles: GlobalProfileStore;
   setupLockPath(commonDirectory: string): string;
+  bindingMutationLockPath(): string;
 }>;
 
 /** SHIPYARD_HOME is deliberately local machine state, never repository configuration. */
@@ -22,5 +23,6 @@ export function createRuntime(home = process.env.SHIPYARD_HOME ?? join(process.e
     locks: new MutationLockService(nodeFilesystem, nodeProcess),
     profiles: new GlobalProfileStore(nodeFilesystem, home),
     setupLockPath: (commonDirectory) => join(home, "locks", `${createHash("sha256").update(commonDirectory).digest("hex")}.lock`),
+    bindingMutationLockPath: () => join(home, "locks", "binding-store.lock"),
   };
 }

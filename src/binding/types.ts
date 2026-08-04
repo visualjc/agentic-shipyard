@@ -1,30 +1,10 @@
-export type TopologyKind = "staged-pair" | "single-repository";
+import type { Binding } from "../contracts/types.js";
 
-export interface RemoteExpectation {
-  name: string;
-  url: string;
-}
+/** The store contains the public, durable Binding contract verbatim. */
+export type RepositoryBinding = Binding;
+export type RepositoryTopology = Binding["topology"];
 
-export interface RepositoryTopology {
-  kind: TopologyKind;
-  /** Development repository remote is required for both topology kinds. */
-  development: RemoteExpectation;
-  /** Required only for a staged pair; setup only validates, it never rewrites it. */
-  destination?: RemoteExpectation;
-}
-
-export interface RepositoryBinding {
-  version: 1;
-  profile: string;
-  commonDirectory: string;
-  topology: RepositoryTopology;
-  createdAt: string;
-}
-
-export interface BindingDocument {
-  version: 1;
-  bindings: RepositoryBinding[];
-}
+export interface BindingDocument { schemaVersion: 1; bindings: RepositoryBinding[]; }
 
 export interface BindingStore {
   read(): Promise<BindingDocument | undefined>;

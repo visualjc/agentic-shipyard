@@ -12,6 +12,8 @@ export function setupGuidance(error: unknown): string {
       case "topology-incomplete": return "The topology is incomplete. Provide every required remote name and URL to shipyard-setup.";
       case "topology-invalid": return "The topology is invalid. A staged pair needs distinct existing remotes; a single repository has only development.";
       case "binding-store-invalid": return "The local binding store is invalid. Restore or repair it before running shipyard-setup --rebind.";
+      case "profile-topology-mismatch": return "The requested repository topology does not match the named global profile. Verify the profile and CLI remote identity before rerunning shipyard-setup.";
+      case "profile-operation-denied": return "The named global profile does not authorize this operation. Update and review its allowed operations before rerunning shipyard-setup.";
     }
   }
   if (error instanceof ProfileStoreError) {

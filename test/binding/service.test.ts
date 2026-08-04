@@ -13,16 +13,16 @@ import { RepositoryBinding, RepositoryTopology } from "../../src/binding/types.j
 import { FakeGit, MemoryBindingStore, MemoryFilesystem } from "../helpers/fakes.js";
 
 const execFile = promisify(execFileCallback);
-const topology: RepositoryTopology = { kind: "staged-pair", development: { name: "origin", url: "https://example.test/development.git" }, destination: { name: "destination", url: "https://example.test/destination.git" } };
-const binding = (commonDirectory = "/git/main/.git"): RepositoryBinding => ({ version: 1, profile: "test", commonDirectory, topology, createdAt: "2026-08-04T00:00:00.000Z" });
+const topology: Extract<RepositoryTopology, { kind: "staged-pair" }> = { kind: "staged-pair", development: { owner: "test", name: "development", remote: { name: "origin", url: "https://example.test/development.git" }, defaultBranch: "main" }, destination: { owner: "test", name: "destination", remote: { name: "destination", url: "https://example.test/destination.git" }, defaultBranch: "main" } };
+const binding = (commonDirectory = "/git/main/.git"): RepositoryBinding => ({ schemaVersion: 1, profileName: "test", commonDirectory, topology, boundAt: "2026-08-04T00:00:00.000Z" });
 
 function configuredGit(): FakeGit {
   const git = new FakeGit();
   git.commonDirectories.set("/main", "/git/main/.git");
   git.commonDirectories.set("/linked", "/git/main/.git");
   for (const path of ["/main", "/linked"]) {
-    git.remotes.set(`${path}:origin`, topology.development.url);
-    git.remotes.set(`${path}:destination`, topology.destination!.url);
+    git.remotes.set(`${path}:origin`, topology.development.remote.url);
+    git.remotes.set(`${path}:destination`, topology.destination.remote.url);
   }
   return git;
 }
@@ -32,7 +32,7 @@ test("rejects missing, duplicate, stale, partial, and remote-mismatched bindings
     ["missing", undefined, () => {}, "repository-unbound"],
     ["duplicate", newBindingDocument([binding(), binding()]), () => {}, "binding-duplicate"],
     ["stale common directory", newBindingDocument([binding("/old/.git")]), () => {}, "repository-unbound"],
-    ["partial topology", newBindingDocument([{ ...binding(), topology: { kind: "staged-pair", development: topology.development } }]), () => {}, "topology-incomplete"],
+    ["partial topology", newBindingDocument([{ ...binding(), topology: { kind: "staged-pair", development: topology.development } as never }]), () => {}, "topology-incomplete"],
     ["remote mismatch", newBindingDocument([binding()]), (git) => git.remotes.set("/main:origin", "https://example.test/wrong.git"), "binding-remote-mismatch"],
   ];
   for (const [name, document, arrange, code] of cases) {
@@ -46,11 +46,11 @@ test("bind validates the complete topology and requires explicit rebind", async 
   const git = configuredGit();
   const store = new MemoryBindingStore();
   const service = new BindingService(store, git);
-  const candidate = { profile: "test", topology, createdAt: "2026-08-04T00:00:00.000Z" };
+  const candidate = { profileName: "test", topology, boundAt: "2026-08-04T00:00:00.000Z" };
   await service.bind("/main", candidate);
   await assert.rejects(service.bind("/main", candidate), (error: unknown) => error instanceof BindingError && error.code === "binding-stale");
   await service.bind("/main", candidate, true);
-  assert.throws(() => validateTopology({ kind: "single-repository", development: topology.development, destination: topology.destination }), (error: unknown) => error instanceof BindingError && error.code === "topology-invalid");
+  assert.throws(() => validateTopology({ kind: "staged-pair", development: topology.development, destination: topology.development }), (error: unknown) => error instanceof BindingError && error.code === "topology-invalid");
 });
 
 test("node Git adapter gives a linked worktree the main clone common-directory identity", async () => {
@@ -70,14 +70,14 @@ test("node Git adapter gives a linked worktree the main clone common-directory i
 test("binding store deep-validates hostile persisted documents", async () => {
   const valid = binding();
   const hostile = [
-    { version: 1, bindings: [{ ...valid, profile: "" }] },
-    { version: 1, bindings: [{ ...valid, createdAt: "not-a-date" }] },
-    { version: 1, bindings: [{ ...valid, surprise: true }] },
-    { version: 1, bindings: [{ ...valid, topology: { ...valid.topology, surprise: true } }] },
-    { version: 1, bindings: [{ ...valid, topology: { kind: "staged-pair", development: valid.topology.development } }] },
-    { version: 1, bindings: [{ ...valid, topology: { ...valid.topology, development: { ...valid.topology.development, name: " " } } }] },
-    { version: 1, bindings: [valid], surprise: true },
-    { version: 1, bindings: "not-an-array" },
+    { schemaVersion: 1, bindings: [{ ...valid, profileName: "" }] },
+    { schemaVersion: 1, bindings: [{ ...valid, boundAt: "not-a-date" }] },
+    { schemaVersion: 1, bindings: [{ ...valid, surprise: true }] },
+    { schemaVersion: 1, bindings: [{ ...valid, topology: { ...valid.topology, surprise: true } }] },
+    { schemaVersion: 1, bindings: [{ ...valid, topology: { kind: "staged-pair", development: topology.development } }] },
+    { schemaVersion: 1, bindings: [{ ...valid, topology: { ...topology, development: { ...topology.development, remote: { ...topology.development.remote, name: " " } } } }] },
+    { schemaVersion: 1, bindings: [valid], surprise: true },
+    { schemaVersion: 1, bindings: "not-an-array" },
   ];
   for (const candidate of hostile) {
     const fs = new MemoryFilesystem();
@@ -89,7 +89,7 @@ test("binding store deep-validates hostile persisted documents", async () => {
 test("binding store validates writes as well as reads", async () => {
   const fs = new MemoryFilesystem();
   const store = new JsonBindingStore(fs, "/bindings.json");
-  await assert.rejects(store.write({ version: 1, bindings: [{ ...binding(), createdAt: "2026-02-30T00:00:00.000Z" }] }), (error: unknown) => error instanceof BindingError && error.code === "binding-store-invalid");
+  await assert.rejects(store.write({ schemaVersion: 1, bindings: [{ ...binding(), boundAt: "2026-02-30T00:00:00.000Z" }] }), (error: unknown) => error instanceof BindingError && error.code === "binding-store-invalid");
   assert.equal(fs.files.has("/bindings.json"), false);
 });
 

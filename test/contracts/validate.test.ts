@@ -11,7 +11,7 @@ test("validates a versioned staged-pair profile without changing its topology", 
 });
 
 test("validates a single-repository binding", () => {
-  const binding = validateBinding({ schemaVersion: 1, profileName: "local", commonDirectory: "/repos/.git", topology: { kind: "single-repository", repository }, boundAt: "2026-08-04T03:00:00Z" });
+  const binding = validateBinding({ schemaVersion: 1, profileName: "local", commonDirectory: "/repos/.git", topology: { kind: "single-repository", repository }, boundAt: "2026-08-04T03:00:00.000Z" });
   assert.equal(binding.topology.kind, "single-repository");
   assert.equal(binding.commonDirectory, "/repos/.git");
 });
@@ -36,7 +36,7 @@ test("validates path policy, operations, and lifecycle timestamps", () => {
   const policy = validatePathPolicy({ schemaVersion: 1, rules: [{ owner: "product", pattern: "src/**" }, { owner: "scratch", pattern: ".tmp/**" }] });
   assert.equal(policy.rules.length, 2);
   assert.equal(validateOperation("review"), "review");
-  assert.equal(validateLifecycleState({ schemaVersion: 1, deliveryId: "D-1", phase: "awaiting-review", productSha: "abc", updatedAt: "2026-08-04T03:00:00Z" }).phase, "awaiting-review");
+  assert.equal(validateLifecycleState({ schemaVersion: 1, deliveryId: "D-1", phase: "awaiting-review", productSha: "abc", updatedAt: "2026-08-04T03:00:00.000Z" }).phase, "awaiting-review");
 });
 
 test("rejects unsafe policy and lifecycle documents", () => {

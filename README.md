@@ -24,8 +24,9 @@ Bindings are machine-local (`$SHIPYARD_HOME/bindings.json`, defaulting to
 the main clone's identity. Setup validates existing remotes but never provisions
 or rewrites them; replacing an existing binding requires `--rebind`. The named
 version 1 profile must already exist in `$SHIPYARD_HOME/profiles/<name>.json`,
-match the complete requested remote topology, and authorize setup. Setup holds
-a mutation lock keyed by common-directory identity for the binding transaction.
+match the complete requested remote topology, and authorize setup. Setup takes
+the common-directory lock first and then one Shipyard-home binding-store lock,
+so concurrent setup in different repositories cannot lose a binding update.
 
 Focused Codex skills are in `skills/shipyard*`; see [setup](docs/setup.md),
 [status](docs/status.md), [help](docs/help.md), and

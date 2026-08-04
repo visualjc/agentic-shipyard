@@ -5,7 +5,9 @@ export type BindingFailureCode =
   | "binding-stale"
   | "binding-remote-mismatch"
   | "topology-incomplete"
-  | "topology-invalid";
+  | "topology-invalid"
+  | "profile-topology-mismatch"
+  | "profile-operation-denied";
 
 /** Internal structured failure; the command layer alone turns it into user guidance. */
 export class BindingError extends Error {

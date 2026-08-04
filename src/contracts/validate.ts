@@ -48,7 +48,8 @@ function topology(value: unknown, path: string, code: "invalid-profile" | "inval
 }
 function date(value: unknown, path: string, code: "invalid-binding" | "invalid-lifecycle"): string {
   const text = nonEmpty(value, path, code);
-  if (Number.isNaN(Date.parse(text))) invalid(code, path, "must be an ISO-8601 timestamp");
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== text) invalid(code, path, "must be an ISO-8601 timestamp");
   return text;
 }
 export function validateProfile(value: unknown): Profile {

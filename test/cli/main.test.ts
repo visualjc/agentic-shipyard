@@ -95,7 +95,7 @@ test("single-repository setup derives the development binding identity from its 
     assert.equal(result.code, 0);
     const binding = JSON.parse(await readFile(join(fixture.home, "bindings.json"), "utf8"));
     assert.equal(binding.bindings[0].topology.kind, "single-repository");
-    assert.deepEqual(binding.bindings[0].topology.development, { name: "origin", url: fixture.origin });
+    assert.deepEqual(binding.bindings[0].topology.repository.remote, { name: "origin", url: fixture.origin });
   } finally { await fixture.dispose(); }
 });
 
@@ -116,6 +116,44 @@ test("a concurrent setup lock prevents a rebind writer from overwriting binding 
       assert.match(attempt.output, /blocked by another repository mutation/);
       assert.equal(await readFile(bindingPath, "utf8"), before);
     } finally { await held.release(); }
+  } finally { await fixture.dispose(); }
+});
+
+test("concurrent setup for different repositories retains both canonical bindings", async () => {
+  const first = await createRepository();
+  const second = await createRepository(false);
+  try {
+    second.home = first.home;
+    await writeProfile(second, "other");
+    const args = (fixture: typeof first, profile: string) => ["--home", first.home, "--profile", profile, "--topology", "staged-pair", "--development-name", "origin", "--development-url", fixture.origin, "--destination-name", "destination", "--destination-url", fixture.destination];
+    const [a, b] = await Promise.all([run(args(first, "demo"), "setup", first.main), run(args(second, "other"), "setup", second.main)]);
+    assert.equal([a, b].filter((result) => result.code === 0).length, 1, "one owner may proceed while the shared binding-store lock is held");
+    const blocked = a.code === 1 ? { fixture: first, profile: "demo", result: a } : { fixture: second, profile: "other", result: b };
+    assert.match(blocked.result.output, /blocked by another repository mutation/);
+    const retry = await run(args(blocked.fixture, blocked.profile), "setup", blocked.fixture.main);
+    assert.equal(retry.code, 0, retry.output);
+    const document = JSON.parse(await readFile(join(first.home, "bindings.json"), "utf8"));
+    assert.equal(document.schemaVersion, 1);
+    assert.equal(document.bindings.length, 2, "a successful cross-repository setup must never lose another binding");
+    assert.deepEqual(document.bindings.map((binding: { profileName: string }) => binding.profileName).sort(), ["demo", "other"]);
+  } finally { await first.dispose(); await second.dispose(); }
+});
+
+test("status revalidates the named profile, topology, and status authorization without locks", async () => {
+  const fixture = await createRepository();
+  try {
+    const setupArgs = ["--home", fixture.home, "--profile", "demo", "--topology", "staged-pair", "--development-name", "origin", "--development-url", fixture.origin, "--destination-name", "destination", "--destination-url", fixture.destination];
+    assert.equal((await run(setupArgs, "setup", fixture.main)).code, 0);
+    await rm(join(fixture.home, "profiles", "demo.json"));
+    const missing = await run(["--home", fixture.home], "status", fixture.main);
+    assert.equal(missing.code, 1); assert.match(missing.output, /global profile is missing/);
+    await writeProfile(fixture, "demo", { destinationUrl: "https://example.test/changed-profile.git" });
+    const changed = await run(["--home", fixture.home], "status", fixture.main);
+    assert.equal(changed.code, 1); assert.match(changed.output, /--rebind/);
+    const denied = { schemaVersion: 1, name: "demo", actor: { login: "shipyard-test" }, topology: { kind: "staged-pair", development: { owner: "test", name: "development", remote: { name: "origin", url: fixture.origin }, defaultBranch: "main" }, destination: { owner: "test", name: "destination", remote: { name: "destination", url: fixture.destination }, defaultBranch: "main" } }, allowedOperations: ["setup"] };
+    await writeFile(join(fixture.home, "profiles", "demo.json"), JSON.stringify(denied));
+    const unauthorized = await run(["--home", fixture.home], "status", fixture.main);
+    assert.equal(unauthorized.code, 1); assert.match(unauthorized.output, /does not authorize/);
   } finally { await fixture.dispose(); }
 });
 

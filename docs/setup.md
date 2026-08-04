@@ -41,7 +41,8 @@ setup-disallowing profiles block before the binding is written.
 Shipyard validates the named remotes and Git common directory, then writes its
 machine-local binding. It never provisions repositories or rewrites a remote.
 An existing binding requires explicit `--rebind`; first fix any remote mismatch
-outside Shipyard. Setup holds a mutation lock keyed by a hash of Git's common
-directory for the binding transaction. A live lock blocks another writer;
+outside Shipyard. Setup takes the common-directory mutation lock and then the
+single Shipyard-home binding-store mutation lock for every read-modify-write.
+A live lock blocks another writer;
 stale recovery uses the lock's host/process ownership rules and fails closed
 when ownership cannot be proven. See [metadata ownership](metadata-ownership.md).
