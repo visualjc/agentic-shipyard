@@ -192,6 +192,18 @@ test("bounds and redacts every ledger Git subprocess path", async (t) => {
   });
 });
 
+test("ledger command limits retain test overrides but reject ceiling bypasses and multibyte diagnostics", async () => {
+  const path = await repository(); const executable = join(path, "git-multibyte");
+  try {
+    assert.doesNotThrow(() => new GitLedgerStore(path, { commandTimeoutMs: 1, commandMaxOutputBytes: 1 }));
+    assert.throws(() => new GitLedgerStore(path, { commandTimeoutMs: 30_001 }), /fixed production ceilings/i);
+    assert.throws(() => new GitLedgerStore(path, { commandMaxOutputBytes: 1_048_577 }), /fixed production ceilings/i);
+    await writeFile(executable, `#!/bin/sh\ncase "$*" in *"rev-parse --verify --quiet refs/heads/shipyard-ledger"*) printf '${"界".repeat(600)}'; exit 2;; esac\nexec /usr/bin/git "$@"\n`); await chmod(executable, 0o700);
+    let message = ""; try { await new GitLedgerStore(path, { gitExecutable: executable }).snapshot([]); assert.fail("expected bounded diagnostic"); } catch (error) { message = String(error); }
+    assert.ok(Buffer.byteLength(message) <= 600); assert.match(message, /Git ledger operation failed/i);
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
 test("reads exact pinned ledger commits for ContextReader and fails closed for unavailable Git objects", async () => {
   const path = await repository();
   try {

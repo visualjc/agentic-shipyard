@@ -104,6 +104,17 @@ test("prepared-ref, tree-application, and ref-commit failures restore refs, inde
   });
 });
 
+test("direct adapter rejects a descendant destination that is not the proof's tracked destination", async () => {
+  const f = await fixture();
+  try {
+    const adapter = new NodeSyncGit(); const observation = await adapter.observe(f.repo, "upstream", "main", "main");
+    const hostile = await command(f.repo, ["commit-tree", `${observation.destinationSha}^{tree}`, "-p", observation.destinationSha, "-m", "hostile descendant"]);
+    await command(f.repo, ["update-ref", "refs/shipyard/hostile-destination", hostile]); const before = await exactState(f.repo);
+    await assert.rejects(adapter.fastForward(f.repo, hostile, mutationProof(observation)), /destination does not match/i);
+    assert.deepEqual(await exactState(f.repo), before);
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
+
 test("post-read-tree proof drift aborts the prepared transaction before either ref moves", async (t) => {
   for (const fact of ["dirty", "branch", "development", "tracking", "remote", "format"] as const) await t.test(fact, async () => {
     const f = await fixture(); const wrapper = join(f.root, `git-post-read-tree-${fact}`); const marker = join(f.root, "proof-drift");

@@ -14,6 +14,9 @@ const execFileAsync = promisify(execFile);
 type ProductCommitRef = Readonly<{ ref: string; commitSha: string }>;
 export type GitLedgerStoreOptions = Readonly<{ gitExecutable?: string; commandTimeoutMs?: number; commandMaxOutputBytes?: number }>;
 type CommandLimits = Readonly<{ timeoutMs: number; maxOutputBytes: number }>;
+const MAX_COMMAND_TIMEOUT_MS = 30_000;
+const MAX_COMMAND_OUTPUT_BYTES = 1_048_576;
+const KILL_TEARDOWN_TIMEOUT_MS = 1_000;
 
 /** Git object-database ledger that never checks its orphan ref out in a product worktree. */
 export class GitLedgerStore implements LedgerStore, PinnedLedgerReader, ObjectFormatAuthority {
@@ -26,9 +29,9 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader, ObjectFo
     // property on that value yields undefined, so old JavaScript callers still
     // cannot redirect the canonical ledger ref. Explicit injection is named.
     this.configuredGitExecutable = options?.gitExecutable ?? DEFAULT_NODE_GIT_EXECUTABLE;
-    const timeoutMs = options.commandTimeoutMs ?? 30_000;
-    const maxOutputBytes = options.commandMaxOutputBytes ?? 1_048_576;
-    if (![timeoutMs, maxOutputBytes].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error("Git ledger command limits must be positive safe integers.");
+    const timeoutMs = options.commandTimeoutMs ?? MAX_COMMAND_TIMEOUT_MS;
+    const maxOutputBytes = options.commandMaxOutputBytes ?? MAX_COMMAND_OUTPUT_BYTES;
+    if (![timeoutMs, maxOutputBytes].every(value => Number.isSafeInteger(value) && value > 0) || timeoutMs > MAX_COMMAND_TIMEOUT_MS || maxOutputBytes > MAX_COMMAND_OUTPUT_BYTES) throw new Error("Git ledger command limits must be positive safe integers at or below the fixed production ceilings.");
     this.command = { timeoutMs, maxOutputBytes };
   }
 
@@ -253,20 +256,30 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader, ObjectFo
   private async gitInput(args: string[], input: string): Promise<string> {
     return new Promise((resolve, reject) => {
       const child = spawn(this.gitExecutable(), ["-C", this.repositoryPath, ...args], { env: gitEnvironment() });
-      let stdout = ""; let stderr = ""; let outputBytes = 0; let finished = false; let failure: LedgerError | undefined;
-      const fail = (error: LedgerError) => { failure ??= error; if (!finished && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); };
+      let stdout = ""; let stderr = ""; let outputBytes = 0; let finished = false; let settled = false; let failure: LedgerError | undefined;
+      let timer: ReturnType<typeof setTimeout> | undefined; let teardownTimer: ReturnType<typeof setTimeout> | undefined;
+      const finish = (code?: number | null) => {
+        if (settled) return; settled = true; finished = true;
+        if (timer) clearTimeout(timer); if (teardownTimer) clearTimeout(teardownTimer);
+        failure ? reject(failure) : code === 0 ? resolve(stdout.trim()) : reject(unavailable(stderr));
+      };
+      const fail = (error: LedgerError) => {
+        failure ??= error;
+        if (!finished && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        teardownTimer ??= setTimeout(() => finish(), KILL_TEARDOWN_TIMEOUT_MS);
+      };
       const collect = (target: "stdout" | "stderr", chunk: string) => {
         outputBytes += Buffer.byteLength(chunk);
-        if (target === "stdout") stdout = (stdout + chunk).slice(0, this.command.maxOutputBytes);
-        else stderr = (stderr + chunk).slice(0, this.command.maxOutputBytes);
+        if (target === "stdout") stdout = appendBoundedUtf8(stdout, chunk, this.command.maxOutputBytes);
+        else stderr = appendBoundedUtf8(stderr, chunk, this.command.maxOutputBytes);
         if (outputBytes > this.command.maxOutputBytes) fail(new LedgerError("ledger-unavailable", "Git ledger operation exceeded its output limit and was killed."));
       };
       child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
       child.stdout.on("data", (chunk: string) => collect("stdout", chunk)); child.stderr.on("data", (chunk: string) => collect("stderr", chunk));
       child.once("error", () => fail(new LedgerError("ledger-unavailable", "Git ledger operation could not be started.")));
       child.stdin.once("error", () => fail(new LedgerError("ledger-unavailable", "Git ledger operation input closed unexpectedly.")));
-      const timer = setTimeout(() => fail(new LedgerError("ledger-unavailable", "Git ledger operation timed out and was killed.")), this.command.timeoutMs);
-      child.once("close", (code) => { finished = true; clearTimeout(timer); failure ? reject(failure) : code === 0 ? resolve(stdout.trim()) : reject(unavailable(stderr)); });
+      timer = setTimeout(() => fail(new LedgerError("ledger-unavailable", "Git ledger operation timed out and was killed.")), this.command.timeoutMs);
+      child.once("close", (code) => finish(code));
       child.stdin.end(input);
     });
   }
@@ -284,8 +297,14 @@ function gitEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 }
 
 function unavailable(stderr: string): LedgerError { const safe = boundedDiagnostic(stderr); return new LedgerError("ledger-unavailable", `Git ledger operation failed${safe ? `: ${safe}` : ""}`); }
-function boundedOutput(value: unknown, limit: number): string { return typeof value === "string" ? value.slice(0, limit) : ""; }
-function boundedDiagnostic(value: string): string { return redactGitTransportDiagnostic(value).replace(/[^\x20-\x7e\n\t]/g, "?").slice(0, 512).trim(); }
+function boundedOutput(value: unknown, limit: number): string { return typeof value === "string" ? truncateUtf8(value, limit) : ""; }
+function boundedDiagnostic(value: string): string { return truncateUtf8(redactGitTransportDiagnostic(value).replace(/[^\x20-\x7e\n\t]/g, "?"), 512).trim(); }
+function appendBoundedUtf8(current: string, chunk: string, limit: number): string { return truncateUtf8(current + chunk, limit); }
+function truncateUtf8(value: string, limit: number): string {
+  let bytes = 0; let end = 0;
+  for (const character of value) { const size = Buffer.byteLength(character); if (bytes + size > limit) break; bytes += size; end += character.length; }
+  return value.slice(0, end);
+}
 function boundedLedgerFailure(error: unknown): LedgerError {
   const failure = error as NodeJS.ErrnoException & { killed?: boolean; signal?: string; code?: unknown };
   const message = failure.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" ? "Git ledger operation exceeded its output limit and was killed."

@@ -57,6 +57,7 @@ export class NodeSyncGit implements SyncGit {
     if (await this.required(repo, ["rev-parse", "--verify", `${expectedSha}^{commit}`]) !== expectedSha) throw new Error("Staged object materialization did not preserve its exact object ID.");
   }
   async fastForward(repo: string, destination: string, proof: SyncMutationProof): Promise<void> {
+    if (destination !== proof.expectedDestinationTrackingSha) throw new Error("Fast-forward destination does not match the mutation proof; no mutation was permitted.");
     await this.assertMutationProof(repo, proof);
     const { destinationRemote: remote, developmentBranch: branch, destinationBranch, expectedDevelopmentSha: expected, expectedDestinationTrackingSha: trackingBefore } = proof;
     if (!await this.ancestor(repo, expected, destination)) throw new Error("Fast-forward ancestry changed; no ref was updated.");
