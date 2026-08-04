@@ -17,6 +17,8 @@ const CHILD_TIMEOUT_MS = 30_000;
 const CHILD_MAX_BUFFER = GRAPH_COMMAND_MAX_BYTES;
 const PRODUCT_TREE_MAX_ENTRIES = 200_000;
 const PRODUCT_TREE_MAX_BYTES = 512 * 1024 * 1024;
+// The reviewed Graphify pin may own only these exact top-level leak roots.
+const GRAPHIFY_OWNED_LEAK_ROOTS = [".graphify", "graphify-out"] as const;
 type ProductTreeEntry = Readonly<{ identity: string; signature: string; kind: "directory" | "file" | "symlink" }>;
 type ProductTreeSnapshot = Readonly<{ root: string; entries: ReadonlyMap<string, ProductTreeEntry> }>;
 const productTreeObservations = new WeakMap<object, ProductTreeSnapshot>();
@@ -95,13 +97,18 @@ function sameProductTree(left: ProductTreeSnapshot, right: ProductTreeSnapshot):
 function productEntryPath(root: string, relativePath: string): string { if (!relativePath || relativePath.startsWith("/") || relativePath.split("/").some(part => !part || part === "." || part === "..")) throw new Error("unsafe product tree path"); return join(root, ...relativePath.split("/")); }
 async function auditAndRestoreProductTree(before: ProductTreeSnapshot): Promise<"clean" | "restored" | "ambiguous" | "failed"> {
   let after: ProductTreeSnapshot; try { after = await snapshotProductTree(before.root); } catch { return "failed"; }
-  for (const [path, entry] of before.entries) if (after.entries.get(path)?.signature !== entry.signature) return "ambiguous";
-  const additions = [...after.entries].filter(([path]) => !before.entries.has(path)); if (additions.length === 0) return "clean";
+  const preExistingChange = [...before.entries].some(([path, entry]) => after.entries.get(path)?.signature !== entry.signature);
+  const additions = [...after.entries].filter(([path]) => !before.entries.has(path));
+  const ownedRoots = GRAPHIFY_OWNED_LEAK_ROOTS.filter(root => !before.entries.has(root) && after.entries.has(root));
+  if (ownedRoots.length === 0) return preExistingChange || additions.length > 0 ? "ambiguous" : "clean";
+  const ownedAdditions = additions.filter(([path]) => ownedRoots.some(root => path === root || path.startsWith(`${root}/`)));
   try {
-    for (const [relativePath, expected] of additions) { const current = await productTreeEntry(productEntryPath(before.root, relativePath), { bytes: 0 }); if (current.identity !== expected.identity || current.signature !== expected.signature) throw new Error("new product path changed before cleanup"); }
-    additions.sort(([left], [right]) => right.split("/").length - left.split("/").length || right.localeCompare(left));
-    for (const [relativePath, expected] of additions) { const path = productEntryPath(before.root, relativePath), current = await productTreeEntry(path, { bytes: 0 }); if (current.identity !== expected.identity || current.signature !== expected.signature) throw new Error("new product path changed during cleanup"); if (expected.kind === "directory") await rmdir(path); else await unlink(path); }
-    return sameProductTree(before, await snapshotProductTree(before.root)) ? "restored" : "failed";
+    for (const [relativePath, expected] of ownedAdditions) { const current = await productTreeEntry(productEntryPath(before.root, relativePath), { bytes: 0 }); if (current.identity !== expected.identity || current.signature !== expected.signature) throw new Error("owned Graphify leak changed before cleanup"); }
+    ownedAdditions.sort(([left], [right]) => right.split("/").length - left.split("/").length || right.localeCompare(left));
+    for (const [relativePath, expected] of ownedAdditions) { const path = productEntryPath(before.root, relativePath), current = await productTreeEntry(path, { bytes: 0 }); if (current.identity !== expected.identity || current.signature !== expected.signature) throw new Error("owned Graphify leak changed during cleanup"); if (expected.kind === "directory") await rmdir(path); else await unlink(path); }
+    const restored = await snapshotProductTree(before.root); if (sameProductTree(before, restored)) return "restored";
+    if (ownedRoots.some(root => restored.entries.has(root))) return "failed";
+    return "ambiguous";
   } catch { return "failed"; }
 }
 

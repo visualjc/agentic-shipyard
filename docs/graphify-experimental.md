@@ -7,12 +7,16 @@ disables query logging, sets both absolute `GRAPHIFY_OUT` and matching `--out`,
 and surrounds every seed or refresh with a bounded whole-product-tree
 observation (excluding root Git metadata). The post-operation audit detects
 arbitrary created, removed, or modified paths, not only known Graphify names.
-It removes only paths that were absent before the invocation and whose content
-and filesystem identity remain unchanged through cleanup, then resnapshots the
-tree to prove restoration. Pre-existing paths, and new paths whose identity or
-content changes again before cleanup, are never deleted as leaks. Any detected
-leak fails the operation even after successful cleanup; ambiguous changes or
-unproved cleanup require direct inspection. A
+Cleanup authority is limited to the exact top-level reviewed Graphify leak
+roots `graphify-out` and `.graphify` when the root was absent before the
+invocation. Their invocation-created contents are removed only while filesystem
+identity and content continue to match the post-operation observation.
+Pre-existing reviewed roots and arbitrary additions anywhere else are
+ownership-ambiguous, are preserved, and fail non-authoritatively for direct
+inspection. Shipyard reports the product tree as restored only when a final
+whole-tree observation exactly matches the before observation; otherwise an
+unknown addition or other ambiguous change remains a failed operation. Any
+detected leak fails the operation even after successful cleanup. A
 missing tool, failed command, stale source, or failed relocation audit likewise
 means inspect source directly; no code, query, image, or document may be sent
 to a provider.

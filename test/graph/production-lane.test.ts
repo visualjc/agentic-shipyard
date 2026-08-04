@@ -16,11 +16,11 @@ const topology = { kind: "single-repository" as const, repository: { owner: "tes
 const base = (graph?: Profile["graph"]): Profile => ({ schemaVersion: 1, name: "p", actor: { login: "actor" }, topology, allowedOperations: ["status"], pathPolicy: { schemaVersion: 1, rules: [{ owner: "product", pattern: "src/**" }] }, ...(graph ? { graph } : {}) });
 const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
 
-async function graphifyFixture(prefix: string, operation: string, prepare?: (repo: string) => Promise<void>) {
+async function graphifyFixture(prefix: string, operation: string, prepare?: (repo: string) => Promise<void>, during?: (paths: { root: string; repo: string }) => Promise<void>) {
   const root = await mkdtemp(join(tmpdir(), prefix)), repo = join(root, "repo"), home = join(root, "home"), cache = join(root, "cache"), tool = join(root, "graphify");
   execFileSync("/usr/bin/git", ["init", "-b", "main", repo]); execFileSync("/usr/bin/git", ["-C", repo, "config", "user.email", "fixture@example.test"]); execFileSync("/usr/bin/git", ["-C", repo, "config", "user.name", "Fixture"]); await mkdir(join(repo, "src")); await writeFile(join(repo, "src", "base"), "base\n"); if (prepare) await prepare(repo); execFileSync("/usr/bin/git", ["-C", repo, "add", "."]); execFileSync("/usr/bin/git", ["-C", repo, "commit", "-m", "base"]); await mkdir(cache);
   const body = `#!/bin/sh\nif [ "$1" = --version ]; then printf '0.9.32\\n'; exit 0; fi\nmkdir -p "$GRAPHIFY_OUT"\nprintf graph > "$GRAPHIFY_OUT/index"\n${operation}\n`; await writeFile(tool, body); await chmod(tool, 0o755); const canonicalTool = await realpath(tool);
-  const profile = base({ enabled: true, localOnlyApproved: true, adapter: "graphify", reviewedToolSource: GRAPHIFY_RECEIPT, artifactSha256: digest(body), executablePath: canonicalTool, cacheRoot: await realpath(cache) }); const result = await createGraphLaneService(home, "/usr/bin/git").refresh(profile, repo);
+  const profile = base({ enabled: true, localOnlyApproved: true, adapter: "graphify", reviewedToolSource: GRAPHIFY_RECEIPT, artifactSha256: digest(body), executablePath: canonicalTool, cacheRoot: await realpath(cache) }); const pending = createGraphLaneService(home, "/usr/bin/git").refresh(profile, repo); if (during) await during({ root, repo }); const result = await pending;
   return { root, repo, result };
 }
 
@@ -92,15 +92,31 @@ test("production Graphify refresh uses an external private cache and status is r
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("production Graphify audit removes known and arbitrary nested invocation leaks even when the child fails", async () => {
-  const fixture = await graphifyFixture("shipyard-graphify-leak-", "mkdir -p graphify-out\nprintf leak > graphify-out/index\nmkdir -p src/deep/arbitrary\nprintf leak > src/deep/arbitrary/artifact\nexit 7");
-  try { assert.equal(fixture.result.decision.state, "failed"); await assert.rejects(access(join(fixture.repo, "graphify-out"))); await assert.rejects(access(join(fixture.repo, "src", "deep"))); }
+test("production Graphify audit removes an absent-before reviewed leak root even when the child fails", async () => {
+  const fixture = await graphifyFixture("shipyard-graphify-leak-", "mkdir -p graphify-out\nprintf leak > graphify-out/index\nexit 7");
+  try { assert.equal(fixture.result.decision.state, "failed"); assert.match(fixture.result.decision.reason, /original tree was restored/i); await assert.rejects(access(join(fixture.repo, "graphify-out"))); }
   finally { await rm(fixture.root, { recursive: true, force: true }); }
 });
 
-test("production Graphify audit preserves a pre-existing same-path tree while removing only its new child", async () => {
+test("production Graphify audit preserves an arbitrary nested Graphify-like addition and fails closed", async () => {
+  const fixture = await graphifyFixture("shipyard-graphify-arbitrary-", "mkdir -p src/deep/.graphify\nprintf leak > src/deep/.graphify/artifact"); const artifact = join(fixture.repo, "src", "deep", ".graphify", "artifact");
+  try { assert.equal(fixture.result.decision.state, "failed"); assert.match(fixture.result.decision.reason, /ambiguous paths/i); assert.equal(await readFile(artifact, "utf8"), "leak"); }
+  finally { await rm(fixture.root, { recursive: true, force: true }); }
+});
+
+test("production Graphify audit preserves a concurrent user addition and fails closed", async () => {
+  const fixture = await graphifyFixture("shipyard-graphify-concurrent-", "mkdir -p graphify-out\nprintf leak > graphify-out/index\nprintf started > ../started\nsleep 1", undefined, async ({ root, repo }) => {
+    const signal = join(root, "started"); let observed = false;
+    for (let attempt = 0; attempt < 100; attempt++) { try { await access(signal); observed = true; break; } catch { await new Promise(resolve => setTimeout(resolve, 10)); } }
+    assert.equal(observed, true, "Graphify child did not signal that the before observation completed"); await writeFile(join(repo, "concurrent-user"), "user\n");
+  }); const addition = join(fixture.repo, "concurrent-user");
+  try { assert.equal(fixture.result.decision.state, "failed"); assert.match(fixture.result.decision.reason, /ambiguous paths/i); assert.equal(await readFile(addition, "utf8"), "user\n"); await assert.rejects(access(join(fixture.repo, "graphify-out")), "the unchanged reviewed leak root should still be cleaned"); }
+  finally { await rm(fixture.root, { recursive: true, force: true }); }
+});
+
+test("production Graphify audit preserves a pre-existing reviewed root and its new child", async () => {
   const fixture = await graphifyFixture("shipyard-graphify-existing-", "mkdir -p graphify-out\nprintf leak > graphify-out/index", async repo => { await mkdir(join(repo, "graphify-out")); await writeFile(join(repo, "graphify-out", "user-record"), "user\n"); });
-  try { assert.equal(fixture.result.decision.state, "failed"); assert.equal(await readFile(join(fixture.repo, "graphify-out", "user-record"), "utf8"), "user\n"); await assert.rejects(access(join(fixture.repo, "graphify-out", "index"))); }
+  try { assert.equal(fixture.result.decision.state, "failed"); assert.match(fixture.result.decision.reason, /ambiguous paths/i); assert.equal(await readFile(join(fixture.repo, "graphify-out", "user-record"), "utf8"), "user\n"); assert.equal(await readFile(join(fixture.repo, "graphify-out", "index"), "utf8"), "leak"); }
   finally { await rm(fixture.root, { recursive: true, force: true }); }
 });
 
@@ -111,7 +127,7 @@ test("production Graphify audit blocks without deleting a pre-existing file whos
 });
 
 test("production Graphify audit fails closed and preserves an invocation leak when cleanup cannot be proven", async () => {
-  const fixture = await graphifyFixture("shipyard-graphify-cleanup-", "mkdir -p cleanup-blocked\nprintf leak > cleanup-blocked/artifact\nchmod 0555 cleanup-blocked"); const blocked = join(fixture.repo, "cleanup-blocked");
+  const fixture = await graphifyFixture("shipyard-graphify-cleanup-", "mkdir -p graphify-out\nprintf leak > graphify-out/artifact\nchmod 0555 graphify-out"); const blocked = join(fixture.repo, "graphify-out");
   try { assert.equal(fixture.result.decision.state, "failed"); await access(join(blocked, "artifact")); }
   finally { try { await chmod(blocked, 0o755); } catch {} await rm(fixture.root, { recursive: true, force: true }); }
 });
