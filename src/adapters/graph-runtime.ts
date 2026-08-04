@@ -1,7 +1,7 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { cp, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, open, opendir, readFile, readdir, readlink, realpath, rename, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { canonicalGitExecutable, DEFAULT_NODE_GIT_EXECUTABLE, sanitizedGitEnvironment } from "./git-transport.js";
@@ -15,6 +15,11 @@ import { validateGraphLock } from "../graph/validation.js";
 const execFileAsync = promisify(execFile);
 const CHILD_TIMEOUT_MS = 30_000;
 const CHILD_MAX_BUFFER = GRAPH_COMMAND_MAX_BYTES;
+const PRODUCT_TREE_MAX_ENTRIES = 200_000;
+const PRODUCT_TREE_MAX_BYTES = 512 * 1024 * 1024;
+type ProductTreeEntry = Readonly<{ identity: string; signature: string; kind: "directory" | "file" | "symlink" }>;
+type ProductTreeSnapshot = Readonly<{ root: string; entries: ReadonlyMap<string, ProductTreeEntry> }>;
+const productTreeObservations = new WeakMap<object, ProductTreeSnapshot>();
 
 export function createNodeLocalGraphCommand(requested: { timeoutMs?: number; maxBytes?: number } = {}): LocalGraphCommand {
   const timeoutMs = Number.isSafeInteger(requested.timeoutMs) && (requested.timeoutMs ?? 0) > 0 ? Math.min(requested.timeoutMs!, CHILD_TIMEOUT_MS) : CHILD_TIMEOUT_MS;
@@ -64,13 +69,53 @@ async function sha256File(path: string): Promise<string> { return new Promise((r
 async function graphTreeDigest(root: string): Promise<string> { const hash = createHash("sha256"); let entries = 0; const walk = async (path: string, relativePath: string): Promise<void> => { if (++entries > 1_000_000) throw new Error("graph content entry limit exceeded"); const info = await lstat(path), mode = info.mode & 0o777; if (info.isSymbolicLink()) throw new Error("graph content cannot contain symlinks"); if (info.isDirectory()) { hash.update(`d\0${relativePath}\0${mode}\0`); for (const name of (await readdir(path)).sort()) await walk(join(path, name), relativePath ? `${relativePath}/${name}` : name); return; } if (!info.isFile()) throw new Error("unsupported graph content type"); hash.update(`f\0${relativePath}\0${mode}\0${info.size}\0`); for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer); hash.update("\0"); }; await walk(root, ""); return hash.digest("hex"); }
 function snapshotExpectation(value: GraphArtifactExpectation): GraphArtifactExpectation | undefined { try { const d = Object.getOwnPropertyDescriptors(value); if (Object.keys(d).sort().join(",") !== "artifactSha256,sourceReceipt" || Object.values(d).some(field => !("value" in field))) return undefined; const receipt = d.sourceReceipt.value, digest = d.artifactSha256.value; return typeof receipt === "string" && receipt.length <= 512 && typeof digest === "string" && /^[0-9a-f]{64}$/.test(digest) ? { sourceReceipt: receipt, artifactSha256: digest } : undefined; } catch { return undefined; } }
 
+async function snapshotProductTree(root: string): Promise<ProductTreeSnapshot> {
+  const entries = new Map<string, ProductTreeEntry>(), budget = { entries: 0, bytes: 0 };
+  const walk = async (path: string, relativePath: string): Promise<void> => {
+    if (++budget.entries > PRODUCT_TREE_MAX_ENTRIES) throw new Error("product tree entry limit exceeded");
+    const entry = await productTreeEntry(path, budget); entries.set(relativePath, entry);
+    if (entry.kind !== "directory") return;
+    const directory = await opendir(path); for await (const item of directory) { const name = item.name; if (relativePath === "" && name === ".git") continue; await walk(join(path, name), relativePath ? `${relativePath}/${name}` : name); }
+  };
+  await walk(root, ""); return Object.freeze({ root, entries });
+}
+
+async function productTreeEntry(path: string, budget: { bytes: number }): Promise<ProductTreeEntry> {
+  const info = await lstat(path, { bigint: true }), mode = Number(info.mode & 0o777n), baseIdentity = `${info.dev}:${info.ino}`;
+  const identity = info.isDirectory() ? baseIdentity : `${baseIdentity}:${info.ctimeNs}`;
+  if (info.isDirectory()) return Object.freeze({ identity, signature: `d\0${mode}`, kind: "directory" });
+  if (info.isSymbolicLink()) { const target = await readlink(path); budget.bytes += Buffer.byteLength(target); if (budget.bytes > PRODUCT_TREE_MAX_BYTES) throw new Error("product tree byte limit exceeded"); const after = await lstat(path, { bigint: true }); if (`${after.dev}:${after.ino}:${after.ctimeNs}` !== identity) throw new Error("product symlink changed during observation"); return Object.freeze({ identity, signature: `l\0${mode}\0${target}`, kind: "symlink" }); }
+  if (!info.isFile()) throw new Error("unsupported product tree entry");
+  const size = Number(info.size); if (!Number.isSafeInteger(size) || size < 0) throw new Error("unsupported product file size"); budget.bytes += size; if (budget.bytes > PRODUCT_TREE_MAX_BYTES) throw new Error("product tree byte limit exceeded");
+  const hash = createHash("sha256"); let bytes = 0; for await (const chunk of createReadStream(path)) { bytes += (chunk as Buffer).byteLength; if (bytes > size) throw new Error("product file grew during observation"); hash.update(chunk as Buffer); } const after = await lstat(path, { bigint: true }); if (bytes !== size || `${after.dev}:${after.ino}:${after.ctimeNs}` !== identity || after.size !== info.size) throw new Error("product tree changed during observation");
+  return Object.freeze({ identity, signature: `f\0${mode}\0${size}\0${hash.digest("hex")}`, kind: "file" });
+}
+
+function sameProductTree(left: ProductTreeSnapshot, right: ProductTreeSnapshot): boolean { if (left.root !== right.root || left.entries.size !== right.entries.size) return false; for (const [path, entry] of left.entries) if (right.entries.get(path)?.signature !== entry.signature) return false; return true; }
+function productEntryPath(root: string, relativePath: string): string { if (!relativePath || relativePath.startsWith("/") || relativePath.split("/").some(part => !part || part === "." || part === "..")) throw new Error("unsafe product tree path"); return join(root, ...relativePath.split("/")); }
+async function auditAndRestoreProductTree(before: ProductTreeSnapshot): Promise<"clean" | "restored" | "ambiguous" | "failed"> {
+  let after: ProductTreeSnapshot; try { after = await snapshotProductTree(before.root); } catch { return "failed"; }
+  for (const [path, entry] of before.entries) if (after.entries.get(path)?.signature !== entry.signature) return "ambiguous";
+  const additions = [...after.entries].filter(([path]) => !before.entries.has(path)); if (additions.length === 0) return "clean";
+  try {
+    for (const [relativePath, expected] of additions) { const current = await productTreeEntry(productEntryPath(before.root, relativePath), { bytes: 0 }); if (current.identity !== expected.identity || current.signature !== expected.signature) throw new Error("new product path changed before cleanup"); }
+    additions.sort(([left], [right]) => right.split("/").length - left.split("/").length || right.localeCompare(left));
+    for (const [relativePath, expected] of additions) { const path = productEntryPath(before.root, relativePath), current = await productTreeEntry(path, { bytes: 0 }); if (current.identity !== expected.identity || current.signature !== expected.signature) throw new Error("new product path changed during cleanup"); if (expected.kind === "directory") await rmdir(path); else await unlink(path); }
+    return sameProductTree(before, await snapshotProductTree(before.root)) ? "restored" : "failed";
+  } catch { return "failed"; }
+}
+
+/** Defense in depth for stored baselines; live Graphify operations use the whole-tree audit above. */
+export async function hasKnownProductGraphifyLeak(root: string): Promise<boolean> { return await pathExists(join(root, "graphify-out")) || await pathExists(join(root, ".graphify")); }
+
 export function createNodeGraphFiles(gitExecutable = DEFAULT_NODE_GIT_EXECUTABLE): GraphifyFiles & CodeGraphFiles {
   const git = canonicalGitExecutable(gitExecutable);
   return {
     async canonicalPath(path) { try { return await canonicalPath(path); } catch { return undefined; } },
     async exists(path) { try { await lstat(path); return true; } catch (error: unknown) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; } },
     async contentDigest(path) { return graphTreeDigest(path); },
-    async productGraphifyLeak(root) { return await exists(join(root, "graphify-out")) || await exists(join(root, ".graphify")); },
+    async observeProductTree(root) { const canonical = await realpath(root), snapshot = await snapshotProductTree(canonical), token = Object.freeze({}); productTreeObservations.set(token, snapshot); return token; },
+    async auditProductTree(root, observation) { if (!observation || typeof observation !== "object") return { state: "failed" }; const before = productTreeObservations.get(observation); productTreeObservations.delete(observation); let canonical: string; try { canonical = await realpath(root); } catch { return { state: "failed" }; } if (!before || canonical !== before.root) return { state: "failed" }; return { state: await auditAndRestoreProductTree(before) }; },
     async copy(from, to) { await cp(from, to, { recursive: true, errorOnExist: true, force: false }); },
     async remove(path) { await rm(path, { recursive: true, force: true }); },
     async addMachineLocalExclude(root, entry) {
@@ -104,6 +149,6 @@ export async function removeGraphDescriptor(path: string): Promise<void> { await
 async function canonicalExecutable(path: string): Promise<string> { if (!isAbsolute(path) || resolve(path) !== path) throw new Error(); const value = await realpath(path); if (!(await stat(value)).isFile()) throw new Error(); return value; }
 async function canonicalPath(path: string): Promise<string> { if (!isAbsolute(path) || resolve(path) !== path) throw new Error(); try { return await realpath(path); } catch (error: unknown) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; return join(await realpath(dirname(path)), basename(path)); } }
 async function boundedText(path: string): Promise<string | undefined> { try { const value = await readFile(path); if (value.byteLength > 16 * 1024) throw new Error("local graph record exceeds its size limit"); return value.toString("utf8"); } catch (error: unknown) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; } }
-async function exists(path: string): Promise<boolean> { try { await lstat(path); return true; } catch (error: unknown) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; } }
+async function pathExists(path: string): Promise<boolean> { try { await lstat(path); return true; } catch (error: unknown) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; } }
 async function gitText(git: string, cwd: string, args: readonly string[]): Promise<string> { const result = await gitResult(git, cwd, args); if (result.code !== 0) throw new Error("local Git observation failed"); return result.stdout.trim(); }
 async function gitResult(git: string, cwd: string, args: readonly string[]) { try { const result = await execFileAsync(git, ["-C", cwd, ...args], { encoding: "utf8", timeout: 10_000, maxBuffer: 256 * 1024, env: sanitizedGitEnvironment({ GIT_TERMINAL_PROMPT: "0" }) }); return { code: 0, stdout: result.stdout, stderr: result.stderr }; } catch (error: unknown) { const e = error as { code?: number }; return { code: typeof e.code === "number" ? e.code : 1, stdout: "", stderr: "" }; } }

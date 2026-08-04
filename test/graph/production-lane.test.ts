@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -15,6 +15,14 @@ import { createGraphLaneServiceForTesting } from "../../src/graph/service.js";
 const topology = { kind: "single-repository" as const, repository: { owner: "test", name: "repo", remote: { name: "origin", url: "https://example.test/repo.git" }, defaultBranch: "main" } };
 const base = (graph?: Profile["graph"]): Profile => ({ schemaVersion: 1, name: "p", actor: { login: "actor" }, topology, allowedOperations: ["status"], pathPolicy: { schemaVersion: 1, rules: [{ owner: "product", pattern: "src/**" }] }, ...(graph ? { graph } : {}) });
 const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
+
+async function graphifyFixture(prefix: string, operation: string, prepare?: (repo: string) => Promise<void>) {
+  const root = await mkdtemp(join(tmpdir(), prefix)), repo = join(root, "repo"), home = join(root, "home"), cache = join(root, "cache"), tool = join(root, "graphify");
+  execFileSync("/usr/bin/git", ["init", "-b", "main", repo]); execFileSync("/usr/bin/git", ["-C", repo, "config", "user.email", "fixture@example.test"]); execFileSync("/usr/bin/git", ["-C", repo, "config", "user.name", "Fixture"]); await mkdir(join(repo, "src")); await writeFile(join(repo, "src", "base"), "base\n"); if (prepare) await prepare(repo); execFileSync("/usr/bin/git", ["-C", repo, "add", "."]); execFileSync("/usr/bin/git", ["-C", repo, "commit", "-m", "base"]); await mkdir(cache);
+  const body = `#!/bin/sh\nif [ "$1" = --version ]; then printf '0.9.32\\n'; exit 0; fi\nmkdir -p "$GRAPHIFY_OUT"\nprintf graph > "$GRAPHIFY_OUT/index"\n${operation}\n`; await writeFile(tool, body); await chmod(tool, 0o755); const canonicalTool = await realpath(tool);
+  const profile = base({ enabled: true, localOnlyApproved: true, adapter: "graphify", reviewedToolSource: GRAPHIFY_RECEIPT, artifactSha256: digest(body), executablePath: canonicalTool, cacheRoot: await realpath(cache) }); const result = await createGraphLaneService(home, "/usr/bin/git").refresh(profile, repo);
+  return { root, repo, result };
+}
 
 test("disabled production graph status makes no source or lock calls", async () => {
   let calls = 0; const service = createGraphLaneServiceForTesting("/tmp/shipyard-disabled", "/usr/bin/git", { reader: { canonicalWorktree: async () => { calls++; return undefined; }, worktreeInstanceId: async () => undefined, headSha: async () => undefined, worktreeStatus: async () => undefined }, lockStore: { read: async () => { calls++; return undefined; }, createExclusive: async () => false, removeVerified: async () => false } });
@@ -82,6 +90,30 @@ test("production Graphify refresh uses an external private cache and status is r
     const refreshed = await service.refresh(profile, repo); assert.equal(refreshed.decision.state, "fresh", refreshed.decision.reason); const external = profile.graph?.enabled && profile.graph.adapter === "graphify" ? profile.graph.cacheRoot : cache; assert.ok(refreshed.descriptor?.cacheRoot.startsWith(`${external}/`)); assert.equal(refreshed.descriptor?.worktreeRoot.startsWith(external), false);
     const source = await snapshotGraphSource(createGitGraphSourceReader("/usr/bin/git"), repo); const descriptorFile = graphDescriptorPath(home, "graphify", source.worktreeInstanceId); const before = await readFile(descriptorFile, "utf8"); const status = await service.status(profile, repo); assert.equal(status.decision.state, "fresh"); assert.equal(await readFile(descriptorFile, "utf8"), before);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("production Graphify audit removes known and arbitrary nested invocation leaks even when the child fails", async () => {
+  const fixture = await graphifyFixture("shipyard-graphify-leak-", "mkdir -p graphify-out\nprintf leak > graphify-out/index\nmkdir -p src/deep/arbitrary\nprintf leak > src/deep/arbitrary/artifact\nexit 7");
+  try { assert.equal(fixture.result.decision.state, "failed"); await assert.rejects(access(join(fixture.repo, "graphify-out"))); await assert.rejects(access(join(fixture.repo, "src", "deep"))); }
+  finally { await rm(fixture.root, { recursive: true, force: true }); }
+});
+
+test("production Graphify audit preserves a pre-existing same-path tree while removing only its new child", async () => {
+  const fixture = await graphifyFixture("shipyard-graphify-existing-", "mkdir -p graphify-out\nprintf leak > graphify-out/index", async repo => { await mkdir(join(repo, "graphify-out")); await writeFile(join(repo, "graphify-out", "user-record"), "user\n"); });
+  try { assert.equal(fixture.result.decision.state, "failed"); assert.equal(await readFile(join(fixture.repo, "graphify-out", "user-record"), "utf8"), "user\n"); await assert.rejects(access(join(fixture.repo, "graphify-out", "index"))); }
+  finally { await rm(fixture.root, { recursive: true, force: true }); }
+});
+
+test("production Graphify audit blocks without deleting a pre-existing file whose modification is ambiguous", async () => {
+  const fixture = await graphifyFixture("shipyard-graphify-ambiguous-", "mkdir -p graphify-out\nprintf leak > graphify-out/index", async repo => { await mkdir(join(repo, "graphify-out")); await writeFile(join(repo, "graphify-out", "index"), "user\n"); }); const path = join(fixture.repo, "graphify-out", "index");
+  try { assert.equal(fixture.result.decision.state, "failed"); assert.match(fixture.result.decision.reason, /ambiguous/i); await access(path); assert.equal(await readFile(path, "utf8"), "leak"); }
+  finally { await rm(fixture.root, { recursive: true, force: true }); }
+});
+
+test("production Graphify audit fails closed and preserves an invocation leak when cleanup cannot be proven", async () => {
+  const fixture = await graphifyFixture("shipyard-graphify-cleanup-", "mkdir -p cleanup-blocked\nprintf leak > cleanup-blocked/artifact\nchmod 0555 cleanup-blocked"); const blocked = join(fixture.repo, "cleanup-blocked");
+  try { assert.equal(fixture.result.decision.state, "failed"); await access(join(blocked, "artifact")); }
+  finally { try { await chmod(blocked, 0o755); } catch {} await rm(fixture.root, { recursive: true, force: true }); }
 });
 
 test("production CodeGraph files establish exclusion and detect tracked cache state", async () => {

@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { createNodeGraphFiles, createNodeLocalGraphCommand, graphDescriptorPath, NodeGraphLockStore, readGraphDescriptorText } from "../adapters/graph-runtime.js";
+import { createNodeGraphFiles, createNodeLocalGraphCommand, graphDescriptorPath, hasKnownProductGraphifyLeak, NodeGraphLockStore, readGraphDescriptorText } from "../adapters/graph-runtime.js";
 import { canonicalGitExecutable, DEFAULT_NODE_GIT_EXECUTABLE, sanitizedGitEnvironment } from "../adapters/git-transport.js";
 import { nodeProcess } from "../adapters/process.js";
 import type { Profile } from "../contracts/types.js";
@@ -75,7 +75,7 @@ export async function authorizeGitGraphBaseline(request: GitGraphBaselineRequest
     const files = createNodeGraphFiles(executable), command = createNodeLocalGraphCommand();
     if (!decision && descriptor && profile.graph.adapter === "graphify") {
       const expectedCache = join(profile.graph.cacheRoot, createHash("sha256").update(main.worktreeInstanceId).digest("hex")); const cache = await files.canonicalPath(descriptor.cacheRoot); const observation = await observeGraphArtifact(command, profile.graph.executablePath, profile.graph.reviewedToolSource, profile.graph.artifactSha256);
-      if (descriptor.cacheRoot !== expectedCache || cache !== expectedCache || !observation || !await files.exists(join(cache, "graphify-out")) || await files.productGraphifyLeak(main.worktreeRoot) || await files.contentDigest(join(cache, "graphify-out")) !== descriptor.contentSha256) decision = graphDecision("invalid", "Shipyard-owned Graphify baseline cache failed artifact/content verification.");
+      if (descriptor.cacheRoot !== expectedCache || cache !== expectedCache || !observation || !await files.exists(join(cache, "graphify-out")) || await hasKnownProductGraphifyLeak(main.worktreeRoot) || await files.contentDigest(join(cache, "graphify-out")) !== descriptor.contentSha256) decision = graphDecision("invalid", "Shipyard-owned Graphify baseline cache failed artifact/content verification.");
     }
     if (!decision && descriptor && profile.graph.adapter === "codegraph") {
       const cache = await files.canonicalPath(descriptor.cacheRoot), tool = await observeGraphArtifact(command, profile.graph.executablePath, profile.graph.reviewedToolSource, profile.graph.artifactSha256), runtime = await observeGraphArtifact(command, profile.graph.nodeExecutablePath, "node:sqlite-fts5", profile.graph.nodeArtifactSha256);

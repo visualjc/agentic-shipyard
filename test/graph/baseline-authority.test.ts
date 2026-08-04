@@ -42,7 +42,7 @@ test("only live Git plus the exact Shipyard-owned descriptor, cache, and artifac
     const staleContent = await authorizeGitGraphBaseline(request, "/usr/bin/git"); assert.notEqual(staleContent.decision.state, "fresh"); assert.equal(staleContent.authorization, undefined, "cache bytes must match the content digest sealed during refresh");
 
     let touched = false; const forged: GraphBaseline = { source: main, descriptor: refreshed.descriptor, authoritativeRef: "refs/heads/main", resolvedSha: main.headSha, objectFormat: "sha1", clean: true };
-    const rejected = await seedGraphify(feature, forged as never, { enabled: true, localOnlyApproved: true, reviewedToolSource: GRAPHIFY_RECEIPT, artifactSha256, cacheRoot: "/tmp/forged", executablePath: "/bin/false", command: { observe: async () => { touched = true; }, run: async () => ({}) }, files: { canonicalPath: async path => path, exists: async () => false, productGraphifyLeak: async () => false, contentDigest: async () => sha256("") } });
+    const rejected = await seedGraphify(feature, forged as never, { enabled: true, localOnlyApproved: true, reviewedToolSource: GRAPHIFY_RECEIPT, artifactSha256, cacheRoot: "/tmp/forged", executablePath: "/bin/false", command: { observe: async () => { touched = true; }, run: async () => ({}) }, files: { canonicalPath: async path => path, exists: async () => false, observeProductTree: async () => ({}), auditProductTree: async () => ({ state: "clean" }), contentDigest: async () => sha256("") } });
     assert.equal(rejected.decision.state, "invalid"); assert.equal(touched, false, "structural baseline lookalikes must never reach graph ports");
   } finally { await rm(temporary, { recursive: true, force: true }); }
 });
