@@ -60,6 +60,26 @@ test("creates, resumes after interruption, and recreates a missing linked Git wo
   } finally { await dispose(value); }
 });
 
+test("rejects a registered delivery whose removed linked worktree also lost its feature ref without mutating durable state", async () => {
+  const value = await fixture();
+  try {
+    const request = value.request("d-missing-ref");
+    await value.service.createOrResume(request);
+    await git(request.worktreePath, ["commit", "--allow-empty", "-m", "later delivery history"]);
+    const registryBefore = await value.registry.read();
+    const ledgerBefore = await value.ledger.snapshot([request.initialLedgerPath]);
+
+    await git(value.repository, ["worktree", "remove", request.worktreePath]);
+    await git(value.repository, ["branch", "-D", request.branch]);
+
+    await assert.rejects(value.service.createOrResume(request), (error: unknown) => error instanceof WorkspaceError && error.code === "workspace-conflict");
+    assert.equal(await nodeWorkspaceGit.branchExists(value.repository, request.branch), false);
+    assert.equal(await nodeWorkspaceGit.worktreeExists(request.worktreePath), false);
+    assert.deepEqual(await value.registry.read(), registryBefore);
+    assert.deepEqual(await value.ledger.snapshot([request.initialLedgerPath]), ledgerBefore);
+  } finally { await dispose(value); }
+});
+
 test("refuses an arbitrary existing directory or a mismatched linked-worktree identity", async () => {
   const value = await fixture();
   try {

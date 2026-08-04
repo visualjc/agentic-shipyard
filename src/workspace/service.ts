@@ -84,6 +84,12 @@ export class WorkspaceService {
       if (!provenance || !sameProvenance(provenance, request, actualCommonDirectory)) {
         throw new WorkspaceError("workspace-ledger-conflict", "The durable initial ledger record conflicts with this delivery.");
       }
+      // The registry is an active claim on this branch. If that claim remains
+      // after its ref disappears, creating from the initial SHA would discard
+      // any later branch history, so require explicit conflict resolution.
+      if (matches.length === 1 && !branchExists) {
+        throw new WorkspaceError("workspace-conflict", "The registered canonical feature branch is missing.");
+      }
       // Without a registry entry, a pre-existing branch is recoverable only
       // when the expected linked worktree proves this delivery already created
       // it. Matching the recorded start object alone cannot attribute a branch

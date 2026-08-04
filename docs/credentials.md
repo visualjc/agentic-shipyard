@@ -71,7 +71,8 @@ The executable fixture harness is enabled only with
 repository that exactly matches `SHIPYARD_PRIVATE_GITHUB_REPOSITORY` and
 `SHIPYARD_PRIVATE_GITHUB_APPROVED_REPOSITORY`, the documented mutation
 acknowledgement, token, expected actor, existing head/base refs, and exact
-40-hex head SHA. It uses the production REST transport and guarded tracker to
+canonical lowercase 40- or 64-hex head SHA. It uses the production REST
+transport and guarded tracker to
 verify `/user`, create the marked issue/PR pair, and prove idempotent discovery
 before cleanup. It is skipped by the normal test command, makes zero
 default-suite network calls, never invokes `gh`, and refuses NativeInteractive

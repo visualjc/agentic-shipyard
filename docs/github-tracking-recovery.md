@@ -41,7 +41,8 @@ The executable private fixture is skipped unless
 `SHIPYARD_PRIVATE_GITHUB_REPOSITORY` and
 `SHIPYARD_PRIVATE_GITHUB_APPROVED_REPOSITORY`, the acknowledgement
 `SHIPYARD_PRIVATE_GITHUB_MUTATION_ACKNOWLEDGEMENT=I_ACKNOWLEDGE_DISPOSABLE_GITHUB_MUTATIONS`,
-token, expected actor, existing head ref, base ref, and 40-hex head SHA.
+token, expected actor, existing head ref, base ref, and canonical lowercase
+40- or 64-hex head SHA.
 `NativeInteractive/*` is always rejected. The approved disposable repository
 must already contain that head branch at that SHA. The fixture creates exactly
 one marked development issue/PR through `trackDevelopmentRecords`, proves the
