@@ -68,6 +68,8 @@ test("packed package contains runnable public API, commands, skills, and focused
     "docs/staged-promotion.md",
     "docs/staged-finalization.md",
     "docs/recovery.md",
+    "docs/single-repository.md",
+    "docs/single-repository-recovery.md",
     "docs/metadata-ownership.md",
     "docs/skills.md",
   ];
@@ -78,7 +80,7 @@ test("packed package contains runnable public API, commands, skills, and focused
 
 test("public package API excludes raw REST and credentialed Git runner bypasses", async () => {
   const api = await import("../../src/index.js");
-  for (const name of ["GitHubRestAdapter", "FetchGitHubRestTransport", "createNodeGitTransportCommandRunner", "nodeGitTransportCommandRunner", "DEFAULT_NODE_GIT_EXECUTABLE", "NodeSyncGit", "NodeStagedPromotionGit", "GitHubStagedProviderAuthority", "NodeFinalizationGitAuthority", "RegistryOwnedWorkspaceCleanup", "ReviewDispatcher", "TrustedReviewDispatcher", "CodexReviewAdapter", "nodeEphemeralProcessRunner", "AcceptanceReviewService", "evaluatePinnedEvidenceGate", "resolvePinnedEvidenceRefs", "persistEvidence"])
+  for (const name of ["GitHubRestAdapter", "FetchGitHubRestTransport", "createNodeGitTransportCommandRunner", "nodeGitTransportCommandRunner", "DEFAULT_NODE_GIT_EXECUTABLE", "NodeSyncGit", "NodeStagedPromotionGit", "GitHubStagedProviderAuthority", "NodeFinalizationGitAuthority", "RegistryOwnedWorkspaceCleanup", "NodeSingleRepositoryProductAuthority", "GitHubSingleRepositoryProviderAuthority", "NodeSingleRepositoryFinalizationGitAuthority", "ReviewDispatcher", "TrustedReviewDispatcher", "CodexReviewAdapter", "nodeEphemeralProcessRunner", "AcceptanceReviewService", "evaluatePinnedEvidenceGate", "resolvePinnedEvidenceRefs", "persistEvidence"])
     assert.equal(name in api, false, `${name} must remain internal`);
   assert.equal("GitTransportService" in api, true);
   assert.equal("createTrustedCodexReviewOperation" in api, true);
@@ -86,6 +88,8 @@ test("public package API excludes raw REST and credentialed Git runner bypasses"
   assert.equal("createTrustedFindingResolutionWriter" in api, true);
   assert.equal("createTrustedStagedPromotionOperation" in api, true);
   assert.equal("createTrustedStagedFinalizationOperation" in api, true);
+  assert.equal("createTrustedSingleRepositoryCertificationOperation" in api, true);
+  assert.equal("createTrustedSingleRepositoryFinalizationOperation" in api, true);
 });
 
 test("public type surface lets a consumer implement the workspace Git port", async () => {
@@ -94,13 +98,15 @@ test("public type surface lets a consumer implement the workspace Git port", asy
     const entry = join(packageRoot, "dist", "src", "index.js");
     const fixture = join(sandbox, "consumer.mts");
     await writeFile(fixture, [
-      `import type { WorkspaceGit, WorktreeEnsureIntent } from ${JSON.stringify(entry)};`,
+      `import type { SingleRepositoryRecoveryGitSession, WorkspaceGit, WorktreeEnsureIntent } from ${JSON.stringify(entry)};`,
       "const intent: WorktreeEnsureIntent = { mode: \"create\", startSha: \"a\".repeat(40) };",
       "const port: Pick<WorkspaceGit, \"ensureWorktree\"> = {",
       "  async ensureWorktree(_repositoryPath, _branch, _path, received) {",
       "    return received.mode === intent.mode;",
       "  },",
       "};",
+      "declare const recovery: SingleRepositoryRecoveryGitSession;",
+      "void recovery;",
       "void port;",
     ].join("\n"), "utf8");
     await execFileAsync(join(packageRoot, "node_modules", ".bin", "tsc"), ["--noEmit", "--module", "NodeNext", "--moduleResolution", "NodeNext", "--target", "ES2022", "--strict", fixture], { encoding: "utf8" });

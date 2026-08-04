@@ -19,3 +19,5 @@ Shipyard does not repair these states with merge, rebase, reset, amend, force-pu
 ## Test boundary
 
 Issue #7 is verified with deterministic fake-provider and disposable local Git fixtures. Authenticated execution against a private synthetic GitHub repository remains unauthorized and was skipped. A future live probe requires a separately reviewed, code-owned repository/actor allowlist; the retired private fixture must not be reused, renamed, or deleted.
+
+The single-repository topology uses the same exact-state journal, deletion-intent, merge-verification, main-CAS, owned-cleanup, and seal-last rules without emulating a second PR or destination branch. See [single-repository recovery](single-repository-recovery.md) for its topology-specific dossier, ready-state, issue, and one-branch checkpoints.

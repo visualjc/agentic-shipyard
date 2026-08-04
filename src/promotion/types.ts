@@ -59,6 +59,9 @@ export type PromotionManifest = Readonly<{
 
 export type PromotionJournalStep =
   | "destination-branch-published" | "destination-pr-created" | "destination-pr-updated"
+  | "single-repository-dossier-updated" | "single-repository-pr-certified" | "single-repository-issue-closed"
+  | "single-repository-workspace-cleanup-started" | "single-repository-workspace-cleanup-completed"
+  | "single-repository-branch-delete-started" | "single-repository-branch-deleted"
   | "final-intent-recorded" | "reviewed-tag-published" | "development-main-synchronized"
   | "development-pr-closed" | "development-issue-closed" | "development-branch-deleted"
   | "development-branch-delete-started" | "destination-branch-delete-started"

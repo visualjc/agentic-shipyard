@@ -10,4 +10,4 @@ export interface FinalizationGitSession {
   release():Promise<void>;
 }
 export interface FinalizationGitAuthority {open(request:Readonly<{repositoryPath:string;actorLogin:string;development:RepositoryRef;destination:RepositoryRef;developmentBranch:string;destinationBranch:string;expectedMergeSha:string;expectedFinalDevelopmentSha:string;expectedFinalDestinationSha:string}>):Promise<FinalizationGitSession>;}
-export interface OwnedWorkspaceCleanup {removeOwned(request:Readonly<{repositoryPath:string;deliveryId:string;expectedBranch:string;expectedSha:string}>):Promise<void>;}
+export interface OwnedWorkspaceCleanup {removeOwned(request:Readonly<{repositoryPath:string;deliveryId:string;expectedBranch:string;expectedSha:string;expectedCreationToken?:string;expectedWorktreePath?:string}>):Promise<void>;}

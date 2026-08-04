@@ -1,0 +1,78 @@
+import { canonicalJson } from "../evidence/schema.js";
+import { stableDeliveryId } from "../delivery/registry.js";
+import { stableShipyardMarker } from "../github/markers.js";
+import type { PromotionEvidencePin } from "../promotion/types.js";
+import { SingleRepositoryError } from "./errors.js";
+import type { SingleRepositoryCertification, SingleRepositoryFinalizationIntent, SingleRepositoryFinalizationReceipt, SingleRepositoryManifest, SingleRepositoryPullRequest, SingleRepositoryTrackedIssue } from "./types.js";
+
+const PHASES = new Set(["certifying", "awaiting-human-merge", "finalizing", "complete"]);
+
+export function singleRepositoryManifestContents(value: SingleRepositoryManifest): string { return canonicalJson(validateSingleRepositoryManifest(value)); }
+export function singleRepositoryFinalizationIntentContents(value: SingleRepositoryFinalizationIntent): string { return canonicalJson(validateSingleRepositoryFinalizationIntent(value)); }
+export function singleRepositoryFinalizationReceiptContents(value: SingleRepositoryFinalizationReceipt): string { return canonicalJson(validateSingleRepositoryFinalizationReceipt(value)); }
+
+export function validateSingleRepositoryManifest(value: unknown): SingleRepositoryManifest {
+  try {
+    const root = record(value, ["schemaVersion", "topology", "deliveryId", "actorLogin", "repository", "branch", "workspace", "pullRequest", "trackedIssue", "certifications", "phase"], ["trackedIssue"]);
+    if (root.schemaVersion !== 1 || root.topology !== "single-repository" || !text(root.actorLogin) || !PHASES.has(String(root.phase)) || !Array.isArray(root.certifications)) invalid();
+    const certifications = root.certifications.map((item, index) => certification(item, index + 1));
+    if (certifications.length === 0 || certifications.some((item, index) => index > 0 && certifications.slice(0, index).some((prior) => prior.headSha === item.headSha && sameCertificationEvidence(prior.evidence, item.evidence)))) invalid();
+    const repositoryValue = repository(root.repository), pull = pullRequest(root.pullRequest), last = certifications.at(-1)!;
+    if (!sameRepo(pull.repository, repositoryValue) || !sameRepo(pull.headRepository, repositoryValue) || !sameRepo(pull.baseRepository, repositoryValue) || pull.headRef !== root.branch || pull.baseRef !== repositoryValue.defaultBranch || pull.headSha !== last.headSha || pull.baseSha !== last.baseSha || !publicUrl(pull.url, repositoryValue, "pull", pull.number)) invalid();
+    const phase = root.phase as SingleRepositoryManifest["phase"];
+    if (phase === "awaiting-human-merge" && (pull.state !== "open" || pull.draft || pull.dossierDigest !== last.dossierDigest)) invalid();
+    if ((phase === "finalizing" || phase === "complete") && pull.state !== "merged") invalid();
+    const trackedIssue = root.trackedIssue === undefined ? undefined : issue(root.trackedIssue, stableShipyardMarker(stableDeliveryId(root.deliveryId)));
+    if (trackedIssue && !publicUrl(trackedIssue.url, repositoryValue, "issues", trackedIssue.number)) invalid();
+    const manifest: SingleRepositoryManifest = { schemaVersion: 1, topology: "single-repository", deliveryId: stableDeliveryId(root.deliveryId), actorLogin: root.actorLogin as string, repository: repositoryValue, branch: branch(root.branch), workspace: workspace(root.workspace), pullRequest: pull, ...(trackedIssue ? { trackedIssue } : {}), certifications: Object.freeze(certifications), phase };
+    const length = last.headSha.length, objectIds = certifications.flatMap((item) => [item.headSha, item.headTreeSha, item.baseSha, item.evidence.productSha, item.evidence.ledgerSha, item.evidence.reviewedLedgerSha]);
+    if (objectIds.some((objectId) => objectId.length !== length)) invalid();
+    return freeze(manifest);
+  } catch (error) { if (error instanceof SingleRepositoryError) throw error; invalid(); }
+}
+
+export function validateSingleRepositoryFinalizationIntent(value: unknown): SingleRepositoryFinalizationIntent {
+  try {
+    const root = record(value, ["schemaVersion", "deliveryId", "manifestDigest", "actorLogin", "mergePolicy", "finalHeadSha", "finalHeadTreeSha", "mergeCommitSha", "mainSha", "localMainBeforeSha", "reviewedTag", "trackedIssue", "createdAt"], ["trackedIssue"]);
+    if (root.schemaVersion !== 1 || !text(root.actorLogin) || !new Set(["merge-commit", "squash", "rebase"]).has(String(root.mergePolicy)) || !date(root.createdAt) || !tag(root.reviewedTag)) invalid();
+    const finalHeadSha = sha(root.finalHeadSha), values = [finalHeadSha, sha(root.finalHeadTreeSha), sha(root.mergeCommitSha), sha(root.mainSha), sha(root.localMainBeforeSha)];
+    if (values.some((item) => item.length !== finalHeadSha.length)) invalid();
+    const deliveryId = stableDeliveryId(root.deliveryId), trackedIssue = root.trackedIssue === undefined ? undefined : issue(root.trackedIssue, stableShipyardMarker(deliveryId));
+    return freeze({ schemaVersion: 1, deliveryId, manifestDigest: digest(root.manifestDigest), actorLogin: root.actorLogin as string, mergePolicy: root.mergePolicy as SingleRepositoryFinalizationIntent["mergePolicy"], finalHeadSha, finalHeadTreeSha: values[1]!, mergeCommitSha: values[2]!, mainSha: values[3]!, localMainBeforeSha: values[4]!, reviewedTag: root.reviewedTag as string, ...(trackedIssue ? { trackedIssue } : {}), createdAt: root.createdAt as string });
+  } catch (error) { if (error instanceof SingleRepositoryError) throw error; invalid(); }
+}
+
+export function validateSingleRepositoryFinalizationReceipt(value: unknown): SingleRepositoryFinalizationReceipt {
+  try {
+    const root = record(value, ["schemaVersion", "deliveryId", "manifestDigest", "finalHeadSha", "mainSha", "mergeCommitSha", "reviewedTag", "pullRequestState", "trackedIssueState", "deliveryBranchDeleted", "completedAt"]);
+    if (root.schemaVersion !== 1 || root.pullRequestState !== "merged" || !new Set(["closed", "not-owned"]).has(String(root.trackedIssueState)) || root.deliveryBranchDeleted !== true || !tag(root.reviewedTag) || !date(root.completedAt)) invalid();
+    const finalHeadSha = sha(root.finalHeadSha), mainSha = sha(root.mainSha), mergeCommitSha = sha(root.mergeCommitSha); if (mainSha.length !== finalHeadSha.length || mergeCommitSha.length !== finalHeadSha.length) invalid();
+    return freeze({ schemaVersion: 1, deliveryId: stableDeliveryId(root.deliveryId), manifestDigest: digest(root.manifestDigest), finalHeadSha, mainSha, mergeCommitSha, reviewedTag: root.reviewedTag as string, pullRequestState: "merged", trackedIssueState: root.trackedIssueState as "closed" | "not-owned", deliveryBranchDeleted: true, completedAt: root.completedAt as string });
+  } catch (error) { if (error instanceof SingleRepositoryError) throw error; invalid(); }
+}
+
+function certification(value: unknown, revision: number): SingleRepositoryCertification { const root = record(value, ["revision", "headSha", "headTreeSha", "baseSha", "policyDigest", "dossierDigest", "evidence", "certifiedAt"]); if (root.revision !== revision || !date(root.certifiedAt)) invalid(); const headSha = sha(root.headSha), evidenceValue = evidence(root.evidence); if (evidenceValue.productSha !== headSha) invalid(); return freeze({ revision, headSha, headTreeSha: sha(root.headTreeSha), baseSha: sha(root.baseSha), policyDigest: digest(root.policyDigest), dossierDigest: digest(root.dossierDigest), evidence: evidenceValue, certifiedAt: root.certifiedAt as string }); }
+function evidence(value: unknown): PromotionEvidencePin { const root = record(value, ["productSha", "ledgerSha", "manifestDigest", "acceptanceDigest", "reviewId", "reviewRequestDigest", "reviewResultDigest", "reviewedLedgerSha", "reviewerBundleDigest", "evaluatedAt"]); if (!text(root.reviewId) || !date(root.evaluatedAt)) invalid(); return freeze({ productSha: sha(root.productSha), ledgerSha: sha(root.ledgerSha), manifestDigest: digest(root.manifestDigest), acceptanceDigest: digest(root.acceptanceDigest), reviewId: root.reviewId as string, reviewRequestDigest: digest(root.reviewRequestDigest), reviewResultDigest: digest(root.reviewResultDigest), reviewedLedgerSha: sha(root.reviewedLedgerSha), reviewerBundleDigest: digest(root.reviewerBundleDigest), evaluatedAt: root.evaluatedAt as string }); }
+function pullRequest(value: unknown): SingleRepositoryPullRequest { const root = record(value, ["id", "number", "url", "deliveryMarker", "repository", "headRepository", "baseRepository", "headRef", "baseRef", "headSha", "baseSha", "state", "draft", "isCrossRepository", "dossierDigest", "mergeCommitSha"], ["dossierDigest", "mergeCommitSha"]); if (!text(root.id) || !Number.isSafeInteger(root.number) || (root.number as number) <= 0 || !safeUrl(root.url) || !text(root.deliveryMarker) || !new Set(["open", "closed", "merged"]).has(String(root.state)) || typeof root.draft !== "boolean" || root.isCrossRepository !== false) invalid(); const state = root.state as SingleRepositoryPullRequest["state"], merge = root.mergeCommitSha === undefined ? undefined : sha(root.mergeCommitSha); if (state === "merged" ? !merge : merge !== undefined) invalid(); return freeze({ id: root.id as string, number: root.number as number, url: root.url as string, deliveryMarker: root.deliveryMarker as string, repository: repoIdentity(root.repository), headRepository: repoIdentity(root.headRepository), baseRepository: repoIdentity(root.baseRepository), headRef: branch(root.headRef), baseRef: branch(root.baseRef), headSha: sha(root.headSha), baseSha: sha(root.baseSha), state, draft: root.draft as boolean, isCrossRepository: false, ...(root.dossierDigest === undefined ? {} : { dossierDigest: digest(root.dossierDigest) }), ...(merge ? { mergeCommitSha: merge } : {}) }); }
+function issue(value: unknown, expectedMarker: string): SingleRepositoryTrackedIssue { const root = record(value, ["id", "number", "url", "deliveryMarker", "state"]); if (!text(root.id) || !Number.isSafeInteger(root.number) || (root.number as number) <= 0 || !safeUrl(root.url) || root.deliveryMarker !== expectedMarker || !new Set(["open", "closed"]).has(String(root.state))) invalid(); return freeze({ id: root.id as string, number: root.number as number, url: root.url as string, deliveryMarker: expectedMarker, state: root.state as "open" | "closed" }); }
+function repository(value: unknown) { const root = record(value, ["owner", "name", "remote", "defaultBranch"]), owner = segment(root.owner), name = segment(root.name), remote = record(root.remote, ["name", "url"]), url = githubUrl(remote.url); if (!exactGitHubRepositoryUrl(url, owner, name)) invalid(); return freeze({ owner, name, remote: { name: nonempty(remote.name), url }, defaultBranch: branch(root.defaultBranch) }); }
+function workspace(value: unknown): SingleRepositoryManifest["workspace"] { const root = record(value, ["creationToken", "commonDirectory", "worktreePath"]), creationToken = nonempty(root.creationToken), commonDirectory = absolutePath(root.commonDirectory), worktreePath = absolutePath(root.worktreePath); if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(creationToken) || commonDirectory === worktreePath) invalid(); return freeze({ creationToken, commonDirectory, worktreePath }); }
+function repoIdentity(value: unknown): Readonly<{ owner: string; name: string }> { const root = record(value, ["owner", "name"]); return freeze({ owner: segment(root.owner), name: segment(root.name) }); }
+function sameRepo(left: Readonly<{ owner: string; name: string }>, right: Readonly<{ owner: string; name: string }>): boolean { return left.owner === right.owner && left.name === right.name; }
+function sameCertificationEvidence(left: PromotionEvidencePin, right: PromotionEvidencePin): boolean { return left.productSha === right.productSha && left.manifestDigest === right.manifestDigest && left.acceptanceDigest === right.acceptanceDigest && left.reviewId === right.reviewId && left.reviewRequestDigest === right.reviewRequestDigest && left.reviewResultDigest === right.reviewResultDigest && left.reviewedLedgerSha === right.reviewedLedgerSha && left.reviewerBundleDigest === right.reviewerBundleDigest; }
+function record(value: unknown, keys: readonly string[], optional: readonly string[] = []): Record<string, unknown> { if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) invalid(); const out: Record<string, unknown> = {}; for (const key of Reflect.ownKeys(value)) { if (typeof key !== "string" || !keys.includes(key)) invalid(); const descriptor = Object.getOwnPropertyDescriptor(value, key); if (!descriptor || !descriptor.enumerable || !("value" in descriptor)) invalid(); out[key] = descriptor.value; } if (keys.some((key) => !optional.includes(key) && !(key in out))) invalid(); return out; }
+function branch(value: unknown): string { const result = nonempty(value); if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$/.test(result) || result.includes("//") || result.endsWith("/") || result.split("/").some((part) => part === "." || part === "..")) invalid(); return result; }
+function segment(value: unknown): string { const result = nonempty(value); if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(result) || result.includes("..")) invalid(); return result; }
+function sha(value: unknown): string { if (typeof value !== "string" || !(/^[a-f0-9]{40}$/.test(value) || /^[a-f0-9]{64}$/.test(value))) invalid(); return value; }
+function digest(value: unknown): string { if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value)) invalid(); return value; }
+function githubUrl(value: unknown): string { const result = nonempty(value); let url: URL; try { url = new URL(result); } catch { invalid(); } if (url.protocol !== "https:" || url.hostname !== "github.com" || url.username || url.password || url.search || url.hash || !/^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/.test(url.pathname)) invalid(); return result; }
+function safeUrl(value: unknown): value is string { return typeof value === "string" && value.length <= 4096; }
+function publicUrl(value: string, repository: Readonly<{ owner: string; name: string }>, kind: "pull" | "issues", number: number): boolean { return value === `https://github.com/${repository.owner}/${repository.name}/${kind}/${number}`; }
+function exactGitHubRepositoryUrl(value: string, owner: string, name: string): boolean { return value === `https://github.com/${owner}/${name}` || value === `https://github.com/${owner}/${name}.git`; }
+function nonempty(value: unknown): string { if (!text(value) || value !== value.trim()) invalid(); return value; }
+function absolutePath(value: unknown): string { const result = nonempty(value); if (!result.startsWith("/") || result.includes("\0") || result.endsWith("/") || result.split("/").some((part, index) => index > 0 && (part === "" || part === "." || part === ".."))) invalid(); return result; }
+function text(value: unknown): value is string { return typeof value === "string" && value.trim() !== "" && value.length <= 4096; }
+function date(value: unknown): value is string { if (typeof value !== "string") return false; try { return new Date(value).toISOString() === value; } catch { return false; } }
+function tag(value: unknown): value is string { return typeof value === "string" && /^shipyard\/reviewed\/[a-z0-9][a-z0-9._-]{0,63}$/.test(value); }
+function invalid(): never { throw new SingleRepositoryError("invalid-state", "Single-repository state is not a canonical version 1 document."); }
+function freeze<T>(value: T): T { if (value && typeof value === "object" && !Object.isFrozen(value)) { for (const child of Object.values(value as Record<string, unknown>)) freeze(child); Object.freeze(value); } return value; }

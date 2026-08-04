@@ -134,3 +134,18 @@ export { createTrustedStagedFinalizationOperation } from "./finalization/service
 export type { DestinationMergePolicyResolver, TrustedStagedFinalizationDependencies, TrustedStagedFinalizationOperation } from "./finalization/service.js";
 export type { FinalizationGitAuthority, FinalizationGitSession, OwnedWorkspaceCleanup } from "./finalization/git.js";
 export type { DestinationMergePolicy, FinalizationIntent, FinalizationReceipt, FinalizationStatus, MergeObservation } from "./finalization/types.js";
+
+// Trusted single-repository certification and observed-human-merge finalization.
+export { SingleRepositoryError } from "./single-repository/errors.js";
+export type { SingleRepositoryFailureCode } from "./single-repository/errors.js";
+export { certificationEndMarker, certificationMarker, dossierDigest, singleRepositoryDossier } from "./single-repository/dossier.js";
+export { singleRepositoryPolicyDigest } from "./single-repository/policy.js";
+export { singleRepositoryFinalizationIntentContents, singleRepositoryFinalizationReceiptContents, singleRepositoryManifestContents, validateSingleRepositoryFinalizationIntent, validateSingleRepositoryFinalizationReceipt, validateSingleRepositoryManifest } from "./single-repository/schema.js";
+export { SingleRepositoryLedger, singleRepositoryFinalizationIntentPath, singleRepositoryFinalizationReceiptPath, singleRepositoryManifestDigest, singleRepositoryManifestPath } from "./single-repository/ledger.js";
+export type { SingleRepositoryLedgerSnapshot } from "./single-repository/ledger.js";
+export { createTrustedSingleRepositoryCertificationOperation } from "./single-repository/certify.js";
+export type { TrustedSingleRepositoryCertificationDependencies, TrustedSingleRepositoryCertificationOperation } from "./single-repository/certify.js";
+export { createTrustedSingleRepositoryFinalizationOperation } from "./single-repository/finalize.js";
+export type { SingleRepositoryMergePolicyResolver, TrustedSingleRepositoryFinalizationDependencies, TrustedSingleRepositoryFinalizationOperation } from "./single-repository/finalize.js";
+export type { SingleRepositoryProviderAuthority, SingleRepositoryProviderSession } from "./single-repository/provider.js";
+export type { SingleRepositoryCertification, SingleRepositoryFinalizationGitAuthority, SingleRepositoryFinalizationGitSession, SingleRepositoryFinalizationIntent, SingleRepositoryFinalizationReceipt, SingleRepositoryManifest, SingleRepositoryProductAuthority, SingleRepositoryProductObservation, SingleRepositoryPullRequest, SingleRepositoryRecoveryGitSession, SingleRepositoryStatus, SingleRepositoryTrackedIssue } from "./single-repository/types.js";
