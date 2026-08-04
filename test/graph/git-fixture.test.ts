@@ -4,7 +4,7 @@ import { chmod, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { graphCacheIdentity, graphLockPath, snapshotGraphSource, type GraphSourceReader } from "../../src/index.js";
+import { createGitGraphSourceReader, graphCacheIdentity, graphLockPath, snapshotGraphSource, type GraphSourceReader } from "../../src/index.js";
 
 test("disposable local Git fixture changes the fingerprint for staged, unstaged, rename and untracked states", async () => {
   const root = await mkdtemp(join(tmpdir(), "shipyard-graph-"));
@@ -47,6 +47,16 @@ test("two real linked divergent worktrees receive separate cache and lock identi
     const [mainId, featureId] = [graphCacheIdentity("graphify", receipt, main), graphCacheIdentity("graphify", receipt, feature)];
     assert.notEqual(mainId, featureId); assert.notEqual(graphLockPath("/cache/main", mainId), graphLockPath("/cache/feature", featureId));
   } finally { await rm(sibling, { recursive: true, force: true }); await rm(root, { recursive: true, force: true }); }
+});
+
+test("production Git reader derives distinct identities when a linked-worktree path is recreated", async () => {
+  const root = await mkdtemp(join(tmpdir(), "shipyard-graph-")); const linked = `${root}-linked`; const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
+  try {
+    git("init"); git("config", "user.email", "fixture@example.test"); git("config", "user.name", "Fixture"); await writeFile(join(root, "a"), "a\n"); git("add", "a"); git("commit", "-m", "base");
+    const reader = createGitGraphSourceReader(); git("worktree", "add", "-b", "recreated", linked); const first = await snapshotGraphSource(reader, linked);
+    git("worktree", "remove", "--force", linked); git("worktree", "add", linked, "recreated"); const second = await snapshotGraphSource(reader, linked);
+    assert.notEqual(first.worktreeInstanceId, second.worktreeInstanceId); assert.notEqual(graphCacheIdentity("graphify", "graphify@0.9.32#00efd6e7969837ae4a9f11d8d504dcd3b20b09df", first), graphCacheIdentity("graphify", "graphify@0.9.32#00efd6e7969837ae4a9f11d8d504dcd3b20b09df", second));
+  } finally { await rm(linked, { recursive: true, force: true }); await rm(root, { recursive: true, force: true }); }
 });
 
 test("a real submodule change is part of the Git-native source fingerprint", async () => {

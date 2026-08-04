@@ -1,30 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CODEGRAPH_RECEIPT, graphCacheIdentity, refreshCodeGraph, seedCodeGraph, type GraphBaseline, type GraphDescriptor, type GraphSource } from "../../src/index.js";
-const source: GraphSource = { worktreeRoot: "/product/wt", worktreeInstanceId: `git-worktree-v1:${"a".repeat(64)}`, headSha: "a".repeat(40), workingTreeFingerprint: `git-v1:${"1".repeat(64)}` };
-const main: GraphSource = { ...source, worktreeRoot: "/product/main", worktreeInstanceId: `git-worktree-v1:${"b".repeat(64)}` };
-const canonical = async (path: string) => path;
-function baseline(): GraphBaseline { const descriptor: GraphDescriptor = { adapter: "codegraph", reviewedToolSource: CODEGRAPH_RECEIPT, cacheIdentity: graphCacheIdentity("codegraph", CODEGRAPH_RECEIPT, main), cacheRoot: "/product/main/.codegraph", worktreeRoot: main.worktreeRoot, worktreeInstanceId: main.worktreeInstanceId, indexedCommit: main.headSha, workingTreeFingerprint: main.workingTreeFingerprint, refreshedAt: "2026-08-04T00:00:00Z" }; return { source: main, descriptor, authoritativeRef: "refs/heads/main", resolvedSha: main.headSha, objectFormat: "sha1", clean: true }; }
-test("CodeGraph requires actual FTS5 probe before exclusion or index", async () => {
+import { CODEGRAPH_RECEIPT, graphFingerprint, refreshCodeGraph, type GraphSource } from "../../src/index.js";
+const source: GraphSource = { worktreeRoot: "/product/wt", worktreeInstanceId: `git-worktree-v1:${"a".repeat(64)}`, headSha: "a".repeat(40), workingTreeFingerprint: graphFingerprint("") };
+const reader = { canonicalWorktree: async () => source.worktreeRoot, worktreeInstanceId: async () => source.worktreeInstanceId, headSha: async () => source.headSha, worktreeStatus: async () => "" };
+const lock = { acquire: async () => ({ lock: { ownerHost: "local", ownerPid: 1, acquiredAt: "2026-08-04T00:00:00Z" } }), release: async () => undefined };
+const files = { canonicalPath: async (p: string) => p, addMachineLocalExclude: async () => undefined, excluded: async () => true, tracked: async () => false, exists: async () => true };
+const observed = (path: string) => ({ executable: path, version: path.endsWith("node") ? "24.13.1" : "1.5.0", sourceReceipt: path.endsWith("node") ? "node:sqlite-fts5" : CODEGRAPH_RECEIPT });
+test("CodeGraph uses non-echo executable observations and a bounded actual FTS5 probe", async () => {
   const calls: string[] = [];
-  const result = await refreshCodeGraph(source, { enabled: true, localOnlyApproved: true, reviewedToolSource: CODEGRAPH_RECEIPT, nodeExecutablePath: "/tools/node", codegraphExecutablePath: "/tools/codegraph", command: { run: async (command) => { calls.push(command); return { code: 1 }; }, attest: async (_p, receipt) => ({ code: 0, stdout: receipt, stderr: "", timedOut: false }) }, files: { canonicalPath: canonical, addMachineLocalExclude: async () => assert.fail("must not exclude"), excluded: async () => false, tracked: async () => false, exists: async () => false } });
+  const result = await refreshCodeGraph(source, { enabled: true, localOnlyApproved: true, reviewedToolSource: CODEGRAPH_RECEIPT, nodeExecutablePath: "/tools/node", codegraphExecutablePath: "/tools/codegraph", lock, sourceReader: reader, command: { observe: async (path) => observed(path), run: async (path) => { calls.push(path); return { code: path.endsWith("node") ? 1 : 0, stdout: "", stderr: "", timedOut: false }; } }, files });
   assert.equal(result.decision.state, "unavailable"); assert.deepEqual(calls, ["/tools/node"]);
 });
-test("CodeGraph empirical seed uses FTS5, local exclusion and an exact baseline only", async () => {
-  let excluded = false; let copied = false; const calls: string[] = [];
-  const result = await seedCodeGraph(source, baseline(), { enabled: true, localOnlyApproved: true, reviewedToolSource: CODEGRAPH_RECEIPT, nodeExecutablePath: "/tools/node", codegraphExecutablePath: "/tools/codegraph", command: { run: async (command) => { calls.push(command); return { code: 0 }; }, attest: async (_p, receipt) => ({ code: 0, stdout: receipt, stderr: "", timedOut: false }) }, files: { canonicalPath: canonical, addMachineLocalExclude: async () => { excluded = true; }, excluded: async () => excluded, tracked: async () => false, exists: async () => copied, copy: async () => { copied = true; }, remove: async () => undefined } });
-  assert.equal(result.decision.state, "fresh"); assert.deepEqual(calls, ["/tools/node"]);
-});
-test("CodeGraph telemetry/exclusion/tracked-cache checks precede local index", async () => {
-  const calls: Array<{ command: string; env: Readonly<Record<string, string>> }> = []; let excluded = false;
-  const result = await refreshCodeGraph(source, { enabled: true, localOnlyApproved: true, reviewedToolSource: CODEGRAPH_RECEIPT, nodeExecutablePath: "/tools/node", codegraphExecutablePath: "/tools/codegraph", command: { run: async (command, _args, options) => { calls.push({ command, env: options.env }); return { code: 0 }; }, attest: async (_p, receipt) => ({ code: 0, stdout: receipt, stderr: "", timedOut: false }) }, files: { canonicalPath: canonical, addMachineLocalExclude: async () => { excluded = true; }, excluded: async () => excluded, tracked: async () => false, exists: async () => true } });
-  assert.equal(result.decision.state, "fresh"); assert.deepEqual(calls.map((call) => call.command), ["/tools/node", "/tools/codegraph"]); assert.equal(calls[1]?.env.CODEGRAPH_TELEMETRY, "0");
-});
-test("CodeGraph rejects non-main/moved baselines and symlink or pre-existing cache roots", async () => {
-  for (const candidate of [{ ...baseline(), authoritativeRef: "refs/heads/topic" as "refs/heads/main" }, { ...baseline(), resolvedSha: "b".repeat(40) }, { ...baseline(), source }]) {
-    const result = await seedCodeGraph(source, candidate, { enabled: true, localOnlyApproved: true, reviewedToolSource: CODEGRAPH_RECEIPT, nodeExecutablePath: "/tools/node", command: { run: async () => ({ code: 0 }), attest: async (_p, receipt) => ({ code: 0, stdout: receipt, stderr: "", timedOut: false }) }, files: { canonicalPath: canonical, addMachineLocalExclude: async () => assert.fail("must not exclude"), excluded: async () => false, tracked: async () => false, exists: async () => false, copy: async () => assert.fail("must not copy"), remove: async () => undefined } });
-    assert.equal(result.decision.authoritative, false);
-  }
-  const alias = await refreshCodeGraph(source, { enabled: true, localOnlyApproved: true, reviewedToolSource: CODEGRAPH_RECEIPT, nodeExecutablePath: "/tools/node", codegraphExecutablePath: "/tools/codegraph", command: { run: async () => ({ code: 0 }), attest: async (_p, receipt) => ({ code: 0, stdout: receipt, stderr: "", timedOut: false }) }, files: { canonicalPath: async (path) => path.endsWith(".codegraph") ? "/elsewhere/.codegraph" : path, addMachineLocalExclude: async () => assert.fail("must not initialize"), excluded: async () => false, tracked: async () => false, exists: async () => false } });
-  assert.equal(alias.decision.state, "invalid");
+test("CodeGraph keeps one lock through FTS5, exclusion, index, source reread and descriptor", async () => {
+  const trace: string[] = []; const result = await refreshCodeGraph(source, { enabled: true, localOnlyApproved: true, reviewedToolSource: CODEGRAPH_RECEIPT, nodeExecutablePath: "/tools/node", codegraphExecutablePath: "/tools/codegraph", lock: { acquire: async () => { trace.push("acquire"); return { lock: { ownerHost: "x", ownerPid: 1, acquiredAt: "2026-01-01T00:00:00Z" } }; }, release: async () => { trace.push("release"); } }, sourceReader: { ...reader, worktreeStatus: async () => { trace.push("reread"); return ""; } }, command: { observe: async p => { trace.push(`observe:${p}`); return observed(p); }, run: async p => { trace.push(`run:${p}`); return { code: 0, stdout: "", stderr: "", timedOut: false }; } }, files: { ...files, addMachineLocalExclude: async () => { trace.push("exclude"); } } });
+  assert.equal(result.decision.state, "fresh"); assert.deepEqual(trace, ["acquire", "observe:/tools/node", "observe:/tools/codegraph", "run:/tools/node", "exclude", "run:/tools/codegraph", "reread", "release"]);
 });

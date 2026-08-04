@@ -35,14 +35,17 @@ export function validateGraphDescriptor(source: GraphSource, descriptor: GraphDe
 export function validateGraphBaseline(source: GraphSource, baseline: import("./types.js").GraphBaseline | undefined, adapter: GraphDescriptor["adapter"], reviewedToolSource: string): GraphDecision {
   try {
     source = validateGraphSource(source);
-    if (!baseline || typeof baseline !== "object" || baseline.authoritativeRef !== "refs/heads/main" || baseline.clean !== true) throw new Error();
-    const main = validateGraphSource(baseline.source);
-    if (baseline.objectFormat !== "sha1" && baseline.objectFormat !== "sha256") throw new Error();
-    const expectedLength = baseline.objectFormat === "sha1" ? 40 : 64;
-    if (!isGraphSha(baseline.resolvedSha) || baseline.resolvedSha.length !== expectedLength || main.headSha !== baseline.resolvedSha.toLowerCase()) throw new Error();
+    if (!baseline || typeof baseline !== "object" || Object.getPrototypeOf(baseline) !== Object.prototype) throw new Error();
+    const fields = Object.getOwnPropertyDescriptors(baseline); if (Object.keys(fields).length !== 6 || Object.values(fields).some((field) => !("value" in field))) throw new Error();
+    const safe = Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.value])) as Record<string, unknown>;
+    if (safe.authoritativeRef !== "refs/heads/main" || safe.clean !== true) throw new Error();
+    const main = validateGraphSource(safe.source);
+    if (safe.objectFormat !== "sha1" && safe.objectFormat !== "sha256") throw new Error();
+    const expectedLength = safe.objectFormat === "sha1" ? 40 : 64;
+    if (!isGraphSha(safe.resolvedSha) || safe.resolvedSha.length !== expectedLength || main.headSha !== safe.resolvedSha.toLowerCase()) throw new Error();
     // A feature checkout may match main's content, but may never self-seed.
     if (resolve(main.worktreeRoot) === resolve(source.worktreeRoot) || main.worktreeInstanceId === source.worktreeInstanceId) throw new Error();
-    const descriptor = validateGraphDescriptor(main, baseline.descriptor, adapter, reviewedToolSource);
+    const descriptor = validateGraphDescriptor(main, safe.descriptor as GraphDescriptor, adapter, reviewedToolSource);
     if (!descriptor.authoritative) return descriptor;
     if (main.headSha !== source.headSha || main.workingTreeFingerprint !== source.workingTreeFingerprint) return graphDecision("stale", "Authoritative-main baseline does not exactly match the feature source.");
     return graphDecision("fresh", "Clean authoritative-main baseline exactly matches the feature source.");

@@ -5,7 +5,7 @@ export type { ContractErrorCode } from "./contracts/errors.js";
 export { composeStatus, createStatusProjection } from "./status/projection.js";
 export type { StatusBlocker, StatusContributor, StatusProjection } from "./status/projection.js";
 export { graphStatusContributor } from "./graph/status.js";
-export { graphFingerprint, snapshotGraphSource } from "./graph/fingerprint.js";
+export { createGitGraphSourceReader, graphFingerprint, snapshotGraphSource } from "./graph/fingerprint.js";
 export { graphCacheIdentity, graphDecision, graphLockPath, evaluateGraphFreshness, evaluateGraphLock, validateGraphBaseline, validateGraphDescriptor } from "./graph/freshness.js";
 export { graphPathContains, isGraphSha, validateGraphDescriptor as validateGraphDescriptorValue, validateGraphLock, validateGraphRuntime, validateGraphSource } from "./graph/validation.js";
 export { refreshGraph } from "./graph/adapter.js";
@@ -17,7 +17,7 @@ export { GRAPH_FALLBACK_ACTION, GRAPH_FINGERPRINT_VERSION, GRAPH_STATES } from "
 export type { GraphAdapter, GraphBaseline, GraphCacheLock, GraphDecision, GraphDescriptor, GraphResult, GraphRuntime, GraphSource, GraphState } from "./graph/types.js";
 export type { GraphSourceReader } from "./graph/fingerprint.js";
 export { GRAPHIFY_RECEIPT, refreshGraphify, seedGraphify } from "./adapters/graphify.js";
-export type { GraphifyFiles, GraphifyOptions, LocalGraphCommand } from "./adapters/graphify.js";
+export type { GraphExecutableObservation, GraphifyFiles, GraphifyOptions, LocalGraphCommand } from "./adapters/graphify.js";
 export { CODEGRAPH_RECEIPT, refreshCodeGraph, seedCodeGraph } from "./adapters/codegraph.js";
 export type { CodeGraphFiles, CodeGraphOptions } from "./adapters/codegraph.js";
 
