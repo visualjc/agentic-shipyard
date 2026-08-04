@@ -7,6 +7,7 @@ import { evaluateFreshness, type EvidenceSequence } from "../evidence/freshness.
 import { EvidenceError } from "../evidence/errors.js";
 import { MAX_CANONICAL_JSON_NODES, MAX_CONTEXT_AGGREGATE_BYTES, MAX_LEDGER_RECORD_BYTES, utf8Bytes } from "../evidence/limits.js";
 import { createHash } from "node:crypto";
+import { buildCanonicalReviewerBundle, reviewerBundleDigest } from "../review/bundle.js";
 
 export interface EvidenceClock { now():Date; }
 export type TrustedAcceptanceGateDependencies=Readonly<{context:ContextReader;products:ProductShaReader;ledger:LedgerStore & PinnedLedgerReader & LedgerInventoryReader;clock?:EvidenceClock}>;
@@ -25,7 +26,7 @@ async function evaluateBound(context:ContextReader,products:ProductShaReader,led
   if(!fullSha(currentProductSha)||!before.head||inventory.head!==before.head||!fullSha(inventory.head))invalid();
   const entries:LedgerInventoryEntry[]=[];let inventoryBytes=0;for(const raw of inventory.entries as readonly LedgerInventoryEntry[]){const entry=inventoryEntry(raw,prefix);if((inventoryBytes+=utf8Bytes(entry.contents))>MAX_CONTEXT_AGGREGATE_BYTES)invalid();entries.push(entry);}const byPath=new Map(entries.map(entry=>[entry.path,entry]));
   if(byPath.size!==entries.length)invalid();
-  const manifestPath=`${prefix}manifest.json`,acceptancePath=`${prefix}acceptance.json`,intentPath=`deliveries/${scope.deliveryId}/intent.md`,manifestEntry=byPath.get(manifestPath),acceptanceEntry=byPath.get(acceptancePath);if(!manifestEntry||!acceptanceEntry||manifestEntry.ordinal>=acceptanceEntry.ordinal||createHash("sha256").update(manifestEntry.contents).digest("hex")!==scope.evidenceManifestDigest)invalid();
+  const manifestPath=`${prefix}manifest.json`,acceptancePath=`${prefix}acceptance.json`,intentPath=`deliveries/${scope.deliveryId}/intent.md`,instructionsPath=`deliveries/${scope.deliveryId}/review.json`,manifestEntry=byPath.get(manifestPath),acceptanceEntry=byPath.get(acceptancePath);if(!manifestEntry||!acceptanceEntry||manifestEntry.ordinal>=acceptanceEntry.ordinal||createHash("sha256").update(manifestEntry.contents).digest("hex")!==scope.evidenceManifestDigest)invalid();
   const manifest=record(manifestEntry,validateEvidenceManifest),acceptance=record(acceptanceEntry,validateAcceptanceEvidence);if(acceptance.issueId!==manifest.issueId)invalid();const requests=new Map<string,{document:ReviewRequest;ordinal:number}>(),results=new Map<string,{document:ReviewResult;ordinal:number}>(),resolutions: Array<{document:FindingResolution;ordinal:number}>=[];
   for(const entry of entries){
     let match:RegExpExecArray|null;
@@ -49,7 +50,7 @@ async function evaluateBound(context:ContextReader,products:ProductShaReader,led
   // The immutable request must name the exact ledger snapshot whose canonical
   // manifest and acceptance bytes were sealed to the reviewer. A later same-SHA
   // acceptance renewal is stale, not an alternative authority for this review.
-  if(reviewedAfterAcceptance){const reviewed=ledgerRecords(await ledger.read(currentRequest.document.reviewedLedgerSha,[manifestPath,acceptancePath]),[manifestPath,acceptancePath]);if(reviewed[manifestPath]!==manifestEntry.contents||reviewed[acceptancePath]!==acceptanceEntry.contents||createHash("sha256").update(reviewed[manifestPath]!).digest("hex")!==currentRequest.document.manifestDigest||createHash("sha256").update(reviewed[acceptancePath]!).digest("hex")!==currentRequest.document.acceptanceDigest)invalid();}
+  if(reviewedAfterAcceptance){const bundlePaths=[manifestPath,acceptancePath,intentPath,instructionsPath],reviewed=ledgerRecords(await ledger.read(currentRequest.document.reviewedLedgerSha,bundlePaths),bundlePaths),currentRecords=ledgerRecords(await ledger.read(inventory.head,bundlePaths),bundlePaths);if(reviewed[manifestPath]!==manifestEntry.contents||reviewed[acceptancePath]!==acceptanceEntry.contents||reviewed[intentPath]!==currentRecords[intentPath]||reviewed[instructionsPath]!==currentRecords[instructionsPath]||createHash("sha256").update(reviewed[manifestPath]!).digest("hex")!==currentRequest.document.manifestDigest||createHash("sha256").update(reviewed[acceptancePath]!).digest("hex")!==currentRequest.document.acceptanceDigest)invalid();const bundle=buildCanonicalReviewerBundle(currentRequest.document,{intent:reviewed[intentPath]!,manifest:reviewed[manifestPath]!,acceptance:reviewed[acceptancePath]!,instructions:reviewed[instructionsPath]!});if(reviewerBundleDigest(bundle)!==current.document.process.bundleDigest)invalid();}
   const advisory=evaluateFreshness({currentProductSha,manifest,acceptance,request:currentRequest.document,...(reviewedAfterAcceptance?{result:current.document}:{}),priorResults:(reviewedAfterAcceptance?ordered.slice(0,-1):ordered).map(entry=>entry.document),resolutions:resolutions.map(entry=>entry.document),declaredEvidenceRefs:refs,sequence});
   const eligible=reviewedAfterAcceptance&&advisory.acceptanceFresh&&advisory.reviewFresh&&advisory.blockers.length===0&&advisory.blockingFindingIds.length===0;
   return Object.freeze({...advisory,promotionEligible:eligible,nextAction:eligible?"proceed-to-promotion-gate":advisory.nextAction});

@@ -3,9 +3,9 @@ import type { IndependentReviewAdapter, ReviewDispatch, ReviewDispatchResult } f
 import type { ReviewRequest } from "../evidence/types.js";
 import type { ContextEnvelope } from "../context/types.js";
 import type { ContextReader } from "../context/reader.js";
-import { canonicalJson, canonicalJsonWithin, validateAcceptanceEvidence, validateEvidenceManifest, validateReviewRequest } from "../evidence/schema.js";
+import { canonicalJson, validateAcceptanceEvidence, validateEvidenceManifest, validateReviewRequest } from "../evidence/schema.js";
 import { createHash } from "node:crypto";
-import { MAX_REVIEW_BUNDLE_BYTES, utf8Bytes } from "../evidence/limits.js";
+import { buildCanonicalReviewerBundle, reviewerBundleDigest } from "./bundle.js";
 /** Bridges Issue #3's pinned, role-limited context guard to a host-neutral reviewer adapter. */
 export class TrustedReviewDispatcher {
   constructor(private readonly context: ContextReader, private readonly adapters: Readonly<Record<string, IndependentReviewAdapter>>) {}
@@ -16,7 +16,7 @@ export class TrustedReviewDispatcher {
   }
   async bundleDigest(envelope:ContextEnvelope,reviewRequestPath:string,request:ReviewRequest):Promise<string>{
     const dispatch=await this.seal(envelope,reviewRequestPath,validateReviewRequest(request));
-    return createHash("sha256").update(dispatch.sealedBundle).digest("hex");
+    return reviewerBundleDigest(dispatch.sealedBundle);
   }
   private async seal(envelope: ContextEnvelope, reviewRequestPath: string, request: ReviewRequest): Promise<ReviewDispatch> {
     const loaded=await this.context.load(envelope); // Product SHA guard and pinned ledger read happen before spawn.
@@ -27,7 +27,7 @@ export class TrustedReviewDispatcher {
     let manifest,acceptance;try{manifest=validateEvidenceManifest(JSON.parse(loaded.records[manifestPath]!));acceptance=validateAcceptanceEvidence(JSON.parse(loaded.records[acceptancePath]!));const manifestBytes=canonicalJson(manifest),acceptanceBytes=canonicalJson(acceptance);if(manifestBytes!==loaded.records[manifestPath]||acceptanceBytes!==loaded.records[acceptancePath]||manifest.issueId!==request.issueId||acceptance.issueId!==manifest.issueId||acceptance.productSha!==request.productSha||request.reviewedLedgerSha!==loaded.envelope.ledgerSha||request.manifestDigest!==createHash("sha256").update(manifestBytes).digest("hex")||request.acceptanceDigest!==createHash("sha256").update(acceptanceBytes).digest("hex"))throw new Error();}catch{throw new ReviewError("review-role-mismatch","Reviewer manifest and acceptance evidence do not match the sealed request.");}
     // The child receives an opaque, role-minimal view only. In particular it
     // must not learn mutable source-worktree, ledger, or envelope paths.
-    let sealedBundle:string;try{sealedBundle=canonicalJsonWithin({schemaVersion:1,review:{issueId:request.issueId,productSha:request.productSha,reviewId:request.reviewId,reviewedLedgerSha:request.reviewedLedgerSha,manifestDigest:request.manifestDigest,acceptanceDigest:request.acceptanceDigest},records:{intent:loaded.records[intentPath],manifest:loaded.records[manifestPath],acceptance:loaded.records[acceptancePath],instructions:loaded.records[`${prefix}/review.json`]}},MAX_REVIEW_BUNDLE_BYTES);}catch{throw new ReviewError("review-role-mismatch","Sealed reviewer context exceeds its byte limit.");}if(utf8Bytes(sealedBundle)>MAX_REVIEW_BUNDLE_BYTES)throw new ReviewError("review-role-mismatch","Sealed reviewer context exceeds its byte limit.");
+    const sealedBundle=buildCanonicalReviewerBundle(request,{intent:loaded.records[intentPath]!,manifest:loaded.records[manifestPath]!,acceptance:loaded.records[acceptancePath]!,instructions:loaded.records[`${prefix}/review.json`]!});
     return Object.freeze({host:loaded.envelope.host,role:"reviewer",reviewRequestPath,reviewerEnvelopePath:loaded.envelope.adapter.envelopePath,repoRoot:loaded.envelope.adapter.repoRoot,sealedBundle});
   }
 }

@@ -13,6 +13,24 @@ product SHA, and canonical bytes before starting a reviewer. The promotion gate
 derives the manifest from the current complete ledger inventory and accepts no
 caller-supplied manifest or history.
 
+Every canonical `review-request.json` also carries three mandatory immutable
+pins: `reviewedLedgerSha`, `manifestDigest`, and `acceptanceDigest`. The
+dispatcher proves those values against the trusted reviewer envelope and the
+exact canonical manifest/acceptance bytes at that ledger commit. It then uses
+the shared canonical reviewer-bundle builder to produce a path-redacted bundle
+containing the reviewed intent, review instructions, manifest, and acceptance
+bytes plus a digest of the complete canonical request. The reviewer result's
+`process.bundleDigest` is the SHA-256 of those exact bundle bytes.
+
+The promotion gate independently reads those same records from
+`reviewedLedgerSha`, requires `acceptance ordinal < request ordinal < result
+ordinal`, checks that current intent/instructions and current canonical
+acceptance still match the reviewed records, rebuilds the byte-identical bundle,
+and compares its SHA-256 with `process.bundleDigest`. A same-product-SHA
+acceptance renewal, changed intent or instructions, missing pinned record, or
+forged digest makes the review stale or invalid and requires a new request and
+review. Checked boxes and a caller-provided digest cannot satisfy this gate.
+
 Production Codex review creates a private detached checkout of the requested
 full product SHA and verifies its commit, tree, cleanliness, and source object
 before and after the child process. Both the process working directory and
