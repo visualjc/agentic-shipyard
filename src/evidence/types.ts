@@ -2,7 +2,8 @@ export const EVIDENCE_SCHEMA_VERSION = 1 as const;
 export type EvidenceState = "pass" | "blocked" | "not-applicable";
 export type AcceptanceItem = Readonly<{ id: string; kind: "acceptance" | "definition-of-done"; state: EvidenceState; evidenceRefs: readonly string[]; verifier: string; verifiedAt: string; justification?: string }>;
 export type AcceptanceEvidence = Readonly<{ schemaVersion: 1; issueId: string; productSha: string; items: readonly AcceptanceItem[] }>;
-export type ReviewRequest = Readonly<{ schemaVersion: 1; issueId: string; productSha: string; reviewId: string; reviewerEnvelopePath: string; intentRefs: readonly string[]; evidenceRefs: readonly string[] }>;
+/** Immutable review target. The three pins bind the review to exact canonical ledger bytes. */
+export type ReviewRequest = Readonly<{ schemaVersion: 1; issueId: string; productSha: string; reviewId: string; reviewerEnvelopePath: string; intentRefs: readonly string[]; evidenceRefs: readonly string[]; reviewedLedgerSha: string; manifestDigest: string; acceptanceDigest: string }>;
 export type ReviewFinding = Readonly<{ id: string; severity: "critical" | "high" | "medium" | "low"; disposition: "accepted" | "rejected" | "informational" | "resolved"; evidenceRefs: readonly string[]; recordedAt: string }>;
 export type ReviewResult = Readonly<{ schemaVersion: 1; reviewId: string; productSha: string; reviewer: string; startedAt: string; finishedAt: string; process: Readonly<{ processId: number; sessionId: string; fresh: true; commandVersion: string; bundleDigest: string }>; findings: readonly ReviewFinding[]; successful: boolean }>;
 export type FindingResolution = Readonly<{ schemaVersion: 1; findingId: string; reviewId: string; resolvedProductSha: string; resolver: string; resolvedAt: string; evidenceRefs: readonly string[] }>;

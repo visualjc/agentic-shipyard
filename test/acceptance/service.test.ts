@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { AcceptanceReviewService } from "../../src/acceptance/service.js";
 import { canonicalJson } from "../../src/evidence/schema.js";
-const sha="a".repeat(40),request={schemaVersion:1 as const,issueId:"6",productSha:sha,reviewId:"r",reviewerEnvelopePath:"reviewer.json",intentRefs:["intent.md"],evidenceRefs:["acceptance.json"]},envelope:any={};
+const sha="a".repeat(40),request={schemaVersion:1 as const,issueId:"6",productSha:sha,reviewId:"r",reviewerEnvelopePath:"reviewer.json",intentRefs:["intent.md"],evidenceRefs:["acceptance.json"],reviewedLedgerSha:sha,manifestDigest:"c".repeat(64),acceptanceDigest:"d".repeat(64)},envelope:any={};
 const result={schemaVersion:1 as const,reviewId:"r",productSha:sha,reviewer:"reviewer",startedAt:"2026-08-04T00:00:00.000Z",finishedAt:"2026-08-04T00:00:00.000Z",process:{processId:1,sessionId:"s",fresh:true as const,commandVersion:"codex-test-1",bundleDigest:"b".repeat(64)},findings:[],successful:true};
 const dispatched=()=>({result,attestation:result.process});
 test("stale product before orchestration performs zero ledger writes and zero dispatches",async()=>{let ledgerCalls=0,dispatches=0;const service=new AcceptanceReviewService({currentProductSha:async()=>"b".repeat(40)},{snapshot:async()=>{ledgerCalls++;return {head:undefined,records:{}}},transact:async()=>{ledgerCalls++;return sha},read:async()=>{ledgerCalls++;return {}}} as any,{dispatch:async()=>{dispatches++;throw new Error("must not dispatch")}} as any);await assert.rejects(service.dispatchAndPersist({repoRoot:"/repo",deliveryId:"d",envelope,request}),/changed before/);assert.equal(ledgerCalls,0);assert.equal(dispatches,0);});

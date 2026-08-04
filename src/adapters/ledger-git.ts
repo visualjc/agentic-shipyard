@@ -10,6 +10,8 @@ import type { PinnedLedgerReader } from "../context/types.js";
 import { canonicalGitExecutable, DEFAULT_NODE_GIT_EXECUTABLE, sanitizedGitEnvironment } from "./git-transport.js";
 import { redactGitTransportDiagnostic } from "../github/git-transport.js";
 
+const MAX_INVENTORY_ENTRIES=4096,MAX_INVENTORY_PATH_BYTES=2_000_000,MAX_INVENTORY_ANCESTRY_BYTES=2_000_000,MAX_INVENTORY_RECORD_BYTES=1_000_000,MAX_INVENTORY_AGGREGATE_BYTES=2_000_000,MAX_INVENTORY_SMALL_OUTPUT_BYTES=16_384;
+
 const execFileAsync = promisify(execFile);
 type ProductCommitRef = Readonly<{ ref: string; commitSha: string }>;
 export type GitLedgerStoreOptions = Readonly<{ gitExecutable?: string; commandTimeoutMs?: number; commandMaxOutputBytes?: number }>;
@@ -53,10 +55,11 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader, LedgerIn
     if(typeof prefix!=="string"||!prefix.endsWith("/")||!validLedgerPath(`${prefix}record`))throw new LedgerError("ledger-invalid-path","Ledger inventory requires a normalized relative prefix.");
     const head=await this.optionalRef(GitLedgerStore.ref);if(!head)throw new LedgerError("ledger-unavailable","The configured ledger ref is unavailable.");
     await this.assertIsolatedHistory(head,head);
-    const ancestry=await this.gitRequired(["rev-list","--first-parent","--reverse","--parents",head]),ordinals=new Map<string,number>();
-    for(const [index,line] of ancestry.split("\n").entries()){const fields=line.split(" ");if(fields.length>2||!fields[0])throw new LedgerError("ledger-invalid-record","Ledger history must be linear.");ordinals.set(fields[0],index+1);}
-    const rawPaths=await this.gitRequired(["ls-tree","-r","-z","--name-only",head,"--",prefix]),paths=rawPaths===""?[]:rawPaths.split("\0").filter(Boolean).sort();
-    const entries=[];for(const path of paths){if(!path.startsWith(prefix)||!validLedgerPath(path))throw new LedgerError("ledger-invalid-record","Ledger inventory returned an unsafe path.");const commit=await this.gitRequired(["log","-1","--format=%H",head,"--",path]),ordinal=ordinals.get(commit),contents=await this.optionalRecord(head,path);if(!ordinal||contents===undefined)throw new LedgerError("ledger-invalid-record","Ledger inventory could not bind a record to its ancestry.");entries.push(Object.freeze({path,contents,ordinal}));}
+    const ancestry=await this.gitRequiredBounded(["rev-list","--first-parent","--reverse","--parents",head],MAX_INVENTORY_ANCESTRY_BYTES),ordinals=new Map<string,number>();
+    for(const [index,line] of ancestry.split("\n").entries()){const fields=line.split(" ");if(fields.length>2||!fields[0]||index>=MAX_INVENTORY_ENTRIES)throw new LedgerError("ledger-invalid-record","Ledger inventory exceeds its bounded ancestry budget.");ordinals.set(fields[0],index+1);}
+    const rawPaths=await this.gitRequiredBounded(["ls-tree","-r","-z","--name-only",head,"--",prefix],MAX_INVENTORY_PATH_BYTES),paths=rawPaths===""?[]:rawPaths.split("\0").filter(Boolean).sort();
+    if(paths.length>MAX_INVENTORY_ENTRIES)throw new LedgerError("ledger-invalid-record","Ledger inventory exceeds its entry budget.");
+    const entries=[];let aggregate=0;for(const path of paths){if(!path.startsWith(prefix)||!validLedgerPath(path))throw new LedgerError("ledger-invalid-record","Ledger inventory returned an unsafe path.");const commit=await this.gitRequiredBounded(["log","-1","--format=%H",head,"--",path],MAX_INVENTORY_SMALL_OUTPUT_BYTES),ordinal=ordinals.get(commit),contents=await this.optionalRecordBounded(head,path,MAX_INVENTORY_RECORD_BYTES);if(!ordinal||contents===undefined||(aggregate+=Buffer.byteLength(contents,"utf8"))>MAX_INVENTORY_AGGREGATE_BYTES)throw new LedgerError("ledger-invalid-record","Ledger inventory exceeds its record budget.");entries.push(Object.freeze({path,contents,ordinal}));}
     await this.assertIsolatedHistory(head,head);
     return Object.freeze({head,entries:Object.freeze(entries)});
   }
@@ -184,6 +187,11 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader, LedgerIn
     return value.stdout;
   }
 
+  private async optionalRecordBounded(head:string,path:string,maxBytes:number):Promise<string|undefined>{
+    const probe=await this.run(["cat-file","-e",`${head}:${path}`]);if(probe.code!==0){if(missingTreePath(probe.stderr))return undefined;throw unavailable(probe.stderr);}
+    return this.gitRequiredBounded(["show",`${head}:${path}`],maxBytes);
+  }
+
   private async updateRefCas(commit: string, expectedHead: string | undefined): Promise<void> {
     const result = await this.run(["update-ref", GitLedgerStore.ref, commit, expectedHead ?? await this.nullObjectId()]);
     if (result.code === 0) return;
@@ -276,6 +284,11 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader, LedgerIn
     const result = await this.run(args, env);
     if (result.code !== 0) throw unavailable(result.stderr);
     return result.stdout.trim();
+  }
+  /** Streaming output bound for attacker-controlled ledger history/tree/content inventory. */
+  private async gitRequiredBounded(args:string[],maxBytes:number):Promise<string>{
+    if(!Number.isSafeInteger(maxBytes)||maxBytes<=0)throw new LedgerError("ledger-invalid-record","Ledger inventory has an invalid output budget.");
+    return new Promise((resolve,reject)=>{let stdout="",stderr="",bytes=0,settled=false;const fail=(error:Error)=>{if(settled)return;settled=true;child.kill("SIGKILL");reject(error);};const child=spawn(this.gitExecutable(),["-C",this.repositoryPath,...args],{env:gitEnvironment()});child.stdout.setEncoding("utf8");child.stderr.setEncoding("utf8");child.stdout.on("data",(chunk:string)=>{bytes+=Buffer.byteLength(chunk,"utf8");if(bytes>maxBytes)fail(new LedgerError("ledger-invalid-record","Ledger inventory child output exceeds its budget."));else stdout+=chunk;});child.stderr.on("data",(chunk:string)=>{if((bytes+=Buffer.byteLength(chunk,"utf8"))>maxBytes)fail(new LedgerError("ledger-invalid-record","Ledger inventory child output exceeds its budget."));else stderr+=chunk;});child.on("error",()=>fail(new LedgerError("ledger-unavailable","Git ledger inventory process failed.")));child.on("close",code=>{if(settled)return;settled=true;if(code===0)resolve(stdout.trim());else reject(unavailable(stderr));});});
   }
   private async gitInput(args: string[], input: string): Promise<string> {
     return new Promise((resolve, reject) => {

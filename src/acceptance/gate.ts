@@ -34,7 +34,8 @@ async function evaluateBound(context:ContextReader,products:ProductShaReader,led
     if((match=new RegExp(`^${escape(prefix)}finding-resolution-([A-Za-z0-9-]+)\\.json$`).exec(entry.path))){const document=record(entry,validateFindingResolution);if(document.findingId!==match[1])invalid();resolutions.push({document,ordinal:entry.ordinal});}
   }
   if(results.size===0)invalid();
-  for(const [reviewId,result] of results){const request=requests.get(reviewId);if(!request||request.ordinal>=result.ordinal||request.document.issueId!==manifest.issueId||!request.document.intentRefs.includes(intentPath)||!request.document.evidenceRefs.includes(acceptancePath))invalid();}
+  const manifestDigest=createHash("sha256").update(manifestEntry.contents).digest("hex"),acceptanceDigest=createHash("sha256").update(acceptanceEntry.contents).digest("hex");
+  for(const [reviewId,result] of results){const request=requests.get(reviewId);if(!request||request.ordinal>=result.ordinal||request.document.issueId!==manifest.issueId||!request.document.intentRefs.includes(intentPath)||!request.document.evidenceRefs.includes(acceptancePath)||request.document.manifestDigest!==manifestDigest)invalid();}
   for(const resolution of resolutions){const reviewed=results.get(resolution.document.reviewId);if(!reviewed||resolution.ordinal<=reviewed.ordinal)invalid();}
   const ordered=[...results.values()].sort((left,right)=>left.ordinal-right.ordinal);if(ordered.some((entry,index)=>index>0&&entry.ordinal===ordered[index-1]!.ordinal))invalid();
   const current=ordered.at(-1)!,currentRequest=requests.get(current.document.reviewId)!;
@@ -44,8 +45,12 @@ async function evaluateBound(context:ContextReader,products:ProductShaReader,led
   const refs=[...new Set(citations)].sort(),resolved=ledgerRecords(await ledger.read(inventory.head,refs),refs);if(refs.some(ref=>typeof resolved[ref]!=="string"))invalid();
   const after=ledgerSnapshot(await ledger.snapshot([])),finalScope=authorityScope(await context.authorityScope());if(after.head!==inventory.head||await products.currentProductSha(scope.repoRoot)!==currentProductSha||!sameAuthorityScope(scope,finalScope))invalid();
   const sequence:EvidenceSequence={reviews:ordered.map(({document,ordinal})=>({reviewId:document.reviewId,ordinal})),resolutions:resolutions.map(({document,ordinal})=>({reviewId:document.reviewId,findingId:document.findingId,ordinal}))};
-  const reviewedAfterAcceptance=current.ordinal>acceptanceEntry.ordinal;
-  const advisory=evaluateFreshness({currentProductSha,manifest,acceptance,request:currentRequest.document,result:reviewedAfterAcceptance?current.document:undefined,priorResults:(reviewedAfterAcceptance?ordered.slice(0,-1):ordered).map(entry=>entry.document),resolutions:resolutions.map(entry=>entry.document),declaredEvidenceRefs:refs,sequence});
+  const reviewedAfterAcceptance=acceptanceEntry.ordinal<currentRequest.ordinal&&currentRequest.document.acceptanceDigest===acceptanceDigest;
+  // The immutable request must name the exact ledger snapshot whose canonical
+  // manifest and acceptance bytes were sealed to the reviewer. A later same-SHA
+  // acceptance renewal is stale, not an alternative authority for this review.
+  if(reviewedAfterAcceptance){const reviewed=ledgerRecords(await ledger.read(currentRequest.document.reviewedLedgerSha,[manifestPath,acceptancePath]),[manifestPath,acceptancePath]);if(reviewed[manifestPath]!==manifestEntry.contents||reviewed[acceptancePath]!==acceptanceEntry.contents||createHash("sha256").update(reviewed[manifestPath]!).digest("hex")!==currentRequest.document.manifestDigest||createHash("sha256").update(reviewed[acceptancePath]!).digest("hex")!==currentRequest.document.acceptanceDigest)invalid();}
+  const advisory=evaluateFreshness({currentProductSha,manifest,acceptance,request:currentRequest.document,...(reviewedAfterAcceptance?{result:current.document}:{}),priorResults:(reviewedAfterAcceptance?ordered.slice(0,-1):ordered).map(entry=>entry.document),resolutions:resolutions.map(entry=>entry.document),declaredEvidenceRefs:refs,sequence});
   const eligible=reviewedAfterAcceptance&&advisory.acceptanceFresh&&advisory.reviewFresh&&advisory.blockers.length===0&&advisory.blockingFindingIds.length===0;
   return Object.freeze({...advisory,promotionEligible:eligible,nextAction:eligible?"proceed-to-promotion-gate":advisory.nextAction});
 }

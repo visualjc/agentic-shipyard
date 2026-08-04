@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-const sha="a".repeat(40), now="2026-08-04T00:00:00.000Z", request={schemaVersion:1 as const,issueId:"6",productSha:sha,reviewId:"r-1",reviewerEnvelopePath:".shipyard/reviewer.json",intentRefs:["intent.md"],evidenceRefs:["acceptance.json"]};
+const sha="a".repeat(40), now="2026-08-04T00:00:00.000Z", request={schemaVersion:1 as const,issueId:"6",productSha:sha,reviewId:"r-1",reviewerEnvelopePath:".shipyard/reviewer.json",intentRefs:["intent.md"],evidenceRefs:["acceptance.json"],reviewedLedgerSha:"b".repeat(40),manifestDigest:"c".repeat(64),acceptanceDigest:"d".repeat(64)};
 const config={executable:"/fake-codex",runtimePath:"/usr/bin:/bin",codeHome:"/isolated/codex",model:"test-model",profile:"test-profile"};
 const exec=promisify(execFile);
 async function productRepository(prefix:string,contents="pinned code"){const root=await realpath(await mkdtemp(join(tmpdir(),prefix)));await exec("/usr/bin/git",["-C",root,"init","-b","main"]);await exec("/usr/bin/git",["-C",root,"config","user.name","test"]);await exec("/usr/bin/git",["-C",root,"config","user.email","test@example.test"]);await writeFile(join(root,"review-target.txt"),contents);await exec("/usr/bin/git",["-C",root,"add","review-target.txt"]);await exec("/usr/bin/git",["-C",root,"commit","-m","product"]);const productSha=(await exec("/usr/bin/git",["-C",root,"rev-parse","HEAD"],{encoding:"utf8"})).stdout.trim();return {root,productSha};}
