@@ -1,4 +1,4 @@
 display_name: Shipyard
-short_description: Safely dispatch Shipyard setup, status, sync, review, and help.
-default_prompt: Check Shipyard status first, then dispatch only the requested setup, status, sync, review, or help operation.
+short_description: Start or resume a governed Codex-only Shipyard planning lane.
+default_prompt: Use Shipyard to classify this request and return its next safe command.
 invocation_policy: explicit

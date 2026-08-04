@@ -1,0 +1,4 @@
+display_name: Shipyard Promote
+short_description: Request governed promotion of an exact reviewed Shipyard candidate.
+default_prompt: Request Shipyard promotion only for the current reviewed candidate and report its next safe action.
+invocation_policy: explicit

@@ -1,0 +1,29 @@
+import { validateBinding, validateProfile } from "../contracts/validate.js";
+import type { Binding, Profile, RepositoryRef } from "../contracts/types.js";
+import { profileFingerprint } from "../profile/fingerprint.js";
+import type { DependencyStatus } from "../dependencies/types.js";
+
+export type PlanningAuthorityFacts = Readonly<{ repositoryPath: string; binding: Binding; profile: Profile; productSha: string; ledgerSha?: string; objectFormat: "sha1" | "sha256"; dependencies: DependencyStatus }>;
+export interface PlanningAuthority { resolve(repositoryPath: string, lane?: import("../dependencies/types.js").CapabilityLane): Promise<PlanningAuthorityFacts>; }
+
+/** Snapshot first: untrusted facts may never execute an accessor or retain a proxy. */
+export function assertPlanningFacts(raw: unknown): PlanningAuthorityFacts {
+  try {
+    const value = snapshot(raw) as Record<string, unknown>;
+    exact(value, ["repositoryPath", "binding", "profile", "productSha", "ledgerSha", "objectFormat", "dependencies"]);
+    if (typeof value.repositoryPath !== "string" || !value.repositoryPath.startsWith("/") || value.repositoryPath.length > 4096 || (value.objectFormat !== "sha1" && value.objectFormat !== "sha256") || !fullSha(value.productSha, value.objectFormat) || (value.ledgerSha !== undefined && !fullSha(value.ledgerSha, value.objectFormat))) throw new Error();
+    const binding = validateBinding(value.binding), profile = validateProfile(value.profile);
+    if (binding.profileName !== profile.name || binding.profileFingerprint !== profileFingerprint(profile) || !sameTopology(binding.topology, profile.topology) || profile.actor.login !== "visualjc" || !profile.allowedOperations.includes("setup") || !profile.allowedOperations.includes("status")) throw new Error();
+    dependencyStatus(value.dependencies);
+    return freeze({ repositoryPath: value.repositoryPath, binding, profile, productSha: value.productSha as string, ledgerSha: value.ledgerSha as string, objectFormat: value.objectFormat, dependencies: value.dependencies as DependencyStatus });
+  } catch { throw new Error("Planning authority facts are invalid."); }
+}
+export function deliveryRepository(facts: PlanningAuthorityFacts): RepositoryRef { return facts.binding.topology.kind === "single-repository" ? facts.binding.topology.repository : facts.binding.topology.development; }
+export function permits(facts: PlanningAuthorityFacts, operation: "review" | "promote" | "finalize"): boolean { return facts.profile.allowedOperations.includes(operation); }
+
+function dependencyStatus(value: unknown): asserts value is DependencyStatus { const v = snapshot(value) as Record<string, unknown>; exact(v, ["schemaVersion", "findings", "ready", "nextSafeAction"]); if (v.schemaVersion !== 1 || typeof v.ready !== "boolean" || !["shipyard", "shipyard-setup", "shipyard-help"].includes(v.nextSafeAction as string) || !Array.isArray(v.findings) || v.findings.length > 8) throw new Error(); const ids = new Set<string>(); for (const finding of v.findings) { const row = snapshot(finding) as Record<string, unknown>; exact(row, ["dependency", "state", "remediation"]); if (typeof row.dependency !== "string" || !["matt-skills", "ccpm", "codex", "claude-code", "cursor-pstack", "planning-host"].includes(row.dependency) || ids.has(row.dependency) || typeof row.state !== "string" || !["ready", "missing", "modified", "duplicate", "incompatible", "unverified", "not-required"].includes(row.state) || typeof row.remediation !== "string" || row.remediation.length === 0 || row.remediation.length > 1024) throw new Error(); ids.add(row.dependency); } if (v.ready !== (v.findings.filter(item => (item as { state: string }).state !== "not-required").every(item => (item as { state: string }).state === "ready"))) throw new Error(); }
+function snapshot(value: unknown, seen = new Set<object>(), depth = 0): unknown { if (depth > 16 || value === null || value === undefined || ["string", "number", "boolean"].includes(typeof value)) return value; if (!value || typeof value !== "object" || seen.has(value)) throw new Error(); seen.add(value); if (Reflect.ownKeys(value).some(key => typeof key !== "string")) throw new Error(); const d = Object.getOwnPropertyDescriptors(value); if (Object.entries(d).some(([key, field]) => !("value" in field) || (key !== "length" && !field.enumerable))) throw new Error(); if (Array.isArray(value)) { const length = d.length; if (!length || typeof length.value !== "number" || !Number.isSafeInteger(length.value) || length.value > 64 || Object.keys(d).some(key => key !== "length" && !/^(0|[1-9][0-9]*)$/.test(key))) throw new Error(); const out = Array.from({ length: length.value }, (_, i) => { const field = d[String(i)]; if (!field || !("value" in field)) throw new Error(); return snapshot(field.value, seen, depth + 1); }); seen.delete(value); return out; } if (Object.getPrototypeOf(value) !== Object.prototype) throw new Error(); const out: Record<string, unknown> = {}; for (const [key, descriptor] of Object.entries(d)) out[key] = snapshot(descriptor.value, seen, depth + 1); seen.delete(value); return out; }
+function exact(value: Record<string, unknown>, keys: readonly string[]): void { if (Object.keys(value).length !== keys.length || Object.keys(value).some(key => !keys.includes(key))) throw new Error(); }
+function fullSha(value: unknown, format: "sha1" | "sha256"): value is string { return typeof value === "string" && (format === "sha1" ? /^[a-f0-9]{40}$/.test(value) : /^[a-f0-9]{64}$/.test(value)); }
+function sameTopology(a: Binding["topology"], b: Profile["topology"]): boolean { return JSON.stringify(a) === JSON.stringify(b); }
+function freeze<T>(value: T): T { if (value && typeof value === "object" && !Object.isFrozen(value)) { for (const child of Object.values(value as Record<string, unknown>)) freeze(child); Object.freeze(value); } return value; }

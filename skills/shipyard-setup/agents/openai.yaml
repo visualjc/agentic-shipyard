@@ -1,4 +1,4 @@
 display_name: Shipyard Setup
-short_description: Bind an existing repository to a named Shipyard profile safely.
-default_prompt: Run setup only with an explicit profile and complete existing remote topology.
+short_description: Validate an existing Codex-only Shipyard binding.
+default_prompt: Validate the existing Shipyard binding and report the next safe command.
 invocation_policy: explicit

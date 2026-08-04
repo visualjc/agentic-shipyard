@@ -1,6 +1,6 @@
 import { BindingError } from "../binding/errors.js";
 import { MutationLockError } from "../locking/mutation-lock.js";
-import { RepositoryIdentityError } from "../commands/setup.js";
+import { DependencyReadinessError, RepositoryIdentityError } from "../commands/setup.js";
 import { ProfileStoreError } from "./profile-store.js";
 import { SyncError } from "../sync/errors.js";
 
@@ -30,8 +30,8 @@ export function commandGuidance(error: unknown, command: string): string {
     }
   }
   if (error instanceof MutationLockError) {
-    const retry = command === "sync" ? "shipyard-sync" : "shipyard-setup";
-    const operation = command === "sync" ? "Sync" : "Setup";
+    const retry = command === "sync" ? "shipyard-sync" : command === "orchestrate" ? "shipyard <request>" : "shipyard-setup";
+    const operation = command === "sync" ? "Sync" : command === "orchestrate" ? "Planning" : "Setup";
     switch (error.code) {
       case "lock-held": return `${operation} is blocked by another repository mutation. Wait for that owner to finish, then rerun shipyard-status before retrying ${retry}.`;
       case "lock-invalid": return `The repository mutation lock is malformed or names another identity. Inspect it manually; Shipyard will not remove it automatically. Rerun shipyard-status before retrying ${retry}.`;
@@ -39,6 +39,7 @@ export function commandGuidance(error: unknown, command: string): string {
     }
   }
   if (error instanceof RepositoryIdentityError) return "Repository identity could not be established. Run shipyard-setup from an existing Git repository and verify its common directory.";
+  if (error instanceof DependencyReadinessError) return error.message;
   return error instanceof Error ? error.message : "Shipyard could not safely resolve this command.";
 }
 

@@ -9,4 +9,6 @@ test("mutation-lock guidance names the command being retried", () => {
   assert.match(setup, /shipyard-status/); assert.match(setup, /shipyard-setup/); assert.doesNotMatch(setup, /shipyard-sync/);
   const sync = commandGuidance(error, "sync");
   assert.match(sync, /shipyard-status/); assert.match(sync, /shipyard-sync/); assert.doesNotMatch(sync, /shipyard-setup/);
+  const planning = commandGuidance(error, "orchestrate");
+  assert.match(planning, /Planning/); assert.match(planning, /shipyard <request>/); assert.doesNotMatch(planning, /shipyard-setup/);
 });

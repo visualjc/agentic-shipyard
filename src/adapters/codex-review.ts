@@ -18,7 +18,9 @@ export const nodeEphemeralProcessRunner:EphemeralProcessRunner={run(input){retur
   let child:ChildProcessWithoutNullStreams;try{child=spawn(input.executable,[...input.args],{cwd:input.cwd,env:input.env,stdio:["pipe","pipe","pipe"],detached:process.platform!=="win32"});}catch{return reject(new Error("spawn-failed"));}
   let stdout="",stderr="",stdoutBytes=0,stderrBytes=0,timedOut=false,oversize=false,stdinFailed=false,terminating=false,settled=false,teardownTimer:NodeJS.Timeout|undefined;
   const clear=()=>{clearTimeout(runtimeTimer);if(teardownTimer)clearTimeout(teardownTimer);};
-  const result=(exitCode:number|undefined,teardownComplete:boolean):ProcessRun=>({stdout,stderr,processId:child.pid??0,sessionId:input.env.SHIPYARD_REVIEW_SESSION??"",exitCode,timedOut,oversize,teardownComplete,...(stdinFailed?{stdinFailed:true}:{})});
+  // Every consumer supplies its own unpredictable session capability. Returning
+  // that exact value lets the caller reject accidental runner reuse.
+  const result=(exitCode:number|undefined,teardownComplete:boolean):ProcessRun=>({stdout,stderr,processId:child.pid??0,sessionId:input.env.SHIPYARD_SESSION_ID??input.env.SHIPYARD_REVIEW_SESSION??"",exitCode,timedOut,oversize,teardownComplete,...(stdinFailed?{stdinFailed:true}:{})});
   const finish=(value:ProcessRun)=>{if(settled)return;settled=true;clear();resolve(value);};
   const terminate=()=>{if(terminating)return;terminating=true;killTree(child);teardownTimer=setTimeout(()=>{child.stdout.destroy();child.stderr.destroy();child.stdin.destroy();child.unref();finish(result(undefined,false));},TEARDOWN_TIMEOUT_MS);};
   const add=(which:"stdout"|"stderr",chunk:Buffer)=>{const bytes=chunk.byteLength;if(which==="stdout"){stdoutBytes+=bytes;if(stdoutBytes>LIMIT){oversize=true;terminate();return;}stdout+=chunk.toString("utf8");}else{stderrBytes+=bytes;if(stderrBytes>LIMIT){oversize=true;terminate();return;}stderr+=chunk.toString("utf8");}};

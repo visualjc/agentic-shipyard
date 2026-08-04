@@ -1,15 +1,14 @@
 ---
 name: shipyard-setup
-description: Bind a complete, existing Shipyard repository topology without modifying remotes.
+description: Validate an existing Shipyard repository binding in Codex v1.
 metadata:
-  invocation: shipyard-setup --profile NAME --topology KIND ...
+  invocation: shipyard-setup
 ---
 
 # Shipyard setup
 
-Load and validate the named global profile, then validate the repository and
-every declared remote before writing the local binding under its mutation lock.
-Rebinding is destructive to identity and requires explicit `--rebind` after
-the operator verifies the topology.
+Use setup only when the repository already has a complete approved Shipyard
+profile and topology. The command validates the binding and returns a safe
+remediation when it cannot proceed.
 
 Read [the setup reference](references/setup.md).

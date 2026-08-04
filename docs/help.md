@@ -1,5 +1,6 @@
 # Help
 
 Use `shipyard-help` for focused command syntax. `shipyard-help setup`,
-`shipyard-help status`, `shipyard-help sync`, and `shipyard-help review` direct
-an agent to the narrow reference it needs. Help is always read-only.
+`status`, `sync`, `review`, `promote`, and `finalize` direct an agent to the
+narrow reference it needs; the `shipyard` skill handles request routing and
+`shipyard-help` itself is the eighth public skill. Help is always read-only.

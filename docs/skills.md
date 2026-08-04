@@ -3,7 +3,7 @@
 The canonical Shipyard skill packages live in `skills/<name>`. A source checkout
 has `.agents/skills/<name>` symlinks to those packages; npm intentionally does
 not ship those symlinks. There are no duplicate physical skill definitions.
-Each package has `SKILL.md` and optional Codex invocation metadata at
+Each package has `SKILL.md` and required Codex invocation metadata at
 `agents/openai.yaml`.
 
 After installing from npm, create the official discovery symlinks with the
@@ -15,7 +15,7 @@ shipyard-skills-install --target /path/to/project
 shipyard-skills-install --home "$HOME"
 ```
 
-Either command installs all six packages. `--target` defaults to the current
+Either command installs all eight packages. `--target` defaults to the current
 directory when neither option is given. Do not install a second package with
 the same name: Codex may select a different discovered definition. Verify the layout with:
 

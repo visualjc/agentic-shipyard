@@ -16,12 +16,15 @@
     "shipyard-sync": "./bin/shipyard-sync",
     "shipyard-help": "./bin/shipyard-help",
     "shipyard-review": "./bin/shipyard-review",
+    "shipyard-promote": "./bin/shipyard-promote",
+    "shipyard-finalize": "./bin/shipyard-finalize",
     "shipyard-skills-install": "./bin/shipyard-skills-install"
   },
   "files": [
     "dist/src",
     "bin",
     "skills",
+    "config",
     "docs",
     "README.md"
   ],

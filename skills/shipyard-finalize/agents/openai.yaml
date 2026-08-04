@@ -1,0 +1,4 @@
+display_name: Shipyard Finalize
+short_description: Request governed finalization for an exact promoted Shipyard candidate.
+default_prompt: Request Shipyard finalization only for the exact promoted candidate and report its next safe action.
+invocation_policy: explicit
