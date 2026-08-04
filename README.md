@@ -6,4 +6,40 @@ only reviewed, destination-approved cargo.
 > Shipyard keeps the scaffolding in the yard and launches only the reviewed
 > cargo.
 
-Status: private v1 bootstrap. The public API and implementation have not begun.
+Status: private v1 foundation.
+
+## First safe commands
+
+Build first with `npm run build`, then invoke the local launchers:
+
+```sh
+node bin/shipyard-help setup
+node bin/shipyard-setup --profile NAME --topology single-repository \
+  --development-name origin --development-url URL
+node bin/shipyard-status
+SHIPYARD_GIT_TOKEN=... node bin/shipyard-sync
+```
+
+Bindings are machine-local (`$SHIPYARD_HOME/bindings.json`, defaulting to
+`~/.shipyard`) and keyed by Git's common directory, so a linked worktree shares
+the main clone's identity. Setup validates existing remotes but never provisions
+or rewrites them; replacing an existing binding requires `--rebind`. The named
+version 1 profile must already exist in `$SHIPYARD_HOME/profiles/<name>.json`,
+match the complete requested remote topology, and authorize setup. Setup takes
+the common-directory lock first and then one Shipyard-home binding-store lock,
+so concurrent setup in different repositories cannot lose a binding update.
+
+Focused Codex skills are in `skills/shipyard*` and are discovered in this repo
+through source-checkout `.agents/skills` symlinks (npm users run the packaged installer); see [skills](docs/skills.md), [setup](docs/setup.md),
+[status](docs/status.md), [help](docs/help.md), and
+[metadata ownership](docs/metadata-ownership.md), and
+[synchronization](docs/synchronization.md).
+
+## Experimental graph acceleration
+
+Graphify and CodeGraph adapters are disabled by default and are never source or
+delivery authority. They require explicit local-only approval, a reviewed tool
+receipt, exact commit plus working-tree-fingerprint freshness, and otherwise
+instruct the operator to inspect source directly. See the experimental
+[Graphify](docs/graphify-experimental.md) and [CodeGraph](docs/codegraph-experimental.md)
+guides.

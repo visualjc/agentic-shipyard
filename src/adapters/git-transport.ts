@@ -1,0 +1,163 @@
+import { execFile } from "node:child_process";
+import { realpathSync, statSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { isAbsolute } from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+
+export const DEFAULT_NODE_GIT_EXECUTABLE = "/usr/bin/git";
+
+/**
+ * The complete environment for a production Git child. In particular, do not
+ * inherit DEVELOPER_DIR/SDKROOT/TOOLCHAINS: on macOS `/usr/bin/git` is an
+ * xcrun shim and those variables can select a different developer toolchain.
+ * The fixed PATH is only for Git's own safe system helpers, never executable
+ * selection by child_process (which receives an absolute Git path).
+ */
+export function sanitizedGitEnvironment(overrides: Readonly<Record<string, string>> = {}): NodeJS.ProcessEnv {
+  return {
+    PATH: "/usr/bin:/bin",
+    LANG: "C",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    ...overrides,
+  };
+}
+
+/** A command runner is injected so transport policy is testable without GitHub or gh. */
+export type GitTransportCommand = {
+  /** Absolute Git executable; the Node runner pins and canonicalizes its configured value. */
+  executable: string;
+  argv: readonly string[];
+  /** Values exist only for this child process; callers must not persist or log them. */
+  env: Readonly<Record<string, string>>;
+  /** A named remote resolved into a temporary, config-isolated Git directory. */
+  isolatedRemote?: Readonly<{ repositoryPath: string; remote: string; expectedUrl: string }>;
+  /** Every child is bounded even when an injected runner ignores these hints. */
+  timeoutMs?: number;
+  maxOutputBytes?: number;
+};
+
+export type GitTransportCommandResult = {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+};
+
+export interface GitTransportCommandRunner {
+  run(command: GitTransportCommand): Promise<GitTransportCommandResult>;
+}
+
+export const DEFAULT_GIT_COMMAND_TIMEOUT_MS = 30_000;
+export const DEFAULT_GIT_COMMAND_MAX_OUTPUT_BYTES = 1_048_576;
+
+/**
+ * Creates a runner pinned to one canonical, absolute Git executable. Supplying
+ * a path is intentionally an explicit configuration/test seam: a bare command
+ * name would be resolved through the inherited PATH after the token is added.
+ */
+export function createNodeGitTransportCommandRunner(executable = DEFAULT_NODE_GIT_EXECUTABLE): GitTransportCommandRunner {
+  const trustedExecutable = canonicalGitExecutable(executable);
+  return {
+    async run(command) {
+    let isolatedGitDirectory: string | undefined;
+    const timeoutMs = validLimit(command.timeoutMs, DEFAULT_GIT_COMMAND_TIMEOUT_MS);
+    const maxOutputBytes = validLimit(command.maxOutputBytes, DEFAULT_GIT_COMMAND_MAX_OUTPUT_BYTES);
+    try {
+      if (command.isolatedRemote) isolatedGitDirectory = await isolatedRemoteGitDirectory(trustedExecutable, command.isolatedRemote, timeoutMs, maxOutputBytes);
+      const result = await execFileAsync(trustedExecutable, [...command.argv], {
+        encoding: "utf8",
+        env: sanitizedGitEnvironment({ ...command.env, ...(isolatedGitDirectory ? { GIT_DIR: isolatedGitDirectory } : {}) }),
+        timeout: timeoutMs,
+        maxBuffer: maxOutputBytes,
+        killSignal: "SIGKILL",
+      });
+      return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
+    } catch (error: unknown) {
+      const result = error as NodeJS.ErrnoException & { code?: number; stdout?: string; stderr?: string; killed?: boolean; signal?: string };
+      return {
+        exitCode: typeof result.code === "number" ? result.code : 1,
+        stdout: "",
+        stderr: safeRunnerFailure(result),
+      };
+    } finally { if (isolatedGitDirectory) await rm(isolatedGitDirectory, { recursive: true, force: true }); }
+    },
+  };
+}
+
+/**
+ * Read only the named remote's raw local URL, without includes or credentials,
+ * then run the network command against a temporary bare repository containing
+ * exactly that remote. This prevents repository config from supplying helper,
+ * proxy, extra-header, or url.*.insteadOf behavior to the authenticated child.
+ */
+async function isolatedRemoteGitDirectory(executable: string, remote: Readonly<{ repositoryPath: string; remote: string; expectedUrl: string }>, timeoutMs: number, maxOutputBytes: number): Promise<string> {
+  const { stdout } = await execFileAsync(executable, ["-C", remote.repositoryPath, "config", "--local", "--no-includes", "--get", `remote.${remote.remote}.url`], {
+    encoding: "utf8", env: sanitizedGitEnvironment(), timeout: timeoutMs, maxBuffer: maxOutputBytes, killSignal: "SIGKILL",
+  });
+  const rawUrl = stdout.trim();
+  if (rawUrl !== remote.expectedUrl) throw new Error("Authenticated Git remote changed after authority validation.");
+  const url = trustedGitHubRemoteUrl(remote.expectedUrl);
+  const directory = await mkdtemp(join(tmpdir(), "shipyard-git-remote-"));
+  try {
+    // A config file alone is not a Git directory: fetch also requires HEAD,
+    // objects, and refs. Initialize with the same pinned executable and clean
+    // environment used by the authenticated child, then replace its config
+    // with the deliberately minimal, authority-checked remote configuration.
+    await execFileAsync(executable, ["init", "--bare", directory], {
+      encoding: "utf8", env: sanitizedGitEnvironment(), timeout: timeoutMs, maxBuffer: maxOutputBytes, killSignal: "SIGKILL",
+    });
+    await writeFile(join(directory, "config"), `[core]\n\tbare = true\n[remote \"${remote.remote}\"]\n\turl = ${url}\n`, { encoding: "utf8", mode: 0o600 });
+    return directory;
+  } catch (error) { await rm(directory, { recursive: true, force: true }); throw error; }
+}
+
+function trustedGitHubRemoteUrl(value: string): string {
+  let url: URL;
+  try { url = new URL(value); } catch { throw new Error("Authenticated Git requires a valid HTTPS github.com remote URL."); }
+  if (url.protocol !== "https:" || url.hostname !== "github.com" || url.port || url.username || url.password || url.search || url.hash ||
+    !/^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/.test(url.pathname)) {
+    throw new Error("Authenticated Git requires a credential-free HTTPS github.com repository remote URL.");
+  }
+  return url.toString();
+}
+
+/** Resolves a Git executable without permitting child_process PATH lookup. */
+export function canonicalGitExecutable(executable = DEFAULT_NODE_GIT_EXECUTABLE): string {
+  if (!isAbsolute(executable)) throw new Error("Git executable must be an absolute path.");
+  let canonical: string;
+  try {
+    canonical = realpathSync(executable);
+    if (!statSync(canonical).isFile()) throw new Error("not a regular file");
+  } catch {
+    throw new Error("Git executable must resolve to an existing regular file.");
+  }
+  return canonical;
+}
+
+/**
+ * Convenient default that intentionally resolves Git only when a command is
+ * run. Importing Shipyard is therefore safe on a host that does not provide
+ * the platform default; the first Git operation reports that installation
+ * problem instead.
+ */
+export const nodeGitTransportCommandRunner: GitTransportCommandRunner = {
+  run(command) { return createNodeGitTransportCommandRunner().run(command); },
+};
+
+function validLimit(value: number | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error("Git command limits must be positive safe integers.");
+  return value;
+}
+
+function safeRunnerFailure(error: NodeJS.ErrnoException & { killed?: boolean; signal?: string }): string {
+  if (error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return "Git command exceeded its output limit and was killed.";
+  if (error.killed || error.signal) return "Git command timed out and was killed.";
+  if (error.message === "Authenticated Git remote changed after authority validation.") return error.message;
+  return "Git command failed.";
+}

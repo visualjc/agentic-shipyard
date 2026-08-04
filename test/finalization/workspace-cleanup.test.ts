@@ -1,0 +1,19 @@
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import test from "node:test";
+import { RegistryOwnedWorkspaceCleanup } from "../../src/finalization/workspace-cleanup.js";
+import { MutationLockService } from "../../src/locking/mutation-lock.js";
+import type { DeliveryRegistryDocument } from "../../src/delivery/types.js";
+import { FakeProcess, MemoryFilesystem } from "../helpers/fakes.js";
+
+const execute=promisify(execFile),git="/usr/bin/git";
+async function command(path:string,args:string[]){return (await execute(git,["-C",path,...args],{encoding:"utf8"})).stdout.trim();}
+async function fixture(){const root=await mkdtemp(join(tmpdir(),"shipyard-owned-cleanup-")),repo=join(root,"repo"),worktree=join(root,"delivery");await execute(git,["init",repo],{encoding:"utf8"});await command(repo,["config","user.name","Test"]);await command(repo,["config","user.email","test@example.test"]);await writeFile(join(repo,"app.ts"),"one\n");await command(repo,["add","."]);await command(repo,["commit","-m","initial"]);await command(repo,["branch","-M","main"]);await command(repo,["worktree","add","-b","shipyard/delivery",worktree]);const canonicalRepo=await realpath(repo),canonicalWorktree=await realpath(worktree),sha=await command(canonicalWorktree,["rev-parse","HEAD"]),workspace={schemaVersion:1 as const,state:"ready" as const,creationToken:"11111111-1111-4111-8111-111111111111",deliveryId:"delivery",commonDirectory:await command(canonicalRepo,["rev-parse","--git-common-dir"]).then(value=>join(canonicalRepo,value)),branch:"shipyard/delivery",worktreePath:canonicalWorktree};let document:DeliveryRegistryDocument={schemaVersion:1,workspaces:[workspace]};const registry={lockScope:async()=>({path:"/registry.lock",scope:"registry"}),read:async()=>document,write:async(value:DeliveryRegistryDocument)=>{document=structuredClone(value);}};return {root,repo:canonicalRepo,worktree:canonicalWorktree,sha,registry,document:()=>document};}
+
+test("owned cleanup removes only the exact clean registered worktree and branch with CAS proof",async()=>{const f=await fixture();try{const cleanup=new RegistryOwnedWorkspaceCleanup(f.registry,{verifyReadyWorkspace:async()=>true},new MutationLockService(new MemoryFilesystem(),new FakeProcess()));await cleanup.removeOwned({repositoryPath:f.repo,deliveryId:"delivery",expectedBranch:"shipyard/delivery",expectedSha:f.sha});await assert.rejects(command(f.repo,["rev-parse","--verify","refs/heads/shipyard/delivery"]));assert.equal(f.document().workspaces.length,0);await cleanup.removeOwned({repositoryPath:f.repo,deliveryId:"delivery",expectedBranch:"shipyard/delivery",expectedSha:f.sha});}finally{await rm(f.root,{recursive:true,force:true});}});
+
+test("owned cleanup refuses dirty worktrees and leaves registration and refs intact",async()=>{const f=await fixture();try{await writeFile(join(f.worktree,"dirty.txt"),"user work\n");const cleanup=new RegistryOwnedWorkspaceCleanup(f.registry,{verifyReadyWorkspace:async()=>true},new MutationLockService(new MemoryFilesystem(),new FakeProcess()));await assert.rejects(cleanup.removeOwned({repositoryPath:f.repo,deliveryId:"delivery",expectedBranch:"shipyard/delivery",expectedSha:f.sha}),/user changes/i);assert.equal(await command(f.repo,["rev-parse","refs/heads/shipyard/delivery"]),f.sha);assert.equal(f.document().workspaces.length,1);}finally{await rm(f.root,{recursive:true,force:true});}});

@@ -1,0 +1,215 @@
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { promisify } from "node:util";
+import { GitTransportService } from "../../src/github/git-transport.js";
+import { createNodeGitTransportCommandRunner, GitTransportCommand, GitTransportCommandRunner, nodeGitTransportCommandRunner } from "../../src/adapters/git-transport.js";
+
+const execFileAsync = promisify(execFile);
+
+class RecordingRunner implements GitTransportCommandRunner {
+  readonly commands: GitTransportCommand[] = [];
+  result = { exitCode: 0, stdout: "fetched", stderr: "" };
+  async run(command: GitTransportCommand) {
+    this.commands.push(command);
+    return this.result;
+  }
+}
+const repositoryPath = "/workspace/repository";
+const topology = { kind: "single-repository" as const, repository: { owner: "acme", name: "repository", remote: { name: "origin", url: "https://github.com/acme/repository.git" }, defaultBranch: "main" } };
+function transport(runner: GitTransportCommandRunner) { return new GitTransportService({ resolve: async () => ({ profileName: "p", commonDirectory: "/workspace/.git", profileFingerprint: "0".repeat(64), actorLogin: "actor", topology }) }, { remoteUrl: async () => topology.repository.remote.url, commonDirectory: async () => "/workspace/.git" }, runner); }
+
+test("authenticated Git disables inherited credential helpers and keeps the token out of argv", async () => {
+  const runner = new RecordingRunner();
+  const service = transport(runner);
+  const token = "github_pat_secret_transport_token";
+
+  const result = await service.run(repositoryPath, "fetch", "main", { token });
+
+  assert.equal(result.stdout, "fetched");
+  assert.equal(runner.commands.length, 1);
+  const [command] = runner.commands;
+  assert.deepEqual(command.argv, ["-C", "/workspace/repository", "fetch", "origin", "main"]);
+  assert.deepEqual(command.isolatedRemote, { repositoryPath: "/workspace/repository", remote: "origin", expectedUrl: "https://github.com/acme/repository.git" });
+  assert.equal(command.env.GIT_CONFIG_COUNT, "2");
+  assert.equal(command.env.GIT_CONFIG_KEY_0, "http.https://github.com/.extraheader");
+  assert.equal(command.env.GIT_CONFIG_VALUE_0, "");
+  assert.equal(command.env.GIT_CONFIG_KEY_1, "http.https://github.com/.extraheader");
+  assert.equal(command.env.GIT_CONFIG_VALUE_1, `AUTHORIZATION: bearer ${token}`);
+  assert.equal(command.env.GIT_TERMINAL_PROMPT, "0");
+  assert.equal(command.argv.some((value) => value.includes(token)), false);
+  assert.equal(command.argv.some((value) => value.includes("https://x-access-token:")), false);
+});
+
+test("the command contract does not invoke or mutate global gh state", async () => {
+  const runner = new RecordingRunner();
+  const service = transport(runner);
+  await service.run(repositoryPath, "ls-remote", undefined, { token: "token" });
+  assert.deepEqual(runner.commands.map((command) => command.executable), ["/usr/bin/git"]);
+});
+
+test("transport refuses a token-bearing remote before the runner can observe it", async () => {
+  const runner = new RecordingRunner();
+  const service = transport(runner);
+  await assert.rejects(
+    service.run(repositoryPath, "fetch", "https://x-access-token:token@github.com/acme/repository.git", { token: "token" }),
+    /refuses credentials/i,
+  );
+  assert.equal(runner.commands.length, 0);
+});
+
+test("transport rejects option, config, helper, and exfiltration injection before the runner", async () => {
+  const runner = new RecordingRunner();
+  const service = transport(runner);
+  for (const ref of ["--upload-pack=evil", "https://attacker.example/repository.git", "config"]) {
+    await assert.rejects(service.run(repositoryPath, "fetch", ref, { token: "token" }), /refuses|unsafe/i);
+  }
+  assert.equal(runner.commands.length, 0);
+});
+
+test("bound transport rejects changed, normalized, and destination remotes before the runner", async () => {
+  for (const url of ["https://github.com/acme/destination.git", "https://github.com/acme/repository", "https://github.com/ACME/repository.git"]) {
+    const runner = new RecordingRunner();
+    const service = new GitTransportService({ resolve: async () => ({ profileName: "p", commonDirectory: "/workspace/.git", profileFingerprint: "0".repeat(64), actorLogin: "actor", topology }) }, { remoteUrl: async () => url, commonDirectory: async () => "/workspace/.git" }, runner);
+    await assert.rejects(service.run(repositoryPath, "fetch", "main", { token: "secret" }), /remote/i);
+    assert.equal(runner.commands.length, 0);
+  }
+});
+
+test("bound resolver drift rejects before remote lookup, runner, or token exposure", async () => {
+  const runner = new RecordingRunner(); let remoteReads = 0;
+  const service = new GitTransportService({ resolve: async () => { throw new Error("binding/profile/topology drift"); } }, { remoteUrl: async () => { remoteReads += 1; return topology.repository.remote.url; }, commonDirectory: async () => "/workspace/.git" }, runner);
+  await assert.rejects(service.run(repositoryPath, "fetch", "main", { token: "secret-token" }), /drift/);
+  assert.equal(remoteReads, 0); assert.equal(runner.commands.length, 0);
+});
+
+test("production Git runner is PATH-independent and an explicitly injected executable receives only sanitized environment", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "shipyard-git-env-"));
+  const executable = join(directory, "trusted-git");
+  const fakeGit = join(directory, "git");
+  const fakeCapture = join(directory, "fake-capture");
+  const originalPath = process.env.PATH;
+  const inherited = {
+    GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+    GIT_ASKPASS: process.env.GIT_ASKPASS,
+    GITHUB_TOKEN: process.env.GITHUB_TOKEN,
+    GH_TOKEN: process.env.GH_TOKEN,
+  };
+  try {
+    await writeFile(executable, "#!/bin/sh\nprintenv\n", { mode: 0o700 });
+    await chmod(executable, 0o700);
+    await writeFile(fakeGit, `#!/bin/sh\nprintf '%s' \"$GIT_CONFIG_VALUE_0\" > '${fakeCapture}'\n`, { mode: 0o700 });
+    await chmod(fakeGit, 0o700);
+    process.env.PATH = `${directory}:${originalPath ?? ""}`;
+    process.env.GIT_CONFIG_GLOBAL = "inherited-git-config";
+    process.env.GIT_ASKPASS = "inherited-askpass";
+    process.env.GITHUB_TOKEN = "inherited-github-token";
+    process.env.GH_TOKEN = "inherited-gh-token";
+
+    const command = {
+      executable: "/usr/bin/git",
+      argv: ["--version"],
+      env: { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "credential.helper", GIT_CONFIG_VALUE_0: "AUTHORIZATION: bearer ephemeral-token", GIT_TERMINAL_PROMPT: "0" },
+    } as const;
+    const result = await nodeGitTransportCommandRunner.run(command);
+
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.stdout.includes("ephemeral-token"), false, "the default runner must not execute PATH's fake git");
+    await assert.rejects(async () => await import("node:fs/promises").then(fs => fs.readFile(fakeCapture, "utf8")));
+
+    const trustedRunner = createNodeGitTransportCommandRunner(executable);
+    const trustedResult = await trustedRunner.run(command);
+    assert.equal(trustedResult.exitCode, 0);
+    assert.match(trustedResult.stdout, /GIT_CONFIG_COUNT=1/);
+    assert.match(trustedResult.stdout, /AUTHORIZATION: bearer ephemeral-token/);
+    assert.equal(result.stdout.includes("inherited-git-config"), false);
+    assert.equal(result.stdout.includes("inherited-askpass"), false);
+    assert.equal(result.stdout.includes("inherited-github-token"), false);
+    assert.equal(result.stdout.includes("inherited-gh-token"), false);
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    for (const [key, value] of Object.entries(inherited)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("configured Git executable must be an absolute existing regular file", () => {
+  assert.throws(() => createNodeGitTransportCommandRunner("git"), /absolute path/i);
+  assert.throws(() => createNodeGitTransportCommandRunner("/definitely/not/git"), /existing regular file/i);
+});
+
+test("production Git runner kills hung and oversized children with fixed diagnostics", async (t) => {
+  for (const mode of ["hang", "flood"] as const) await t.test(mode, async () => {
+    const directory = await mkdtemp(join(tmpdir(), `shipyard-runner-${mode}-`)); const executable = join(directory, "trusted-git");
+    try {
+      await writeFile(executable, mode === "hang" ? "#!/bin/sh\nwhile :; do :; done\n" : "#!/bin/sh\nwhile :; do echo opaque-secret; done\n", { mode: 0o700 }); await chmod(executable, 0o700); const started = Date.now();
+      const result = await createNodeGitTransportCommandRunner(executable).run({ executable, argv: ["ls-remote", "origin"], env: { GIT_CONFIG_VALUE_1: "AUTHORIZATION: bearer opaque-secret" }, timeoutMs: mode === "hang" ? 150 : 1_000, maxOutputBytes: 128 });
+      assert.notEqual(result.exitCode, 0); assert.match(result.stderr, mode === "hang" ? /timed out.*killed/i : /output limit.*killed/i); assert.equal(result.stdout, ""); assert.doesNotMatch(result.stderr, /opaque-secret/); assert.ok(Date.now() - started < 3_000);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+});
+
+test("authenticated runner isolates a named remote from hostile Git config and developer-tool selection", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "shipyard-isolated-git-"));
+  const executable = join(directory, "trusted-git");
+  const inherited = Object.fromEntries(["DEVELOPER_DIR", "SDKROOT", "TOOLCHAINS", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM"].map((key) => [key, process.env[key]]));
+  try {
+    await writeFile(executable, "#!/bin/sh\nif [ \"$1\" = init ]; then exit 0; fi\nif [ \"$3\" = config ]; then printf '%s\\n' 'https://github.com/acme/widget.git'; exit 0; fi\nprintf '%s\\n' '--CONFIG--'; cat \"$GIT_DIR/config\"; printf '%s\\n' '--ENV--'; printenv\n", { mode: 0o700 });
+    await chmod(executable, 0o700);
+    process.env.DEVELOPER_DIR = "/hostile/developer"; process.env.SDKROOT = "/hostile/sdk"; process.env.TOOLCHAINS = "hostile"; process.env.GIT_CONFIG_GLOBAL = "/hostile/config";
+    const runner = createNodeGitTransportCommandRunner(executable);
+    const result = await runner.run({
+      executable, argv: ["-C", "/repository", "fetch", "origin", "main"],
+      env: { GIT_CONFIG_COUNT: "2", GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader", GIT_CONFIG_VALUE_0: "", GIT_CONFIG_KEY_1: "http.https://github.com/.extraheader", GIT_CONFIG_VALUE_1: "AUTHORIZATION: bearer ephemeral-token" },
+      isolatedRemote: { repositoryPath: "/repository", remote: "origin", expectedUrl: "https://github.com/acme/widget.git" },
+    });
+    assert.equal(result.exitCode, 0);
+    assert.match(result.stdout, /url = https:\/\/github\.com\/acme\/widget\.git/);
+    assert.equal(result.stdout.includes("hostile"), false);
+    assert.equal(result.stdout.includes("GIT_CONFIG_GLOBAL=/hostile/config"), false);
+    assert.match(result.stdout, /GIT_CONFIG_NOSYSTEM=1/);
+    assert.match(result.stdout, /AUTHORIZATION: bearer ephemeral-token/);
+  } finally {
+    for (const [key, value] of Object.entries(inherited)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("runner rejects a remote changed after authority validation before the credentialed child", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "shipyard-remote-race-"));
+  const executable = join(directory, "trusted-git");
+  try {
+    await writeFile(executable, "#!/bin/sh\nif [ \"$1\" = init ]; then exit 0; fi\nif [ \"$3\" = config ]; then printf '%s\\n' 'https://github.com/acme/destination.git'; exit 0; fi\nprintf 'NETWORK %s' \"$GIT_CONFIG_VALUE_1\"\n", { mode: 0o700 });
+    await chmod(executable, 0o700);
+    const result = await createNodeGitTransportCommandRunner(executable).run({ executable, argv: ["-C", "/repository", "fetch", "origin"], env: { GIT_CONFIG_VALUE_1: "AUTHORIZATION: bearer secret-token" }, isolatedRemote: { repositoryPath: "/repository", remote: "origin", expectedUrl: "https://github.com/acme/widget.git" } });
+    assert.notEqual(result.exitCode, 0); assert.match(result.stderr, /changed after authority/i);
+    assert.equal(result.stdout.includes("NETWORK"), false); assert.equal(`${result.stdout}\n${result.stderr}`.includes("secret-token"), false);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("authenticated runner creates a valid bare Git directory with only the checked remote", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "shipyard-real-git-"));
+  const repository = join(directory, "repository");
+  try {
+    await execFileAsync("/usr/bin/git", ["init", repository], { encoding: "utf8" });
+    await execFileAsync("/usr/bin/git", ["-C", repository, "remote", "add", "origin", "https://github.com/acme/widget.git"], { encoding: "utf8" });
+    const runner = createNodeGitTransportCommandRunner("/usr/bin/git");
+    const isolatedRemote = { repositoryPath: repository, remote: "origin", expectedUrl: "https://github.com/acme/widget.git" };
+
+    const validity = await runner.run({ executable: "/usr/bin/git", argv: ["fsck", "--no-dangling"], env: {}, isolatedRemote });
+    assert.equal(validity.exitCode, 0, validity.stderr);
+
+    const configuredRemote = await runner.run({ executable: "/usr/bin/git", argv: ["config", "--get", "remote.origin.url"], env: {}, isolatedRemote });
+    assert.equal(configuredRemote.exitCode, 0, configuredRemote.stderr);
+    assert.equal(configuredRemote.stdout.trim(), "https://github.com/acme/widget.git");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

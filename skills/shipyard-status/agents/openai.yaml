@@ -1,0 +1,4 @@
+display_name: Shipyard Status
+short_description: Read the safe status of the current Shipyard binding.
+default_prompt: Check Shipyard status without changing repository or binding state.
+invocation_policy: explicit

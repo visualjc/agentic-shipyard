@@ -1,0 +1,38 @@
+{
+  "name": "@visualjc/shipyard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": "./dist/src/index.js"
+  },
+  "bin": {
+    "shipyard": "./bin/shipyard",
+    "shipyard-setup": "./bin/shipyard-setup",
+    "shipyard-status": "./bin/shipyard-status",
+    "shipyard-sync": "./bin/shipyard-sync",
+    "shipyard-help": "./bin/shipyard-help",
+    "shipyard-review": "./bin/shipyard-review",
+    "shipyard-skills-install": "./bin/shipyard-skills-install"
+  },
+  "files": [
+    "dist/src",
+    "bin",
+    "skills",
+    "docs",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepack": "npm run build",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test $(find dist/test -type f -name '*.test.js' | sort)"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "typescript": "5.7.3"
+  }
+}
