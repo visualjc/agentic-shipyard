@@ -175,7 +175,7 @@ test("status refuses actor-only and path-policy-only profile authority drift unt
 test("status projects enabled graph freshness without launching tools or creating graph state", async () => {
   const fixture = await createRepository(false);
   try {
-    await writeProfile(fixture, "demo", { graph: { enabled: true, localOnlyApproved: true, adapter: "graphify", reviewedToolSource: "graphify@0.9.32#00efd6e7969837ae4a9f11d8d504dcd3b20b09df", executablePath: "/missing/graphify", cacheRoot: "/missing/external-cache" } });
+    await writeProfile(fixture, "demo", { graph: { enabled: true, localOnlyApproved: true, adapter: "graphify", reviewedToolSource: "graphify@0.9.32#00efd6e7969837ae4a9f11d8d504dcd3b20b09df", artifactSha256: "9".repeat(64), executablePath: "/missing/graphify", cacheRoot: "/missing/external-cache" } });
     const args = ["--home", fixture.home, "--profile", "demo", "--topology", "staged-pair", "--development-name", "origin", "--development-url", fixture.origin, "--destination-name", "destination", "--destination-url", fixture.destination]; assert.equal((await run(args, "setup", fixture.main)).code, 0);
     const result = await run(["--home", fixture.home], "status", fixture.main); assert.equal(result.code, 0); assert.match(result.output, /"graphFreshness": "stale"/); assert.match(result.output, /"adapter": "graphify"/); await assert.rejects(access(join(fixture.home, "graph")));
   } finally { await fixture.dispose(); }

@@ -8,6 +8,9 @@ export type GraphSource = Readonly<{ worktreeRoot: string; worktreeInstanceId: s
 export type GraphDescriptor = Readonly<{
   adapter: "graphify" | "codegraph";
   reviewedToolSource: string;
+  artifactSha256: string;
+  runtimeArtifactSha256?: string;
+  contentSha256: string;
   cacheIdentity: string;
   cacheRoot: string;
   worktreeRoot: string;

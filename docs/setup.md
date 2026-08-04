@@ -56,6 +56,7 @@ Graphify the enabled shape is:
     "localOnlyApproved": true,
     "adapter": "graphify",
     "reviewedToolSource": "graphify@0.9.32#00efd6e7969837ae4a9f11d8d504dcd3b20b09df",
+    "artifactSha256": "<lowercase SHA-256 of the reviewed graphify executable>",
     "executablePath": "/absolute/path/to/graphify",
     "cacheRoot": "/absolute/external/shipyard-graph-cache"
   }
@@ -64,7 +65,10 @@ Graphify the enabled shape is:
 
 CodeGraph uses the corresponding exact
 `codegraph@1.5.0#49c11fc2e0c02170742be8411e66a31af611f4b7` receipt,
-`executablePath`, and `nodeExecutablePath`. Shipyard installs neither tool.
+`artifactSha256`, `executablePath`, `nodeArtifactSha256`, and
+`nodeExecutablePath`. These profile digests bind the actual reviewed executable
+bytes; writable adjacent sidecars are not provenance. Shipyard installs neither
+tool.
 
 `pathPolicy` is profile-owned authority. Operational path classification must
 consume this validated profile policy, never an unrelated local policy.

@@ -28,10 +28,11 @@ export function graphLockPath(lockRoot: string, cacheIdentity: string): string {
   return join(lockRoot, "graph-locks", `${cacheIdentity}.lock`);
 }
 
-export function validateGraphDescriptor(source: GraphSource, descriptor: GraphDescriptor | undefined, adapter: GraphDescriptor["adapter"], reviewedToolSource: string): GraphDecision {
+export function validateGraphDescriptor(source: GraphSource, descriptor: GraphDescriptor | undefined, adapter: GraphDescriptor["adapter"], reviewedToolSource: string, artifactSha256?: string, runtimeArtifactSha256?: string): GraphDecision {
   try { source = validateGraphSource(source); descriptor = descriptor === undefined ? undefined : validateGraphDescriptorShape(descriptor); } catch { return graphDecision("invalid", "Graph descriptor/source validation failed."); }
   if (!descriptor) return graphDecision("stale", "No graph descriptor exists for this source snapshot.");
   if (!isAbsolute(descriptor.worktreeRoot) || !isAbsolute(descriptor.cacheRoot) || descriptor.adapter !== adapter || descriptor.reviewedToolSource !== reviewedToolSource || resolve(descriptor.worktreeRoot) !== resolve(source.worktreeRoot) || descriptor.worktreeInstanceId !== source.worktreeInstanceId) return graphDecision("invalid", "Graph descriptor identity does not match the requested adapter/worktree.");
+  if ((artifactSha256 !== undefined && descriptor.artifactSha256 !== artifactSha256) || (runtimeArtifactSha256 !== undefined && descriptor.runtimeArtifactSha256 !== runtimeArtifactSha256)) return graphDecision("invalid", "Graph descriptor artifact binding does not match the reviewed profile.");
   if (descriptor.indexedCommit !== source.headSha || descriptor.workingTreeFingerprint !== source.workingTreeFingerprint) return graphDecision("stale", "Graph commit or working-tree fingerprint no longer matches source.");
   if (descriptor.cacheIdentity !== graphCacheIdentity(adapter, reviewedToolSource, source, descriptor.seededFromSha)) return graphDecision("invalid", "Graph cache identity is not private to this exact worktree and baseline.");
   if (adapter === "graphify" && (graphPathContains(source.worktreeRoot, descriptor.cacheRoot) || graphPathContains(descriptor.cacheRoot, source.worktreeRoot))) return graphDecision("invalid", "Graphify descriptor cache is not a private external root.");
@@ -55,12 +56,12 @@ export async function evaluateGraphLock(lock: GraphCacheLock | undefined, proces
   return graphDecision("stale", "Dead local graph lock is stale; recover only through verified lock recovery.");
 }
 
-export async function evaluateGraphFreshness(input: { source: GraphSource; descriptor?: GraphDescriptor; adapter: GraphDescriptor["adapter"]; reviewedToolSource: string; runtime?: GraphRuntime; lock?: GraphCacheLock; process?: ProcessAdapter }): Promise<GraphDecision> {
+export async function evaluateGraphFreshness(input: { source: GraphSource; descriptor?: GraphDescriptor; adapter: GraphDescriptor["adapter"]; reviewedToolSource: string; artifactSha256?: string; runtimeArtifactSha256?: string; runtime?: GraphRuntime; lock?: GraphCacheLock; process?: ProcessAdapter }): Promise<GraphDecision> {
   let value: Record<string, unknown>, source: GraphSource, runtime: GraphRuntime | undefined;
   try { const d = Object.getOwnPropertyDescriptors(input); if (Object.values(d).some(field => !("value" in field))) throw new Error(); value = Object.fromEntries(Object.entries(d).map(([key, field]) => [key, field.value])); source = validateGraphSource(value.source); runtime = value.runtime === undefined ? undefined : validateGraphRuntime(value.runtime); } catch { return graphDecision("invalid", "Graph source/runtime validation failed."); }
   if (runtime && !runtime.available) return graphDecision("unavailable", "Experimental graph runtime is unavailable.");
   if (value.lock) { if (!value.process) return graphDecision("blocked", "Graph cache lock cannot be verified without process authority."); return (await evaluateGraphLock(value.lock as GraphCacheLock, value.process as ProcessAdapter))!; }
-  return validateGraphDescriptor(source, value.descriptor as GraphDescriptor | undefined, value.adapter as GraphDescriptor["adapter"], value.reviewedToolSource as string);
+  return validateGraphDescriptor(source, value.descriptor as GraphDescriptor | undefined, value.adapter as GraphDescriptor["adapter"], value.reviewedToolSource as string, value.artifactSha256 as string | undefined, value.runtimeArtifactSha256 as string | undefined);
 }
 
 function method(value: object, name: string): Function { const own = Object.getOwnPropertyDescriptor(value, name); const prototype = Object.getPrototypeOf(value); const inherited = prototype && Object.getOwnPropertyDescriptor(prototype, name); const descriptor = own ?? inherited; if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== "function") throw new Error(); return descriptor.value.bind(value); }

@@ -15,6 +15,7 @@ test("experimental graph documentation and package policy retain the reviewed sa
   for (const text of [graphify, codegraph]) assert.match(text, /disabled by default/i);
   assert.match(graphify, /code-only/i); assert.match(graphify, /GRAPHIFY_OUT/); assert.match(graphify, /--out/); assert.match(graphify, /query logging/i); assert.match(graphify, /graphify-out\/\*\*/); assert.match(graphify, /no code, query, image,\s*or document may be sent to a provider/i);
   assert.match(codegraph, /SQLite FTS5/i); assert.match(codegraph, /info\/exclude/); assert.match(codegraph, /empirical observation/i); assert.match(codegraph, /not an upstream-guaranteed/i); assert.match(codegraph, /No installer, MCP setup, or\s*provider transmission/i);
+  for (const text of [graphify, codegraph]) { assert.match(text, /SHA-256/i); assert.match(text, /process group/i); assert.match(text, /sidecars?\s+(?:are|is) not trusted/i); assert.match(text, /Shipyard-owned descriptor/i); }
   assert.match(ownership, /Understand Anything has no authoritative feature-worktree state/i); assert.doesNotMatch(graphify + codegraph + readme, /Understand Anything.*adapter/i);
   const files = JSON.parse(manifest) as { files: string[] };
   for (const required of ["docs", "README.md"]) assert.ok(files.files.includes(required));

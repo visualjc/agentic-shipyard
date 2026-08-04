@@ -34,8 +34,8 @@ export type Profile = {
 
 export type GraphProfile =
   | Readonly<{ enabled: false }>
-  | Readonly<{ enabled: true; localOnlyApproved: true; adapter: "graphify"; reviewedToolSource: "graphify@0.9.32#00efd6e7969837ae4a9f11d8d504dcd3b20b09df"; executablePath: string; cacheRoot: string }>
-  | Readonly<{ enabled: true; localOnlyApproved: true; adapter: "codegraph"; reviewedToolSource: "codegraph@1.5.0#49c11fc2e0c02170742be8411e66a31af611f4b7"; executablePath: string; nodeExecutablePath: string }>;
+  | Readonly<{ enabled: true; localOnlyApproved: true; adapter: "graphify"; reviewedToolSource: "graphify@0.9.32#00efd6e7969837ae4a9f11d8d504dcd3b20b09df"; artifactSha256: string; executablePath: string; cacheRoot: string }>
+  | Readonly<{ enabled: true; localOnlyApproved: true; adapter: "codegraph"; reviewedToolSource: "codegraph@1.5.0#49c11fc2e0c02170742be8411e66a31af611f4b7"; artifactSha256: string; executablePath: string; nodeArtifactSha256: string; nodeExecutablePath: string }>;
 
 /** A binding belongs to the Git common directory, not a particular worktree. */
 export type Binding = {

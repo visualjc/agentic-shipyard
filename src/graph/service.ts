@@ -39,7 +39,7 @@ function createService(home: string, gitExecutable: string, dependencies: { read
         if (descriptor && profile.graph.adapter === "graphify" && descriptor.cacheRoot !== join(profile.graph.cacheRoot, createHash("sha256").update(source.worktreeInstanceId).digest("hex"))) return projected(profile.graph, graphDecision("invalid", "Stored Graphify descriptor is outside the configured private cache root."));
         const identity = graphOperationLockIdentity(profile.graph.adapter, profile.graph.reviewedToolSource, source);
         let held; try { held = await store.read(lockPath(profile.graph, source.worktreeRoot, identity, descriptor)); } catch { return projected(profile.graph, graphDecision("blocked", "Graph lock state could not be read safely.")); }
-        const decision = await evaluateGraphFreshness({ source, descriptor, adapter: profile.graph.adapter, reviewedToolSource: profile.graph.reviewedToolSource, lock: held, process });
+        const decision = await evaluateGraphFreshness({ source, descriptor, adapter: profile.graph.adapter, reviewedToolSource: profile.graph.reviewedToolSource, artifactSha256: profile.graph.artifactSha256, ...(profile.graph.adapter === "codegraph" ? { runtimeArtifactSha256: profile.graph.nodeArtifactSha256 } : {}), lock: held, process });
         return projected(profile.graph, decision);
       } catch { return projected(profile.graph, graphDecision("unavailable", "Graph status source could not be read safely.")); }
     },

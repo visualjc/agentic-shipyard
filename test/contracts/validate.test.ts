@@ -46,10 +46,11 @@ test("profile fingerprints are stable across a validated round trip", () => {
 test("graph profile is backward-safe disabled by omission and strict when enabled", () => {
   const base = { schemaVersion: 1, name: "stable", actor: { login: "actor" }, topology: { kind: "single-repository", repository }, allowedOperations: ["setup", "status"], pathPolicy: { schemaVersion: 1, rules: [{ owner: "product", pattern: "src/**" }] } };
   assert.equal(profileFingerprint(base), profileFingerprint({ ...base, graph: { enabled: false } }));
-  const enabled = validateProfile({ ...base, graph: { enabled: true, localOnlyApproved: true, adapter: "graphify", reviewedToolSource: "graphify@0.9.32#00efd6e7969837ae4a9f11d8d504dcd3b20b09df", executablePath: "/opt/graphify", cacheRoot: "/var/shipyard/graph" } });
+  const enabled = validateProfile({ ...base, graph: { enabled: true, localOnlyApproved: true, adapter: "graphify", reviewedToolSource: "graphify@0.9.32#00efd6e7969837ae4a9f11d8d504dcd3b20b09df", artifactSha256: "9".repeat(64), executablePath: "/opt/graphify", cacheRoot: "/var/shipyard/graph" } });
   assert.equal(enabled.graph?.enabled, true); assert.notEqual(profileFingerprint(enabled), profileFingerprint(base));
   assert.throws(() => validateProfile({ ...base, graph: { enabled: false, executablePath: "/evil" } }), ContractValidationError);
-  assert.throws(() => validateProfile({ ...base, graph: { enabled: true, localOnlyApproved: true, adapter: "graphify", reviewedToolSource: "graphify@latest", executablePath: "/opt/graphify", cacheRoot: "/var/graph" } }), ContractValidationError);
+  assert.throws(() => validateProfile({ ...base, graph: { enabled: true, localOnlyApproved: true, adapter: "graphify", reviewedToolSource: "graphify@latest", artifactSha256: "9".repeat(64), executablePath: "/opt/graphify", cacheRoot: "/var/graph" } }), ContractValidationError);
+  assert.throws(() => validateProfile({ ...base, graph: { enabled: true, localOnlyApproved: true, adapter: "graphify", reviewedToolSource: "graphify@0.9.32#00efd6e7969837ae4a9f11d8d504dcd3b20b09df", artifactSha256: "caller-sidecar", executablePath: "/opt/graphify", cacheRoot: "/var/graph" } }), ContractValidationError);
   let called = false; const hostile = Object.create(Object.prototype, { schemaVersion: { enumerable: true, get() { called = true; throw new Error("profile-secret"); } } }); assert.throws(() => validateProfile(hostile), ContractValidationError); assert.equal(called, false);
 });
 

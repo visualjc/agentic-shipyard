@@ -10,10 +10,15 @@ failed relocation audit means inspect source directly; no code, query, image,
 or document may be sent to a provider.
 
 Production execution is available only through the controlled graph-lane
-factory. It pins absolute executables, bounds child time/output, holds one
-external transaction lock through descriptor persistence, and requires an
-adjacent `<executable>.shipyard-receipt.json` provenance record whose observed
-version matches the executable's own `--version` output. Shipyard never creates
-that provenance record or installs the executable. Baseline copying additionally
+factory. It pins an absolute executable and its reviewed SHA-256 in the profile,
+rehashes the actual executable before `--version` and every operation, bounds
+child time/output, and terminates the complete child process group on either
+limit. Writable adjacent sidecars are not trusted as provenance. Shipyard never
+installs the executable.
+
+One external transaction lock is held through content hashing and descriptor
+persistence. The descriptor binds the reviewed executable digest and a
+deterministic digest of the generated cache bytes. Baseline copying additionally
 requires an opaque authorization resolved from a live, distinct, clean `main`
-Git worktree; caller-labelled baseline objects have no authority.
+Git worktree and the exact Shipyard-owned descriptor/cache; caller-labelled
+descriptors, cache paths, and baseline objects have no authority.

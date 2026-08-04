@@ -4,7 +4,7 @@ import { evaluateGraphFreshness, evaluateGraphLock, GraphLockService, graphCache
 import { FakeProcess } from "../helpers/fakes.js";
 
 const source: GraphSource = { worktreeRoot: "/private/a", worktreeInstanceId: `git-worktree-v1:${"a".repeat(64)}`, headSha: "a".repeat(40), workingTreeFingerprint: `git-v1:${"1".repeat(64)}` };
-function descriptor(overrides: Partial<GraphDescriptor> = {}): GraphDescriptor { return { adapter: "graphify", reviewedToolSource: GRAPHIFY_RECEIPT, cacheIdentity: graphCacheIdentity("graphify", GRAPHIFY_RECEIPT, source), cacheRoot: "/cache/a", worktreeRoot: source.worktreeRoot, worktreeInstanceId: source.worktreeInstanceId, indexedCommit: source.headSha, workingTreeFingerprint: source.workingTreeFingerprint, refreshedAt: "2026-08-04T00:00:00Z", ...overrides }; }
+function descriptor(overrides: Partial<GraphDescriptor> = {}): GraphDescriptor { return { adapter: "graphify", reviewedToolSource: GRAPHIFY_RECEIPT, artifactSha256: "9".repeat(64), contentSha256: "c".repeat(64), cacheIdentity: graphCacheIdentity("graphify", GRAPHIFY_RECEIPT, source), cacheRoot: "/cache/a", worktreeRoot: source.worktreeRoot, worktreeInstanceId: source.worktreeInstanceId, indexedCommit: source.headSha, workingTreeFingerprint: source.workingTreeFingerprint, refreshedAt: "2026-08-04T00:00:00Z", ...overrides }; }
 
 test("exact commit and dirty fingerprint are both required and divergent worktrees do not share cache identity", () => {
   assert.equal(validateGraphDescriptor(source, descriptor(), "graphify", GRAPHIFY_RECEIPT).state, "fresh");

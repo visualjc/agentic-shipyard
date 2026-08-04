@@ -86,14 +86,14 @@ function validateGraphProfile(value: unknown): GraphProfile {
   if (value.enabled === false) { exactKeys(value, ["enabled"], "$.graph", "invalid-profile"); return Object.freeze({ enabled: false }); }
   if (value.enabled !== true || value.localOnlyApproved !== true) invalid("invalid-profile", "$.graph", "enabled graphs require explicit localOnlyApproved true");
   if (value.adapter === "graphify") {
-    exactKeys(value, ["enabled", "localOnlyApproved", "adapter", "reviewedToolSource", "executablePath", "cacheRoot"], "$.graph", "invalid-profile");
+    exactKeys(value, ["enabled", "localOnlyApproved", "adapter", "reviewedToolSource", "artifactSha256", "executablePath", "cacheRoot"], "$.graph", "invalid-profile");
     if (value.reviewedToolSource !== "graphify@0.9.32#00efd6e7969837ae4a9f11d8d504dcd3b20b09df") invalid("invalid-profile", "$.graph.reviewedToolSource", "must equal the reviewed Graphify pin");
-    return Object.freeze({ enabled: true, localOnlyApproved: true, adapter: "graphify", reviewedToolSource: value.reviewedToolSource, executablePath: absolute(value.executablePath, "$.graph.executablePath"), cacheRoot: absolute(value.cacheRoot, "$.graph.cacheRoot") });
+    return Object.freeze({ enabled: true, localOnlyApproved: true, adapter: "graphify", reviewedToolSource: value.reviewedToolSource, artifactSha256: digest(value.artifactSha256, "$.graph.artifactSha256"), executablePath: absolute(value.executablePath, "$.graph.executablePath"), cacheRoot: absolute(value.cacheRoot, "$.graph.cacheRoot") });
   }
   if (value.adapter === "codegraph") {
-    exactKeys(value, ["enabled", "localOnlyApproved", "adapter", "reviewedToolSource", "executablePath", "nodeExecutablePath"], "$.graph", "invalid-profile");
+    exactKeys(value, ["enabled", "localOnlyApproved", "adapter", "reviewedToolSource", "artifactSha256", "executablePath", "nodeArtifactSha256", "nodeExecutablePath"], "$.graph", "invalid-profile");
     if (value.reviewedToolSource !== "codegraph@1.5.0#49c11fc2e0c02170742be8411e66a31af611f4b7") invalid("invalid-profile", "$.graph.reviewedToolSource", "must equal the reviewed CodeGraph pin");
-    return Object.freeze({ enabled: true, localOnlyApproved: true, adapter: "codegraph", reviewedToolSource: value.reviewedToolSource, executablePath: absolute(value.executablePath, "$.graph.executablePath"), nodeExecutablePath: absolute(value.nodeExecutablePath, "$.graph.nodeExecutablePath") });
+    return Object.freeze({ enabled: true, localOnlyApproved: true, adapter: "codegraph", reviewedToolSource: value.reviewedToolSource, artifactSha256: digest(value.artifactSha256, "$.graph.artifactSha256"), executablePath: absolute(value.executablePath, "$.graph.executablePath"), nodeArtifactSha256: digest(value.nodeArtifactSha256, "$.graph.nodeArtifactSha256"), nodeExecutablePath: absolute(value.nodeExecutablePath, "$.graph.nodeExecutablePath") });
   }
   return invalid("invalid-profile", "$.graph.adapter", "must be graphify or codegraph");
 }
@@ -102,6 +102,7 @@ function absolute(value: unknown, path: string): string {
   if (!isAbsolute(text) || resolve(text) !== text) invalid("invalid-profile", path, "must be a canonical absolute path");
   return text;
 }
+function digest(value: unknown, path: string): string { const text = nonEmpty(value, path, "invalid-profile"); if (!/^[0-9a-f]{64}$/.test(text)) invalid("invalid-profile", path, "must be a lowercase SHA-256 digest"); return text; }
 export function validateBinding(value: unknown): Binding {
   if (!isRecord(value)) invalid("invalid-binding", "$", "must be an object");
   exactKeys(value, ["schemaVersion", "profileName", "commonDirectory", "topology", "profileFingerprint", "boundAt"], "$", "invalid-binding"); version(value, "$", "invalid-binding");
