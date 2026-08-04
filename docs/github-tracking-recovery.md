@@ -57,8 +57,10 @@ token, expected actor, existing head ref, base ref, and canonical lowercase
 `shipyard/<stable-delivery-id>` and is the fixture's sole delivery identity;
 use a fresh uniquely named pre-created branch when a fresh marker is required.
 `NativeInteractive/*` is always rejected. The approved disposable repository
-must already contain that head branch at that SHA. In its controlled serial
-run, the fixture creates one marked development issue/PR through
+is read-only-preflighted through the exact encoded branch endpoint after actor
+verification; its live branch name and commit SHA must exactly match the
+configured head before any local or provider mutation. In its controlled
+serial run, the fixture creates one marked development issue/PR through
 `trackDevelopmentRecords`, proves the second call discovers the same provider
 IDs, then freshly verifies the configured actor on one credential-bound client
 before issuing only the two exact record-close requests in `finally`; normal

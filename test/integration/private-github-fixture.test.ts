@@ -30,9 +30,10 @@ test("private fixture creates then idempotently discovers one approved developme
   const sha = required("SHIPYARD_PRIVATE_GITHUB_HEAD_SHA");
   assert.match(base, /^[A-Za-z0-9][A-Za-z0-9._/-]*$/); assert.ok(!base.includes(":") && !base.includes(".."));
   assert.match(sha, /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
-  const root = await mkdtemp(join(tmpdir(), "shipyard-private-tracker-"));
   const credential = Object.freeze({ authorizationValue: token });
   const api = new GitHubRestAdapter({ resolve: async () => credential }, new FetchGitHubRestTransport());
+  await preflightPrivateFixture(actor, repository, approvedRepository, head, sha, credential, api);
+  const root = await mkdtemp(join(tmpdir(), "shipyard-private-tracker-"));
   const topology = { kind: "single-repository" as const, repository: { owner, name, remote: { name: "origin", url: `https://github.com/${repository}.git` }, defaultBranch: base } };
   const bound = { resolve: async () => ({ profileName: "private-fixture", commonDirectory: root, profileFingerprint: "0".repeat(64), actorLogin: actor, topology }) };
   const authority = {
@@ -105,12 +106,85 @@ test("private fixture cleanup verifies one actor-bound client and permits only e
   assert.equal(outOfScopeFactoryCalls, 0);
 });
 
+test("private fixture preflight verifies the exact actor and live encoded head before mutation", async () => {
+  const sha = "a".repeat(40); const credential = Object.freeze({ authorizationValue: "test-token" });
+  const requests: GitHubRestRequest[] = []; let factoryCalls = 0;
+  const client: GitHubRestClientFactory = { forCredential(actual) {
+    factoryCalls += 1; assert.equal(actual, credential);
+    return { request: async <T>(request: GitHubRestRequest) => {
+      requests.push(request);
+      if (request.path === "/user") return { login: "fixture-actor" } as T;
+      return { name: "shipyard/fixture-123", commit: { sha } } as T;
+    } };
+  } };
+  await preflightPrivateFixture("fixture-actor", "acme/disposable", "acme/disposable", "shipyard/fixture-123", sha, credential, client);
+  assert.equal(factoryCalls, 1);
+  assert.deepEqual(requests, [
+    { method: "GET", path: "/user" },
+    { method: "GET", path: "/repos/acme/disposable/branches/shipyard%2Ffixture-123" },
+  ]);
+
+  for (const scenario of [
+    { name: "wrong actor", viewer: "someone-else", branch: "shipyard/fixture-123", branchSha: sha, expectedGets: 1 },
+    { name: "wrong branch", viewer: "fixture-actor", branch: "shipyard/other", branchSha: sha, expectedGets: 2 },
+    { name: "wrong SHA", viewer: "fixture-actor", branch: "shipyard/fixture-123", branchSha: "b".repeat(40), expectedGets: 2 },
+  ]) {
+    const seen: GitHubRestRequest[] = [];
+    const mismatch: GitHubRestClientFactory = { forCredential: actual => {
+      assert.equal(actual, credential);
+      return { request: async <T>(request: GitHubRestRequest) => {
+        seen.push(request);
+        return (request.path === "/user" ? { login: scenario.viewer } : { name: scenario.branch, commit: { sha: scenario.branchSha } }) as T;
+      } };
+    } };
+    await assert.rejects(preflightPrivateFixture("fixture-actor", "acme/disposable", "acme/disposable", "shipyard/fixture-123", sha, credential, mismatch), GitHubAuthorityError, scenario.name);
+    assert.equal(seen.length, scenario.expectedGets);
+    assert.ok(seen.every(request => request.method === "GET"), `${scenario.name} must not reach POST or PATCH`);
+  }
+
+  const missingRequests: GitHubRestRequest[] = [];
+  const missing: GitHubRestClientFactory = { forCredential: () => ({ request: async <T>(request: GitHubRestRequest) => {
+    missingRequests.push(request);
+    if (request.path === "/user") return { login: "fixture-actor" } as T;
+    throw new GitHubAuthorityError("request-failed", "fixture branch was not found");
+  } }) };
+  await assert.rejects(preflightPrivateFixture("fixture-actor", "acme/disposable", "acme/disposable", "shipyard/fixture-123", sha, credential, missing), (error: unknown) => error instanceof GitHubAuthorityError && error.code === "request-failed");
+  assert.ok(missingRequests.every(request => request.method === "GET"));
+
+  let wrongRepositoryBindings = 0;
+  const wrongRepository: GitHubRestClientFactory = { forCredential: () => { wrongRepositoryBindings += 1; throw new Error("must not bind for an unapproved repository"); } };
+  await assert.rejects(preflightPrivateFixture("fixture-actor", "acme/other", "acme/disposable", "shipyard/fixture-123", sha, credential, wrongRepository));
+  assert.equal(wrongRepositoryBindings, 0);
+});
+
 function deliveryIdFromFixtureHead(head: string): string {
   const prefix = "shipyard/";
   assert.ok(head.startsWith(prefix), "fixture head must be the canonical branch for its delivery ID");
   const deliveryId = stableDeliveryId(head.slice(prefix.length));
   canonicalWorkspaceBranch(head, deliveryId);
   return deliveryId;
+}
+
+async function preflightPrivateFixture(
+  expectedActor: string,
+  repository: string,
+  separatelyApprovedRepository: string,
+  head: string,
+  expectedSha: string,
+  credential: GitHubApiCredential,
+  factory: GitHubRestClientFactory,
+): Promise<void> {
+  assert.equal(repository, separatelyApprovedRepository, "fixture repository must exactly equal the separately approved disposable repository");
+  const { basePath } = fixtureRepository(repository);
+  deliveryIdFromFixtureHead(head);
+  assert.match(expectedSha, /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
+  const client = factory.forCredential(credential);
+  const viewer = await client.request<{ login?: unknown }>({ method: "GET", path: "/user" });
+  if (viewer.login !== expectedActor) throw new GitHubAuthorityError("actor-mismatch", "GitHub authenticated actor does not match the configured fixture actor.");
+  const branch = await client.request<{ name?: unknown; commit?: { sha?: unknown } }>({ method: "GET", path: `${basePath}/branches/${encodeURIComponent(head)}` });
+  if (branch.name !== head || branch.commit?.sha !== expectedSha) {
+    throw new GitHubAuthorityError("request-failed", "GitHub fixture head branch does not match the configured canonical ref and SHA.");
+  }
 }
 
 async function closePrivateFixtureRecords(

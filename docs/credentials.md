@@ -77,8 +77,10 @@ and record marker from that operator-created branch so the branch and tracker
 authority cannot diverge. Use a fresh uniquely named branch for each fresh
 fixture marker. It uses the production REST
 transport and guarded tracker to
-verify `/user`, create the marked issue/PR pair, and prove idempotent discovery
-before cleanup. Cleanup binds one credential-scoped client, freshly verifies
+preflight `/user` and the exact encoded head-branch endpoint, requiring the
+live branch name and commit SHA to match the configured values before any
+local or provider mutation. It then creates the marked issue/PR pair and proves
+idempotent discovery before cleanup. Cleanup binds one credential-scoped client, freshly verifies
 the configured actor, and permits only exact close requests for those created
 records in the separately approved repository. It is skipped by the normal
 test command, makes zero default-suite network calls, never invokes `gh`, and
