@@ -104,6 +104,27 @@ test("prepared-ref, tree-application, and ref-commit failures restore refs, inde
   });
 });
 
+test("post-read-tree proof drift aborts the prepared transaction before either ref moves", async (t) => {
+  for (const fact of ["dirty", "branch", "development", "tracking", "remote", "format"] as const) await t.test(fact, async () => {
+    const f = await fixture(); const wrapper = join(f.root, `git-post-read-tree-${fact}`); const marker = join(f.root, "proof-drift");
+    try {
+      const observation = await new NodeSyncGit().observe(f.repo, "upstream", "main", "main"); const expectedDevelopment = observation.developmentSha; const expectedTracking = observation.destinationSha;
+      const interception = fact === "branch" ? `*"symbolic-ref --short HEAD"*) if [ -f '${marker}' ]; then echo raced; exit 0; fi;;`
+        : fact === "development" ? `*"rev-parse refs/heads/main"*) if [ -f '${marker}' ]; then echo '${expectedTracking}'; exit 0; fi;;`
+          : fact === "tracking" ? `*"rev-parse refs/remotes/upstream/main"*) if [ -f '${marker}' ]; then echo '${expectedDevelopment}'; exit 0; fi;;`
+            : fact === "remote" ? `*"remote get-url upstream"*) if [ -f '${marker}' ]; then echo https://example.test/raced.git; exit 0; fi;;`
+              : fact === "format" ? `*"rev-parse --show-object-format"*) if [ -f '${marker}' ]; then echo sha256; exit 0; fi;;` : "";
+      const action = fact === "dirty" ? `touch '${join(f.repo, "raced-untracked")}'` : `touch '${marker}'`;
+      const script = `#!/bin/sh\ncase "$*" in ${interception} esac\ncase "$*" in *"read-tree -u -m"*) /usr/bin/git "$@"; result=$?; ${action}; exit $result;; esac\nexec /usr/bin/git "$@"\n`;
+      await writeFile(wrapper, script); await chmod(wrapper, 0o700); const adapter = new NodeSyncGit(wrapper);
+      await assert.rejects(adapter.fastForward(f.repo, observation.destinationSha, mutationProof(observation)), /proof changed/i);
+      assert.equal(await command(f.repo, ["rev-parse", "refs/remotes/upstream/main"]), expectedTracking);
+      assert.equal(await command(f.repo, ["rev-parse", "refs/heads/main"]), expectedDevelopment);
+      if (fact === "dirty") assert.equal(await readFile(join(f.repo, "raced-untracked"), "utf8"), "");
+    } finally { await rm(f.root, { recursive: true, force: true }); }
+  });
+});
+
 test("hung, flooding, early-closing, and spawn-failing ref transaction children terminate safely", async (t) => {
   for (const mode of ["hang", "flood", "early"] as const) await t.test(mode, async () => {
     const f = await fixture(); const wrapper = join(f.root, `git-${mode}`);

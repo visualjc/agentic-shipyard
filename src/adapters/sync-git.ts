@@ -63,7 +63,7 @@ export class NodeSyncGit implements SyncGit {
     const trackingRef = `refs/remotes/${remote}/${destinationBranch}`;
     const transaction = await prepareRefTransaction(this.executable, repo, [{ ref: `refs/heads/${branch}`, next: destination, previous: expected }, { ref: trackingRef, next: destination, previous: trackingBefore }], this.transaction);
     let applied = false;
-    try { await this.assertMutationProof(repo, proof); await this.required(repo, ["read-tree", "-u", "-m", expected, destination]); applied = true; await transaction.commit(); }
+    try { await this.assertMutationProof(repo, proof); await this.required(repo, ["read-tree", "-u", "-m", expected, destination]); applied = true; await this.assertPostReadTreeProof(repo, destination, proof); await transaction.commit(); }
     catch (error) {
       await transaction.abort();
       const mainNow = await this.optional(repo, `refs/heads/${branch}`); const trackingNow = await this.optional(repo, trackingRef);
@@ -103,6 +103,16 @@ export class NodeSyncGit implements SyncGit {
     ]);
     if (dirty !== "" || branch !== proof.developmentBranch || development !== proof.expectedDevelopmentSha || tracking !== proof.expectedDestinationTrackingSha || remoteUrl !== proof.expectedRemoteUrl || objectFormat !== proof.objectFormat) throw new Error("Local Git mutation proof changed; no mutation was permitted.");
   }
+  /** read-tree intentionally makes HEAD appear behind its index; validate the equivalent clean destination state instead. */
+  private async assertPostReadTreeProof(repo: string, destination: string, proof: SyncMutationProof): Promise<void> {
+    const [worktreeClean, indexMatchesDestination, untracked, branch, development, tracking, remoteUrl, objectFormat] = await Promise.all([
+      this.noDiff(repo, ["diff", "--quiet"]), this.noDiff(repo, ["diff", "--cached", "--quiet", destination]), this.required(repo, ["ls-files", "--others", "--exclude-standard"]),
+      this.required(repo, ["symbolic-ref", "--short", "HEAD"]), this.required(repo, ["rev-parse", `refs/heads/${proof.developmentBranch}`]),
+      this.required(repo, ["rev-parse", `refs/remotes/${proof.destinationRemote}/${proof.destinationBranch}`]), this.required(repo, ["remote", "get-url", proof.destinationRemote]), this.required(repo, ["rev-parse", "--show-object-format"]),
+    ]);
+    if (!worktreeClean || !indexMatchesDestination || untracked !== "" || branch !== proof.developmentBranch || development !== proof.expectedDevelopmentSha || tracking !== proof.expectedDestinationTrackingSha || remoteUrl !== proof.expectedRemoteUrl || objectFormat !== proof.objectFormat) throw new Error("Local Git mutation proof changed; no mutation was permitted.");
+  }
+  private async noDiff(repo: string, args: string[]): Promise<boolean> { try { await this.required(repo, args); return true; } catch { return false; } }
   private async treeAndWorktreeEqual(repo: string, commit: string): Promise<boolean> { try { return await this.required(repo, ["write-tree"]) === await this.required(repo, ["rev-parse", `${commit}^{tree}`]) && await this.required(repo, ["diff", "--quiet"]) === ""; } catch { return false; } }
   private async required(repo: string, args: string[]): Promise<string> {
     try { const { stdout } = await exec(this.executable, ["-C", repo, ...args], { encoding: "utf8", env: sanitizedGitEnvironment(), timeout: this.command.timeoutMs, maxBuffer: this.command.maxOutputBytes, killSignal: "SIGKILL" }); return stdout.trim(); }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -173,6 +173,23 @@ test("ignores hostile inherited Git repository-control environment", async () =>
     for (const [key, value] of Object.entries(inherited)) value === undefined ? delete process.env[key] : process.env[key] = value;
     await rm(primary, { recursive: true, force: true }); await rm(redirected, { recursive: true, force: true });
   }
+});
+
+test("bounds and redacts every ledger Git subprocess path", async (t) => {
+  for (const mode of ["exec-hang", "exec-flood", "input-hang", "input-flood"] as const) await t.test(mode, async () => {
+    const path = await repository(); const executable = join(path, `git-${mode}`);
+    try {
+      const input = mode.startsWith("input"); const flood = mode.endsWith("flood");
+      const action = flood ? "while :; do echo 'https://user:secret@example.test AUTHORIZATION: bearer token-value'; done" : "while :; do :; done";
+      const script = input
+        ? `#!/bin/sh\ncase "$*" in *"hash-object -w --stdin"*) ${action};; esac\nexec /usr/bin/git "$@"\n`
+        : `#!/bin/sh\n${action}\n`;
+      await writeFile(executable, script); await chmod(executable, 0o700);
+      const ledger = new GitLedgerStore(path, { gitExecutable: executable, commandTimeoutMs: 1_000, commandMaxOutputBytes: 128 }); const started = Date.now(); let message = "";
+      try { await ledger.transact({ expectedHead: undefined, writes: [{ path: "records/bounded", contents: "value" }] }); assert.fail("expected bounded ledger failure"); } catch (error) { message = String(error); }
+      assert.match(message, flood ? /output limit.*killed/i : /timed out.*killed/i); assert.doesNotMatch(message, /user:secret|token-value/); assert.ok(Date.now() - started < 3_000);
+    } finally { await rm(path, { recursive: true, force: true }); }
+  });
 });
 
 test("reads exact pinned ledger commits for ContextReader and fails closed for unavailable Git objects", async () => {

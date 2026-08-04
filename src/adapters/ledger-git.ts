@@ -8,20 +8,28 @@ import { applyLedgerTransaction, validLedgerPath } from "../ledger/transaction.j
 import type { GitObjectFormat, LedgerCommitChange, LedgerCommitInspection, LedgerSnapshot, LedgerStore, LedgerTransaction, ObjectFormatAuthority } from "../ledger/types.js";
 import type { PinnedLedgerReader } from "../context/types.js";
 import { canonicalGitExecutable, DEFAULT_NODE_GIT_EXECUTABLE, sanitizedGitEnvironment } from "./git-transport.js";
+import { redactGitTransportDiagnostic } from "../github/git-transport.js";
 
 const execFileAsync = promisify(execFile);
 type ProductCommitRef = Readonly<{ ref: string; commitSha: string }>;
+export type GitLedgerStoreOptions = Readonly<{ gitExecutable?: string; commandTimeoutMs?: number; commandMaxOutputBytes?: number }>;
+type CommandLimits = Readonly<{ timeoutMs: number; maxOutputBytes: number }>;
 
 /** Git object-database ledger that never checks its orphan ref out in a product worktree. */
 export class GitLedgerStore implements LedgerStore, PinnedLedgerReader, ObjectFormatAuthority {
   static readonly ref = "refs/heads/shipyard-ledger";
   /** The executable is resolved lazily so package import/construction is portable. */
   private readonly configuredGitExecutable: string;
-  constructor(private readonly repositoryPath: string, options?: Readonly<{ gitExecutable: string }>) {
+  private readonly command: CommandLimits;
+  constructor(private readonly repositoryPath: string, options: GitLedgerStoreOptions = {}) {
     // A historical untyped second string argument selected a ref. Accessing a
     // property on that value yields undefined, so old JavaScript callers still
     // cannot redirect the canonical ledger ref. Explicit injection is named.
     this.configuredGitExecutable = options?.gitExecutable ?? DEFAULT_NODE_GIT_EXECUTABLE;
+    const timeoutMs = options.commandTimeoutMs ?? 30_000;
+    const maxOutputBytes = options.commandMaxOutputBytes ?? 1_048_576;
+    if (![timeoutMs, maxOutputBytes].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error("Git ledger command limits must be positive safe integers.");
+    this.command = { timeoutMs, maxOutputBytes };
   }
 
   async snapshot(paths: readonly string[]): Promise<LedgerSnapshot> {
@@ -228,13 +236,13 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader, ObjectFo
   private async run(args: string[], env?: NodeJS.ProcessEnv): Promise<{ code: number; stdout: string; stderr: string }> {
     try {
       const { stdout, stderr } = await execFileAsync(this.gitExecutable(), ["-C", this.repositoryPath, ...args], {
-        encoding: "utf8", env: gitEnvironment(env),
+        encoding: "utf8", env: gitEnvironment(env), timeout: this.command.timeoutMs, maxBuffer: this.command.maxOutputBytes, killSignal: "SIGKILL",
       });
       return { code: 0, stdout, stderr };
     } catch (error: unknown) {
       const failure = error as { code?: unknown; stdout?: unknown; stderr?: unknown; message?: unknown };
-      if (typeof failure.code !== "number") throw new LedgerError("ledger-unavailable", `Git ledger operation failed: ${String(failure.message ?? error)}`);
-      return { code: failure.code, stdout: typeof failure.stdout === "string" ? failure.stdout : "", stderr: typeof failure.stderr === "string" ? failure.stderr : "" };
+      if (typeof failure.code !== "number") throw boundedLedgerFailure(error);
+      return { code: failure.code, stdout: boundedOutput(failure.stdout, this.command.maxOutputBytes), stderr: boundedOutput(failure.stderr, this.command.maxOutputBytes) };
     }
   }
   private async gitRequired(args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
@@ -245,10 +253,20 @@ export class GitLedgerStore implements LedgerStore, PinnedLedgerReader, ObjectFo
   private async gitInput(args: string[], input: string): Promise<string> {
     return new Promise((resolve, reject) => {
       const child = spawn(this.gitExecutable(), ["-C", this.repositoryPath, ...args], { env: gitEnvironment() });
-      let stdout = ""; let stderr = "";
+      let stdout = ""; let stderr = ""; let outputBytes = 0; let finished = false; let failure: LedgerError | undefined;
+      const fail = (error: LedgerError) => { failure ??= error; if (!finished && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); };
+      const collect = (target: "stdout" | "stderr", chunk: string) => {
+        outputBytes += Buffer.byteLength(chunk);
+        if (target === "stdout") stdout = (stdout + chunk).slice(0, this.command.maxOutputBytes);
+        else stderr = (stderr + chunk).slice(0, this.command.maxOutputBytes);
+        if (outputBytes > this.command.maxOutputBytes) fail(new LedgerError("ledger-unavailable", "Git ledger operation exceeded its output limit and was killed."));
+      };
       child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
-      child.stdout.on("data", (chunk: string) => { stdout += chunk; }); child.stderr.on("data", (chunk: string) => { stderr += chunk; });
-      child.on("error", reject); child.on("close", (code) => code === 0 ? resolve(stdout.trim()) : reject(new LedgerError("ledger-unavailable", `Git ledger operation failed: ${stderr.trim()}`)));
+      child.stdout.on("data", (chunk: string) => collect("stdout", chunk)); child.stderr.on("data", (chunk: string) => collect("stderr", chunk));
+      child.once("error", () => fail(new LedgerError("ledger-unavailable", "Git ledger operation could not be started.")));
+      child.stdin.once("error", () => fail(new LedgerError("ledger-unavailable", "Git ledger operation input closed unexpectedly.")));
+      const timer = setTimeout(() => fail(new LedgerError("ledger-unavailable", "Git ledger operation timed out and was killed.")), this.command.timeoutMs);
+      child.once("close", (code) => { finished = true; clearTimeout(timer); failure ? reject(failure) : code === 0 ? resolve(stdout.trim()) : reject(unavailable(stderr)); });
       child.stdin.end(input);
     });
   }
@@ -265,7 +283,15 @@ function gitEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return sanitizedGitEnvironment({ ...extra, GIT_AUTHOR_NAME: "shipyard", GIT_AUTHOR_EMAIL: "shipyard@local", GIT_COMMITTER_NAME: "shipyard", GIT_COMMITTER_EMAIL: "shipyard@local" });
 }
 
-function unavailable(stderr: string): LedgerError { return new LedgerError("ledger-unavailable", `Git ledger operation failed${stderr ? `: ${stderr.trim()}` : ""}`); }
+function unavailable(stderr: string): LedgerError { const safe = boundedDiagnostic(stderr); return new LedgerError("ledger-unavailable", `Git ledger operation failed${safe ? `: ${safe}` : ""}`); }
+function boundedOutput(value: unknown, limit: number): string { return typeof value === "string" ? value.slice(0, limit) : ""; }
+function boundedDiagnostic(value: string): string { return redactGitTransportDiagnostic(value).replace(/[^\x20-\x7e\n\t]/g, "?").slice(0, 512).trim(); }
+function boundedLedgerFailure(error: unknown): LedgerError {
+  const failure = error as NodeJS.ErrnoException & { killed?: boolean; signal?: string; code?: unknown };
+  const message = failure.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" ? "Git ledger operation exceeded its output limit and was killed."
+    : failure.killed || failure.signal ? "Git ledger operation timed out and was killed." : "Git ledger operation could not be started.";
+  return new LedgerError("ledger-unavailable", message);
+}
 function missingTreePath(stderr: string): boolean {
   return /path ['”]?.+['”]? does not exist in|exists on disk, but not in|not a valid object name/i.test(stderr);
 }
