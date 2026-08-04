@@ -7,7 +7,7 @@ export type { StatusBlocker, StatusContributor, StatusProjection } from "./statu
 
 // Binding/core adapters are deliberately exported by interface, not by module internals.
 export { nodeFilesystem } from "./adapters/filesystem.js";
-export type { FilesystemAdapter } from "./adapters/filesystem.js";
+export type { ExclusiveDirectoryResult, FilesystemAdapter } from "./adapters/filesystem.js";
 export { nodeGit } from "./adapters/git.js";
 export type { GitAdapter } from "./adapters/git.js";
 export { nodeProcess } from "./adapters/process.js";
@@ -17,6 +17,5 @@ export { BindingService, newBindingDocument, validateBoundRepository, validateRe
 export { JsonBindingStore } from "./binding/store.js";
 export type { BindingDocument, BindingStore, RepositoryBinding, RepositoryTopology, TopologyKind } from "./binding/types.js";
 export { PathPolicyError, classifyPath, classifyPaths } from "./policy/path-classifier.js";
-export type { PathOwner as ClassifiedPathOwner, PathPolicy as ClassificationPathPolicy, PathRule as ClassificationPathRule } from "./policy/path-classifier.js";
 export { MutationLockError, MutationLockService } from "./locking/mutation-lock.js";
 export type { AcquiredMutationLock, MutationLockRecord } from "./locking/mutation-lock.js";
