@@ -75,7 +75,7 @@ test("packed package contains runnable public API, commands, skills, and focused
 
 test("public package API excludes raw REST and credentialed Git runner bypasses", async () => {
   const api = await import("../../src/index.js");
-  for (const name of ["GitHubRestAdapter", "FetchGitHubRestTransport", "createNodeGitTransportCommandRunner", "nodeGitTransportCommandRunner", "DEFAULT_NODE_GIT_EXECUTABLE", "NodeSyncGit"])
+  for (const name of ["GitHubRestAdapter", "FetchGitHubRestTransport", "createNodeGitTransportCommandRunner", "nodeGitTransportCommandRunner", "DEFAULT_NODE_GIT_EXECUTABLE", "NodeSyncGit", "ReviewDispatcher", "CodexReviewAdapter", "nodeEphemeralProcessRunner"])
     assert.equal(name in api, false, `${name} must remain internal`);
   assert.equal("GitTransportService" in api, true);
 });

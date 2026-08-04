@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const args = process.argv.slice(2);
+if (args[0] === "--version") { process.stdout.write("codex-fixture-1"); process.exit(0); }
 const value = (name) => args[args.indexOf(name) + 1];
 const outputPath = process.env.SHIPYARD_REVIEW_SESSION_DIR ? join(process.env.SHIPYARD_REVIEW_SESSION_DIR, "result.json") : value("-o");
 let prompt = "";
