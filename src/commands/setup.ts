@@ -1,4 +1,6 @@
-import type { BindingService, GitAdapter, MutationLockService } from "../index.js";
+import type { GitAdapter } from "../adapters/git.js";
+import type { BindingService } from "../binding/service.js";
+import type { MutationLockService } from "../locking/mutation-lock.js";
 import { requireMatchingTopology, requireProfileAuthorization, type ProfileReader, type TopologyRequest } from "../profile/policy.js";
 import { profileFingerprint } from "../profile/fingerprint.js";
 

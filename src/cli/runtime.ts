@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { BindingService, JsonBindingStore, MutationLockService, nodeFilesystem, nodeGit, nodeProcess } from "../index.js";
+import { nodeFilesystem } from "../adapters/filesystem.js";
+import { nodeGit } from "../adapters/git.js";
+import { nodeProcess } from "../adapters/process.js";
+import { BindingService } from "../binding/service.js";
+import { JsonBindingStore } from "../binding/store.js";
+import { MutationLockService } from "../locking/mutation-lock.js";
 import { GlobalProfileStore } from "./profile-store.js";
 
 export type CommandRuntime = Readonly<{

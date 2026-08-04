@@ -1,6 +1,7 @@
 import { join } from "node:path";
-import type { FilesystemAdapter, Profile } from "../index.js";
-import { validateProfile } from "../index.js";
+import type { FilesystemAdapter } from "../adapters/filesystem.js";
+import type { Profile } from "../contracts/types.js";
+import { validateProfile } from "../contracts/validate.js";
 
 export class ProfileStoreError extends Error {
   readonly name = "ProfileStoreError";

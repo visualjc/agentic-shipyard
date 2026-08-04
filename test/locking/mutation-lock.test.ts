@@ -32,6 +32,22 @@ test("never removes a stale lock without host and process validation", async () 
   await assert.rejects(service.acquire("/locks/repo", "/git/repo", "sync"), (error: unknown) => error instanceof MutationLockError && error.code === "lock-held");
 });
 
+test("rejects malformed primary records before recovery without removing them", async () => {
+  const base = { version: 1, repository: "/git/repo", operation: "sync", processId: 22, host: "test-host", acquiredAt: "2026-08-03T00:00:00.000Z" };
+  const malformed: unknown[] = [
+    "{partial", { ...base, processId: 0 }, { ...base, processId: -1 }, { ...base, processId: 1.5 },
+    { ...base, repository: "" }, { ...base, operation: "" }, { ...base, host: "" },
+    { ...base, acquiredAt: "2026-08-03T00:00:00Z" }, { ...base, acquiredAt: "invalid" }, { ...base, extra: true },
+  ];
+  for (const record of malformed) {
+    const fs = new MemoryFilesystem();
+    const text = typeof record === "string" ? record : JSON.stringify(record);
+    fs.files.set("/locks/repo", text);
+    await assert.rejects(new MutationLockService(fs, new FakeProcess()).acquire("/locks/repo", "/git/repo", "sync"), (error: unknown) => error instanceof MutationLockError && error.code === "lock-invalid");
+    assert.equal(fs.files.get("/locks/repo"), text);
+  }
+});
+
 test("serializes release against acquisition so a replacement lock survives", async () => {
   const fs = new MemoryFilesystem();
   const process = new FakeProcess();
@@ -84,7 +100,7 @@ test("lifecycle recovery fails closed for live, cross-host, and malformed owners
   const cases: Array<[string, unknown, MutationLockError["code"]]> = [
     ["live", { version: 1, host: "test-host", processId: 22, token: "live", acquiredAt: "2026-08-03T00:00:00.000Z" }, "lock-held"],
     ["cross-host", { version: 1, host: "other", processId: 22, token: "other", acquiredAt: "2026-08-03T00:00:00.000Z" }, "lock-unsafe-recovery"],
-    ["corrupt", "{partial", "lock-unsafe-recovery"],
+    ["corrupt", "{partial", "lock-invalid"],
   ];
   for (const [name, owner, expected] of cases) {
     const fs = new MemoryFilesystem(); const process = new FakeProcess();
@@ -92,6 +108,23 @@ test("lifecycle recovery fails closed for live, cross-host, and malformed owners
     fs.directories.add("/locks/repo.lifecycle");
     fs.files.set("/locks/repo.lifecycle/owner.json", typeof owner === "string" ? owner : JSON.stringify(owner));
     await assert.rejects(new MutationLockService(fs, process).acquire("/locks/repo", "/git/repo", "sync"), (error: unknown) => error instanceof MutationLockError && error.code === expected, name);
+  }
+});
+
+test("rejects malformed lifecycle records before recovery without removing them", async () => {
+  const base = { version: 1, host: "test-host", processId: 22, token: "dead", acquiredAt: "2026-08-03T00:00:00.000Z" };
+  const malformed: unknown[] = [
+    "{partial", { ...base, processId: 0 }, { ...base, processId: -1 }, { ...base, processId: 1.5 },
+    { ...base, host: "" }, { ...base, token: "" }, { ...base, acquiredAt: "2026-08-03T00:00:00Z" },
+    { ...base, acquiredAt: "invalid" }, { ...base, extra: true },
+  ];
+  for (const owner of malformed) {
+    const fs = new MemoryFilesystem();
+    const text = typeof owner === "string" ? owner : JSON.stringify(owner);
+    fs.directories.add("/locks/repo.lifecycle");
+    fs.files.set("/locks/repo.lifecycle/owner.json", text);
+    await assert.rejects(new MutationLockService(fs, new FakeProcess()).acquire("/locks/repo", "/git/repo", "sync"), (error: unknown) => error instanceof MutationLockError && error.code === "lock-invalid");
+    assert.equal(fs.files.get("/locks/repo.lifecycle/owner.json"), text);
   }
 });
 

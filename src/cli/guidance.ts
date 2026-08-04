@@ -1,4 +1,5 @@
-import { BindingError, MutationLockError } from "../index.js";
+import { BindingError } from "../binding/errors.js";
+import { MutationLockError } from "../locking/mutation-lock.js";
 import { RepositoryIdentityError } from "../commands/setup.js";
 import { ProfileStoreError } from "./profile-store.js";
 

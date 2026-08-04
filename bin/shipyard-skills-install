@@ -8,8 +8,13 @@ const args = process.argv.slice(2);
 let target;
 let home;
 for (let index = 0; index < args.length; index += 1) {
-  if (args[index] === "--target") target = args[++index];
-  else if (args[index] === "--home") home = args[++index];
+  if (args[index] === "--target" || args[index] === "--home") {
+    const option = args[index];
+    const value = args[++index];
+    if (!value || value.startsWith("--")) fail(`Option ${option} requires a non-empty path.`);
+    if (option === "--target") target = value;
+    else home = value;
+  }
   else if (args[index] === "--help") {
     process.stdout.write("Usage: shipyard-skills-install [--target PROJECT_ROOT | --home HOME_ROOT]\n");
     process.exit(0);

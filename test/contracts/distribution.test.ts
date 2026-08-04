@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { lstat, mkdtemp, readFile, readlink, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, readlink, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -90,9 +90,42 @@ test("packaged skill installer creates only exact canonical discovery symlinks",
     await rm(refusal);
     await writeFile(refusal, "do not replace");
     await assert.rejects(execFileAsync(process.execPath, [installer, "--target", projectRoot]), /Refusing to replace existing/);
+
+    for (const option of ["--target", "--home"]) {
+      const cwd = join(sandbox, `untouched-${option.slice(2)}`);
+      await (await import("node:fs/promises")).mkdir(cwd);
+      await assert.rejects(execFileAsync(process.execPath, [installer, option], { cwd }), /requires a non-empty path/);
+      await assert.rejects(lstat(join(cwd, ".agents")), { code: "ENOENT" });
+      await assert.rejects(execFileAsync(process.execPath, [installer, option, ""], { cwd }), /requires a non-empty path/);
+      await assert.rejects(lstat(join(cwd, ".agents")), { code: "ENOENT" });
+      await assert.rejects(execFileAsync(process.execPath, [installer, option, "--home", userRoot], { cwd }), /requires a non-empty path/);
+      await assert.rejects(lstat(join(cwd, ".agents")), { code: "ENOENT" });
+    }
+    await assert.rejects(execFileAsync(process.execPath, [installer, "--target", projectRoot, "--home", userRoot]), /Use either --target or --home/);
+
+    const wrongLink = join(userRoot, ".agents", "skills", "shipyard-help");
+    await rm(wrongLink);
+    await symlink("/not-the-packaged-skill", wrongLink);
+    await assert.rejects(execFileAsync(process.execPath, [installer, "--home", userRoot]), /different target/);
+    assert.equal(await readlink(wrongLink), "/not-the-packaged-skill");
   } finally {
     await rm(sandbox, { recursive: true, force: true });
     const packs = await (await import("node:fs/promises")).readdir(packageRoot);
     await Promise.all(packs.filter((file) => /^visualjc-shipyard-.*\.tgz$/.test(file)).map((file) => rm(join(packageRoot, file), { force: true })));
   }
+});
+
+test("core status module has no upward barrel or Node git adapter dependency", async () => {
+  const visited = new Set<string>();
+  const visit = async (path: string): Promise<void> => {
+    if (visited.has(path)) return;
+    visited.add(path);
+    const source = await readFile(path, "utf8");
+    assert.doesNotMatch(source, /from ["'][^"']*index\.js["']/);
+    assert.doesNotMatch(source, /node:child_process/);
+    const imports = [...source.matchAll(/from ["'](\.{1,2}\/[^"']+\.js)["']/g)].map((match) => match[1]);
+    await Promise.all(imports.map((specifier) => visit(join(dirname(path), specifier))));
+  };
+  await visit(join(packageRoot, "dist", "src", "commands", "status.js"));
+  assert.equal([...visited].some((path) => path.endsWith("/adapters/git.js")), false);
 });

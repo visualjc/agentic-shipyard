@@ -1,5 +1,6 @@
-import type { BindingService, GitAdapter } from "../index.js";
-import { createStatusProjection } from "../index.js";
+import type { GitAdapter } from "../adapters/git.js";
+import type { BindingService } from "../binding/service.js";
+import { createStatusProjection } from "../status/projection.js";
 import { requireProfileAuthorization, sameTopology, type ProfileReader } from "../profile/policy.js";
 import { profileFingerprint } from "../profile/fingerprint.js";
 import { RepositoryIdentityError } from "./setup.js";

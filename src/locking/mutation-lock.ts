@@ -108,9 +108,9 @@ export class MutationLockService {
       const value: unknown = JSON.parse(text);
       if (!value || typeof value !== "object") throw new Error();
       const owner = value as Partial<LifecycleOwner>;
-      if (owner.version !== 1 || typeof owner.host !== "string" || owner.host === "" || typeof owner.processId !== "number" || !Number.isInteger(owner.processId) || owner.processId <= 0 || typeof owner.token !== "string" || owner.token === "" || typeof owner.acquiredAt !== "string" || !Number.isFinite(Date.parse(owner.acquiredAt))) throw new Error();
+      if (!hasExactKeys(value, ["version", "host", "processId", "token", "acquiredAt"]) || owner.version !== 1 || !nonEmptyString(owner.host) || !positiveInteger(owner.processId) || !nonEmptyString(owner.token) || !canonicalTimestamp(owner.acquiredAt)) throw new Error();
       return owner as LifecycleOwner;
-    } catch { return new MutationLockError("lock-unsafe-recovery", "Lifecycle guard owner record is malformed; manual recovery is required."); }
+    } catch { return new MutationLockError("lock-invalid", "Lifecycle guard owner record is malformed; manual recovery is required."); }
   }
 
   /** Called only while the lifecycle directory guard is held. */
@@ -133,10 +133,23 @@ export class MutationLockService {
       const parsed: unknown = JSON.parse(text);
       if (!parsed || typeof parsed !== "object") throw new Error();
       const record = parsed as Partial<MutationLockRecord>;
-      if (record.version !== 1 || typeof record.repository !== "string" || typeof record.operation !== "string" || typeof record.processId !== "number" || typeof record.host !== "string" || typeof record.acquiredAt !== "string") throw new Error();
+      if (!hasExactKeys(parsed, ["version", "repository", "operation", "processId", "host", "acquiredAt"]) || record.version !== 1 || !nonEmptyString(record.repository) || !nonEmptyString(record.operation) || !positiveInteger(record.processId) || !nonEmptyString(record.host) || !canonicalTimestamp(record.acquiredAt)) throw new Error();
       return record as MutationLockRecord;
     } catch { throw new MutationLockError("lock-invalid", "Mutation lock file is malformed."); }
   }
+}
+
+function hasExactKeys(value: object, keys: readonly string[]): boolean {
+  const actual = Object.keys(value).sort();
+  return actual.length === keys.length && actual.every((key, index) => key === [...keys].sort()[index]);
+}
+
+function nonEmptyString(value: unknown): value is string { return typeof value === "string" && value.length > 0; }
+function positiveInteger(value: unknown): value is number { return typeof value === "number" && Number.isInteger(value) && value > 0; }
+function canonicalTimestamp(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value;
 }
 
 function sameIdentity(left: MutationLockRecord | undefined, right: MutationLockRecord): boolean {
