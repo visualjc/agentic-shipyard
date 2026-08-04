@@ -1,0 +1,39 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { createEnvelope } from "../../src/context/envelope.js";
+import { ContextError } from "../../src/context/errors.js";
+import { ContextReader } from "../../src/context/reader.js";
+
+const envelope = createEnvelope({
+  host: "codex", role: "implementer", envelopePath: ".shipyard/envelope.json", repoRoot: "/worktree", deliveryId: "delivery-001", profile: "local",
+  topology: { kind: "single-repository", repository: { owner: "acme", name: "widget", remote: { name: "origin", url: "https://example.test/widget.git" }, defaultBranch: "main" } },
+  repository: { owner: "acme", name: "widget", remote: { name: "origin", url: "https://example.test/widget.git" }, defaultBranch: "main" },
+  productBranch: "shipyard/delivery-001", productSha: "a".repeat(40), ledgerRef: "refs/heads/shipyard-ledger", ledgerSha: "b".repeat(64),
+});
+
+test("rejects a stale product SHA before it invokes the pinned ledger reader", async () => {
+  let reads = 0;
+  const reader = new ContextReader({ currentProductSha: async () => "new-product-sha" }, { read: async () => { reads += 1; return {}; } });
+  await assert.rejects(reader.load(envelope), (error: unknown) => error instanceof ContextError && error.code === "context-stale-product");
+  assert.equal(reads, 0);
+});
+
+test("loads only the envelope's exact role paths from its pinned ledger SHA", async () => {
+  let request: { sha: string; paths: readonly string[] } | undefined;
+  const reader = new ContextReader({ currentProductSha: async () => "a".repeat(40) }, {
+    read: async (sha, paths) => { request = { sha, paths }; return Object.fromEntries(paths.map((path) => [path, `record ${path}`])); },
+  });
+  const loaded = await reader.load(envelope);
+  assert.deepEqual(request, { sha: "b".repeat(64), paths: ["deliveries/delivery-001/contract.md", "deliveries/delivery-001/assigned-task.md"] });
+  assert.deepEqual(loaded.records, {
+    "deliveries/delivery-001/contract.md": "record deliveries/delivery-001/contract.md",
+    "deliveries/delivery-001/assigned-task.md": "record deliveries/delivery-001/assigned-task.md",
+  });
+  assert.ok(Object.isFrozen(loaded));
+  assert.ok(Object.isFrozen(loaded.records));
+});
+
+test("rejects a ledger response that omits an allowed required record", async () => {
+  const reader = new ContextReader({ currentProductSha: async () => "a".repeat(40) }, { read: async () => ({ [envelope.records[0]]: "contract" }) });
+  await assert.rejects(reader.load(envelope), (error: unknown) => error instanceof ContextError && error.code === "context-ledger-record-missing");
+});

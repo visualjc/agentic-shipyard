@@ -1,0 +1,155 @@
+import { execFile, spawn } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import { LedgerError } from "../ledger/errors.js";
+import { applyLedgerTransaction, validLedgerPath } from "../ledger/transaction.js";
+import type { LedgerSnapshot, LedgerStore, LedgerTransaction } from "../ledger/types.js";
+import type { PinnedLedgerReader } from "../context/types.js";
+
+const execFileAsync = promisify(execFile);
+const zeroOid = "0".repeat(40);
+
+/** Git object-database ledger that never checks its orphan ref out in a product worktree. */
+export class GitLedgerStore implements LedgerStore, PinnedLedgerReader {
+  static readonly ref = "refs/heads/shipyard-ledger";
+  constructor(private readonly repositoryPath: string, private readonly ledgerRef = GitLedgerStore.ref) {}
+
+  async snapshot(paths: readonly string[]): Promise<LedgerSnapshot> {
+    if (paths.some((path) => !validLedgerPath(path))) throw new LedgerError("ledger-invalid-path", "Ledger record paths must be relative, normalized paths.");
+    const head = await this.optionalRef(this.ledgerRef);
+    const records: Record<string, string> = {};
+    if (head) for (const path of paths) {
+      const value = await this.optionalRecord(head, path);
+      if (value !== undefined) records[path] = value;
+    }
+    return { head, records };
+  }
+
+  /** Reads only the exact, existing ledger commit named by a context envelope. */
+  async read(ledgerSha: string, paths: readonly string[]): Promise<Readonly<Record<string, string>>> {
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(ledgerSha) || paths.some((path) => !validLedgerPath(path))) {
+      throw new LedgerError("ledger-invalid-path", "Pinned ledger reads require a full object ID and relative, normalized record paths.");
+    }
+    const resolved = await this.optionalRef(`${ledgerSha}^{commit}`);
+    if (!resolved) throw new LedgerError("ledger-unavailable", "The pinned ledger commit is unavailable.");
+    const head = await this.optionalRef(this.ledgerRef);
+    if (!head || !(await this.isAncestor(resolved, head))) {
+      throw new LedgerError("ledger-unavailable", "The pinned ledger commit is not reachable from the configured ledger ref.");
+    }
+    const records: Record<string, string> = {};
+    for (const path of paths) {
+      const value = await this.optionalRecord(resolved, path);
+      if (value !== undefined) records[path] = value;
+    }
+    return records;
+  }
+
+  async transact(transaction: LedgerTransaction): Promise<string> {
+    const current = await this.snapshot(transaction.writes.map((write) => write.path));
+    applyLedgerTransaction(current, transaction);
+    const indexDirectory = await mkdtemp(join(tmpdir(), "shipyard-ledger-"));
+    const indexFile = join(indexDirectory, "index");
+    try {
+      if (current.head) await this.gitRequired(["read-tree", current.head], { GIT_INDEX_FILE: indexFile });
+      for (const write of transaction.writes) {
+        const blob = await this.gitInput(["hash-object", "-w", "--stdin"], write.contents);
+        await this.gitRequired(["update-index", "--add", "--cacheinfo", "100644", blob, write.path], { GIT_INDEX_FILE: indexFile });
+      }
+      const tree = await this.gitRequired(["write-tree"], { GIT_INDEX_FILE: indexFile });
+      const commitArgs = current.head ? ["commit-tree", tree, "-p", current.head] : ["commit-tree", tree];
+      const commit = await this.gitInput(commitArgs, transaction.message ?? "shipyard ledger checkpoint");
+      await this.updateRefCas(commit, current.head);
+      return commit;
+    } finally { await rm(indexDirectory, { recursive: true, force: true }); }
+  }
+
+  /** A destination may stage product refs only; reject any refspec that can read or write the ledger ref. */
+  static excludesRefspec(refspec: string): boolean {
+    if (typeof refspec !== "string" || refspec.length === 0) return false;
+    let normalized = refspec.startsWith("+") ? refspec.slice(1) : refspec;
+    // Negative fetch refspecs transfer no ref themselves. They are exclusion clauses.
+    if (normalized.startsWith("^")) return true;
+    const separator = normalized.indexOf(":");
+    const source = separator < 0 ? normalized : normalized.slice(0, separator);
+    const destination = separator < 0 ? source : normalized.slice(separator + 1);
+    if (!source || !destination) return false;
+    return !refspecPatternMatches(source, this.ref) && !refspecPatternMatches(destination, this.ref);
+  }
+
+  private async optionalRef(ref: string): Promise<string | undefined> {
+    const result = await this.run(["rev-parse", "--verify", "--quiet", ref]);
+    if (result.code === 0) return result.stdout.trim();
+    if (result.code === 1) return undefined;
+    throw unavailable(result.stderr);
+  }
+
+  /** Object/path absence is the only Git failure treated as a missing ledger record. */
+  private async optionalRecord(head: string, path: string): Promise<string | undefined> {
+    const probe = await this.run(["cat-file", "-e", `${head}:${path}`]);
+    if (probe.code !== 0) {
+      if (missingTreePath(probe.stderr)) return undefined;
+      throw unavailable(probe.stderr);
+    }
+    const value = await this.run(["show", `${head}:${path}`]);
+    if (value.code !== 0) throw unavailable(value.stderr);
+    return value.stdout.replace(/\n$/, "");
+  }
+
+  private async updateRefCas(commit: string, expectedHead: string | undefined): Promise<void> {
+    const result = await this.run(["update-ref", this.ledgerRef, commit, expectedHead ?? zeroOid]);
+    if (result.code === 0) return;
+    if (staleRefUpdate(result.stderr)) throw new LedgerError("ledger-stale-head", "The ledger advanced; re-read its head before retrying.");
+    throw unavailable(result.stderr);
+  }
+
+  private async isAncestor(commit: string, head: string): Promise<boolean> {
+    const result = await this.run(["merge-base", "--is-ancestor", commit, head]);
+    if (result.code === 0) return true;
+    if (result.code === 1) return false;
+    throw unavailable(result.stderr);
+  }
+
+  private async run(args: string[], env?: NodeJS.ProcessEnv): Promise<{ code: number; stdout: string; stderr: string }> {
+    try {
+      const { stdout, stderr } = await execFileAsync("git", ["-C", this.repositoryPath, ...args], {
+        encoding: "utf8", env: { ...process.env, ...env, GIT_AUTHOR_NAME: "shipyard", GIT_AUTHOR_EMAIL: "shipyard@local", GIT_COMMITTER_NAME: "shipyard", GIT_COMMITTER_EMAIL: "shipyard@local" },
+      });
+      return { code: 0, stdout, stderr };
+    } catch (error: unknown) {
+      const failure = error as { code?: unknown; stdout?: unknown; stderr?: unknown; message?: unknown };
+      if (typeof failure.code !== "number") throw new LedgerError("ledger-unavailable", `Git ledger operation failed: ${String(failure.message ?? error)}`);
+      return { code: failure.code, stdout: typeof failure.stdout === "string" ? failure.stdout : "", stderr: typeof failure.stderr === "string" ? failure.stderr : "" };
+    }
+  }
+  private async gitRequired(args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
+    const result = await this.run(args, env);
+    if (result.code !== 0) throw unavailable(result.stderr);
+    return result.stdout.trim();
+  }
+  private async gitInput(args: string[], input: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const child = spawn("git", ["-C", this.repositoryPath, ...args], { env: { ...process.env, GIT_AUTHOR_NAME: "shipyard", GIT_AUTHOR_EMAIL: "shipyard@local", GIT_COMMITTER_NAME: "shipyard", GIT_COMMITTER_EMAIL: "shipyard@local" } });
+      let stdout = ""; let stderr = "";
+      child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => { stdout += chunk; }); child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+      child.on("error", reject); child.on("close", (code) => code === 0 ? resolve(stdout.trim()) : reject(new LedgerError("ledger-unavailable", `Git ledger operation failed: ${stderr.trim()}`)));
+      child.stdin.end(input);
+    });
+  }
+}
+
+function unavailable(stderr: string): LedgerError { return new LedgerError("ledger-unavailable", `Git ledger operation failed${stderr ? `: ${stderr.trim()}` : ""}`); }
+function missingTreePath(stderr: string): boolean {
+  return /path ['”]?.+['”]? does not exist in|exists on disk, but not in|not a valid object name/i.test(stderr);
+}
+function staleRefUpdate(stderr: string): boolean { return /cannot lock ref .+ is at .+ but expected/i.test(stderr); }
+function refspecPatternMatches(pattern: string, ref: string): boolean {
+  if (pattern.includes("..") || !pattern.startsWith("refs/")) return true;
+  const stars = [...pattern].filter((character) => character === "*").length;
+  if (stars > 1) return true; // invalid/unfamiliar patterns are unsafe to authorize.
+  const expression = `^${pattern.split("*").map(escapeRegExp).join(".*")}$`;
+  return new RegExp(expression).test(ref);
+}
+function escapeRegExp(value: string): string { return value.replace(/[|\\{}()[\]^$+?.]/g, "\\$&"); }
