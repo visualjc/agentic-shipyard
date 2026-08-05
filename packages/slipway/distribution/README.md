@@ -17,6 +17,37 @@ The eight directories cannot be replaced with one filesystem rename because they
 
 Copy whole skill directories so their playbooks, references, assets, and `agents/openai.yaml` metadata remain together.
 
+## Prerequisite source and capability catalog
+
+Slipway's planning, implementation, diagnosis, and review baseline comes from the official [mattpocock/skills](https://github.com/mattpocock/skills) repository. Its canonical capability catalog is:
+
+- `setup-matt-pocock-skills`
+- `wayfinder`
+- `grill-with-docs`
+- `to-spec`
+- `to-tickets`
+- `implement`
+- `tdd`
+- `code-review`
+- `diagnosing-bugs`
+- `triage`
+- `research`
+- `prototype`
+
+For Codex and other Agent Skills hosts, the upstream installation command is:
+
+```bash
+npx skills@latest add mattpocock/skills --global
+```
+
+Select the capabilities needed for the intended lanes and ensure `setup-matt-pocock-skills` is included before project setup. Verify each selected skill at `~/.agents/skills/<name>/SKILL.md`. Record the resolved upstream commit or installer version, installed paths, and canonical names during preflight; do not assume a similarly named skill is sufficient.
+
+Missing capabilities do not block Slipway installation, status, resume, or unrelated lanes. Setup blocks only when `setup-matt-pocock-skills` is missing. Each delivery lane blocks immediately before the first action that needs one of its catalog capabilities; `research`, `prototype`, and `triage` are required only when that route selects them.
+
+For Claude Code, the same upstream is available as the official `mattpocock-skills` plugin or through the Agent Skills installer. Choose one Matt installation mechanism for that host; installing both creates duplicates. Slipway itself is still installed separately as described below.
+
+The required `code-review` capability is specifically Matt's `skills/engineering/code-review/SKILL.md` with frontmatter name `code-review`. A host built-in `/code-review`, `intent-pr-review`, `pr-change-walkthrough`, or another similarly named reviewer does not satisfy the delivery gate unless the user explicitly changes the configured capability after comparing its contract.
+
 ## Sources
 
 Use one exact source at a time:
@@ -30,11 +61,12 @@ Report the selected source path, branch, and SHA before installation. A developm
 
 Before copying:
 
-1. Verify every suite directory exists and contains a readable `SKILL.md`.
-2. Inspect the destination for all eight names. If any exists, compare it with the selected source and require confirmation before replacement.
-3. Check `~/.cursor/skills/` for `slipway*`. Stop on a duplicate; Cursor consumes the universal installation and must not receive another copy there.
-4. Preserve every unrelated skill and host configuration.
-5. Close Cursor, Codex CLI sessions, and any other host that could discover the destination during activation.
+1. Inventory the Matt catalog capabilities above and their source. Require `setup-matt-pocock-skills` for setup and only the selected lane's capabilities before that lane; report other missing capabilities without blocking Slipway installation, status, or resume.
+2. Verify every Slipway suite directory exists and contains a readable `SKILL.md`.
+3. Inspect the destination for all eight Slipway names. If any exists, compare it with the selected source and require confirmation before replacement.
+4. Check `~/.cursor/skills/` for `slipway*`. Stop on a duplicate; Cursor consumes the universal installation and must not receive another copy there.
+5. Preserve every unrelated skill and host configuration.
+6. Close Cursor, Codex CLI sessions, and any other host that could discover the destination during activation.
 
 ## Agent Skills hosts
 

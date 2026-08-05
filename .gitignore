@@ -4,9 +4,10 @@ coverage/
 *.log
 .env
 .env.*
-.claude
+.claude/
 .agents/
 .cursor/
 build/
 .scratch/
 .shipyard-local/
+.slipway-local/

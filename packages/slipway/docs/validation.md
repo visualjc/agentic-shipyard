@@ -2,15 +2,15 @@
 
 ## Original prototype evidence
 
-The behavioral scenarios below were validated locally on 2026-08-04 in worktree `/Users/jimcarter/projects/computer-management/shipyard-worktrees/slipway` on branch `experiment/slipway`. They are historical prototype evidence; they do not claim to validate the later source-only branch reconstruction or a global host installation.
+The behavioral scenarios below were validated locally on 2026-08-04 on branch `experiment/slipway`. The machine-local worktree path is intentionally omitted from product cargo. These are historical prototype results; they do not claim to validate the later source-only branch reconstruction or a global host installation.
 
 No GitHub/Linear write, network provider mutation, remote edit, authentication change, push, PR mutation, merge, force-push, deployment, or branch deletion occurred during those scenarios.
 
 ## Source-only rewrite evidence
 
-The source-only reconstruction was validated on 2026-08-05 in worktree `/Users/jimcarter/projects/personal_projects/shipyard/worktrees/agentic/rewrite-slipway-source-only` against shared base `7bfe2565d9ef2bc1af6f5caacc298aa32e5efbaa`. Reconstructed candidate `d525339d9875a2a5ef6ecd2be0b7fdff5337aa44` passed the official validator for all eight skills, YAML parsing for all eight `agents/openai.yaml` files, relative Markdown-link resolution, `git diff --check`, package-content inspection, and per-commit forbidden-path inspection. The candidate and its only feature commit contained no root `.agents/`, `.cursor/`, `.claude/`, or `build/` paths.
+The source-only reconstruction was validated on 2026-08-05 against shared base `7bfe2565d9ef2bc1af6f5caacc298aa32e5efbaa`, reviewed agentic candidate `9750e0cda9394c2be73325b42298073fa81d21c9`, and patch-equivalent delivery candidate `8fad279cf54c8bfdb48539688af8eb4813e928a7`. The machine-local worktree paths are intentionally omitted. The official validator passed all eight skills, all eight `agents/openai.yaml` files parsed, relative Markdown links resolved, `git diff --check` passed, and package-content and per-commit forbidden-path inspection passed. Both reachable candidates contained no root `.agents/`, `.cursor/`, `.claude/`, or `build/` paths.
 
-Independent review then required clearer evidence attribution and a staged installation rollback procedure. Those documentation corrections necessarily create a later candidate. Its exact SHA and renewed QA/review evidence live in the branch-named external Slipway ledger and delivery PR because a Git commit cannot embed its own final SHA truthfully.
+Every accepted delivery-feedback revision receives the same checks at its new exact candidate SHA. The current exact SHA and renewed QA/review evidence live in the branch-named external Slipway ledger and delivery PR because a Git commit cannot embed its own final SHA truthfully.
 
 Fresh Cursor IDE, Cursor CLI, Codex, and Claude Code discovery remains a post-merge installation check. It cannot be claimed before authoritative delivery `main` contains the suite and the user authorizes copying it to the global skill roots.
 

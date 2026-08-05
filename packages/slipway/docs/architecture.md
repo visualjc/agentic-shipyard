@@ -36,6 +36,10 @@ delivery main -> fast-forward -> agentic main -> agentic work branch
 
 Team feedback is read from the delivery PR and implemented on the same agentic work branch. Every revision renews the exact-SHA delivery gate before new product commits are cherry-picked to the same delivery PR.
 
+## Fixture cargo
+
+`packages/slipway/examples/dry-run/` is intentional product cargo. Its records are synthetic conformance examples for the durable-store format and lifecycle playbooks, not copies of an active ledger or private run evidence. They make pause/resume, exact-SHA review, promotion, concurrent run sharding, and finalization inspectable without a runtime. Live `.slipway/` state, machine bindings, worker/reviewer events, PRDs, research, prototypes, and other run-specific agentic artifacts remain excluded from delivery cargo.
+
 ## Helper code
 
 No helper code is necessary in this iteration. Installation is a documented direct copy from canonical source to global host skill roots; no installer or generated build tree is tracked. Slipway adds no service, executable, schema runtime, state machine, provider adapter, Git abstraction, or validation program. Pstack's `orch` demonstrates when a bookkeeping helper can earn its cost at program scale, but Slipway first removes shared writes through run sharding.
