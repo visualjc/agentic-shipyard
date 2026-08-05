@@ -21,8 +21,8 @@ Use the documented checks before delivery.
 
 ## Optional private extension
 
-When `AGENTS.local.md` exists, read it before work. It is private Repo-B guidance:
-do not commit, promote, or require it in the delivery repository.
+When `AGENTS.local.md` exists, read it after this file. It contains local-only
+instructions and must not be committed.
 EOF
   cat > "$repo/CLAUDE.md" <<'EOF'
 @AGENTS.md
@@ -33,6 +33,16 @@ EOF
 Tiny fixture application used only by the Slipway agent-overlay prototype.
 EOF
   printf '%s\n' 'export const questions = ["Capital of France?"];' > "$repo/src/questions.js"
+}
+
+write_overlay_manifest() {
+  local target="$1"
+  cat > "$target/manifest.md" <<'EOF'
+# Slipway private agent overlay manifest
+
+- Format: `slipway-agent-overlay/v1`
+- Materialized paths: `AGENTS.local.md`, `CLAUDE.local.md`, `docs/agents/**`
+EOF
 }
 
 write_private_overlay() {
@@ -59,6 +69,9 @@ The five canonical roles use their default strings: `needs-triage`, `needs-info`
 
 Single-context: root `CONTEXT.md` plus `docs/adr/`; read relevant domain docs
 before exploring. See `docs/agents/domain.md`.
+EOF
+  cat > "$target/CLAUDE.local.md" <<'EOF'
+@AGENTS.local.md
 EOF
   cat > "$target/docs/agents/issue-tracker.md" <<'EOF'
 # Issue tracker: Local Markdown
@@ -128,12 +141,12 @@ EOF
 
 assert_no_private_cargo() {
   local repo_a="$1" cargo_sha="$2" label="$3"
-  if gitq -C "$repo_a" show --format= --name-only "$cargo_sha" | grep -Eq '(^AGENTS\.local\.md$|^docs/agents/)'; then
+  if gitq -C "$repo_a" show --format= --name-only "$cargo_sha" | grep -Eq '(^AGENTS\.local\.md$|^CLAUDE\.local\.md$|^docs/agents/)'; then
     note "ASSERTION FAILED [$label]: private overlay entered Repo A cargo"
     exit 1
   fi
-  note "PASS [$label]: delivery cargo has zero AGENTS.local.md or docs/agents/** paths"
-  if gitq -C "$repo_a" ls-files | grep -Eq '(^AGENTS\.local\.md$|^docs/agents/)'; then
+  note "PASS [$label]: delivery cargo has zero private overlay paths"
+  if gitq -C "$repo_a" ls-files | grep -Eq '(^AGENTS\.local\.md$|^CLAUDE\.local\.md$|^docs/agents/)'; then
     note "ASSERTION FAILED [$label]: private paths exist in delivery checkout"
     exit 1
   fi
@@ -157,9 +170,9 @@ show_state() {
   gitq -C "$repo_b" log --oneline --decorate --all --graph -12
   note "Repo B status: $(gitq -C "$repo_b" status --short | sed -n '1,4p' | tr '\n' ' ' || true)"
   note "Private paths:"
-  (cd "$repo_b" && find AGENTS.local.md docs/agents -type f 2>/dev/null | sort) || true
+  (cd "$repo_b" && find AGENTS.local.md CLAUDE.local.md docs/agents -type f 2>/dev/null | sort) || true
   note "Private paths tracked by feature/alpha (if committed):"
-  gitq -C "$repo_b" ls-tree -r --name-only feature/alpha 2>/dev/null | grep -E '^(AGENTS\.local\.md|docs/agents/)' || true
+  gitq -C "$repo_b" ls-tree -r --name-only feature/alpha 2>/dev/null | grep -E '^(AGENTS\.local\.md|CLAUDE\.local\.md|docs/agents/)' || true
 }
 
 init_pair() {
@@ -203,7 +216,7 @@ metadata_strategy() {
   for feature in alpha beta; do
     gitq -C "$b" switch -q -c "feature/$feature" main
     write_private_overlay "$b"
-    gitq -C "$b" add AGENTS.local.md docs/agents
+    gitq -C "$b" add AGENTS.local.md CLAUDE.local.md docs/agents
     gitq -C "$b" commit -qm "agentic: hydrate private Matt overlay for $feature"
     add_product_commit "$b" "${feature}-question" >/dev/null
     gitq -C "$b" push -qu origin "feature/$feature"
@@ -215,6 +228,7 @@ metadata_strategy() {
   gitq -C "$b" switch -q feature/alpha
   gitq -C "$b" worktree add -q "$base/fresh-worktree" feature/beta
   test -f "$base/fresh-worktree/AGENTS.local.md"
+  test -f "$base/fresh-worktree/CLAUDE.local.md"
   note 'PASS [metadata commit]: fresh Repo-B worktree receives overlay from its branch history'
   change_delivery_agents_and_sync "$a" "$b"
   show_state "$b" 'metadata after Repo-A AGENTS change + Repo-B main sync'
@@ -226,7 +240,7 @@ overlay_branch_strategy() {
   say 'Strategy 2: long-lived committed agentic overlay base branch'
   gitq -C "$b" switch -q -c agentic-overlay main
   write_private_overlay "$b"
-  gitq -C "$b" add AGENTS.local.md docs/agents
+  gitq -C "$b" add AGENTS.local.md CLAUDE.local.md docs/agents
   gitq -C "$b" commit -qm 'agentic: establish private Matt overlay base'
   gitq -C "$b" push -qu origin agentic-overlay
   for feature in alpha beta; do
@@ -242,6 +256,7 @@ overlay_branch_strategy() {
   test -f "$base/second-machine/AGENTS.local.md" || true
   gitq -C "$base/second-machine" switch -q agentic-overlay
   test -f "$base/second-machine/AGENTS.local.md"
+  test -f "$base/second-machine/CLAUDE.local.md"
   note 'PASS [overlay branch]: fresh machine receives overlay only after selecting agentic-overlay'
   change_delivery_agents_and_sync "$a" "$b"
   gitq -C "$b" switch -q agentic-overlay
@@ -252,26 +267,32 @@ overlay_branch_strategy() {
 
 hydrate_from_ledger() {
   local ledger="$1" target="$2"
-  local version
-  version="$(gitq -C "$ledger" rev-parse HEAD)"
+  local overlay="$ledger/.slipway/agent-overlay" version exclude
+  version="$(gitq -C "$ledger" rev-parse HEAD:.slipway/agent-overlay)"
+  exclude="$(gitq -C "$target" rev-parse --path-format=absolute --git-path info/exclude)"
   mkdir -p "$target/docs" "$target/.slipway-local"
   rm -rf "$target/docs/agents"
-  cp "$ledger/AGENTS.local.md" "$target/AGENTS.local.md"
-  cp -R "$ledger/docs/agents" "$target/docs/agents"
+  cp "$overlay/AGENTS.local.md" "$target/AGENTS.local.md"
+  cp "$overlay/CLAUDE.local.md" "$target/CLAUDE.local.md"
+  cp -R "$overlay/docs/agents" "$target/docs/agents"
   printf '%s\n' "$version" > "$target/.slipway-local/agent-overlay.version"
-  for pattern in /AGENTS.local.md /docs/agents/ /.slipway-local/; do
-    grep -qxF "$pattern" "$target/.git/info/exclude" || printf '%s\n' "$pattern" >> "$target/.git/info/exclude"
+  for pattern in /AGENTS.local.md /CLAUDE.local.md /docs/agents/ /.slipway-local/; do
+    grep -qxF "$pattern" "$exclude" || printf '%s\n' "$pattern" >> "$exclude"
   done
 }
 
 overlay_is_fresh() {
   local ledger="$1" target="$2"
+  local overlay="$ledger/.slipway/agent-overlay"
   test -f "$target/AGENTS.local.md" || return 1
+  test -f "$target/CLAUDE.local.md" || return 1
+  test -f "$overlay/manifest.md" || return 1
   test -f "$target/.slipway-local/agent-overlay.version" || return 1
-  test "$(cat "$target/.slipway-local/agent-overlay.version")" = "$(gitq -C "$ledger" rev-parse HEAD)" || return 1
-  cmp -s "$ledger/AGENTS.local.md" "$target/AGENTS.local.md" || return 1
+  test "$(cat "$target/.slipway-local/agent-overlay.version")" = "$(gitq -C "$ledger" rev-parse HEAD:.slipway/agent-overlay)" || return 1
+  cmp -s "$overlay/AGENTS.local.md" "$target/AGENTS.local.md" || return 1
+  cmp -s "$overlay/CLAUDE.local.md" "$target/CLAUDE.local.md" || return 1
   for name in issue-tracker.md triage-labels.md domain.md; do
-    cmp -s "$ledger/docs/agents/$name" "$target/docs/agents/$name" || return 1
+    cmp -s "$overlay/docs/agents/$name" "$target/docs/agents/$name" || return 1
   done
 }
 
@@ -281,7 +302,7 @@ assert_overlay_fresh() {
     note "ASSERTION FAILED [$label]: hydrated overlay is missing or stale"
     exit 1
   fi
-  evidence "$label: overlay_version=$(gitq -C "$ledger" rev-parse HEAD); fresh=true"
+  evidence "$label: overlay_version=$(gitq -C "$ledger" rev-parse HEAD:.slipway/agent-overlay); fresh=true"
   note "PASS [$label]: hydrated overlay matches the exact ledger version"
 }
 
@@ -290,7 +311,8 @@ ignored_overlay_strategy() {
   init_pair "$base"
   say 'Strategy 3: ledger-backed ignored worktree overlay'
   gitq -C "$base" init -q ledger
-  write_private_overlay "$ledger"
+  write_private_overlay "$ledger/.slipway/agent-overlay"
+  write_overlay_manifest "$ledger/.slipway/agent-overlay"
   gitq -C "$ledger" add .
   gitq -C "$ledger" commit -qm 'ledger: canonical private Matt overlay'
   for feature in alpha beta; do
@@ -298,13 +320,21 @@ ignored_overlay_strategy() {
     hydrate_from_ledger "$ledger" "$b"
     hydrate_from_ledger "$ledger" "$b"
     assert_overlay_fresh "$ledger" "$b" "ignored overlay idempotent hydration for $feature"
-    test "$(grep -cxF /AGENTS.local.md "$b/.git/info/exclude")" -eq 1
-    test "$(grep -cxF /docs/agents/ "$b/.git/info/exclude")" -eq 1
-    test "$(grep -cxF /.slipway-local/ "$b/.git/info/exclude")" -eq 1
+    local exclude
+    exclude="$(gitq -C "$b" rev-parse --path-format=absolute --git-path info/exclude)"
+    test "$(grep -cxF /AGENTS.local.md "$exclude")" -eq 1
+    test "$(grep -cxF /CLAUDE.local.md "$exclude")" -eq 1
+    test "$(grep -cxF /docs/agents/ "$exclude")" -eq 1
+    test "$(grep -cxF /.slipway-local/ "$exclude")" -eq 1
     add_product_commit "$b" "${feature}-question" >/dev/null
     gitq -C "$b" push -qu origin "feature/$feature"
     note "Ignored overlay status for $feature: $(gitq -C "$b" status --short | tr '\n' ' ' || true)"
   done
+  gitq -C "$b" worktree add -q -b feature/gamma "$base/linked-worktree" main
+  hydrate_from_ledger "$ledger" "$base/linked-worktree"
+  assert_overlay_fresh "$ledger" "$base/linked-worktree" 'ignored overlay linked-worktree hydration'
+  test -z "$(gitq -C "$base/linked-worktree" status --short)"
+  note 'PASS [ignored overlay]: linked worktree uses the clone-local exclude and its own hydrated files/version'
   local cargo
   cargo="$(gitq -C "$b" rev-parse feature/alpha)"
   promote_exact_cargo "$a" "$base/repo-b-origin.git" feature/alpha "$cargo"
@@ -317,8 +347,13 @@ ignored_overlay_strategy() {
   hydrate_from_ledger "$ledger" "$base/second-machine"
   assert_overlay_fresh "$ledger" "$base/second-machine" 'ignored overlay fresh-machine reconstruction'
   note 'PASS [ignored overlay]: ledger hydration reconstructs private guidance on fresh machine'
-  printf '\n## Tool guidance\n\nUse CodeGraph when it is installed and the task needs structural exploration.\n' >> "$ledger/AGENTS.local.md"
-  gitq -C "$ledger" add AGENTS.local.md
+  printf '%s\n' '# unrelated ledger record' > "$ledger/.slipway/portfolio.md"
+  gitq -C "$ledger" add .slipway/portfolio.md
+  gitq -C "$ledger" commit -qm 'ledger: unrelated portfolio update'
+  assert_overlay_fresh "$ledger" "$base/second-machine" 'ignored overlay ignores unrelated ledger commit'
+  note 'PASS [ignored overlay]: unrelated ledger commit does not stale the overlay tree version'
+  printf '\n## Tool guidance\n\nUse CodeGraph when it is installed and the task needs structural exploration.\n' >> "$ledger/.slipway/agent-overlay/AGENTS.local.md"
+  gitq -C "$ledger" add .slipway/agent-overlay/AGENTS.local.md
   gitq -C "$ledger" commit -qm 'ledger: add optional CodeGraph guidance'
   if overlay_is_fresh "$ledger" "$base/second-machine"; then
     note 'ASSERTION FAILED [ignored overlay]: stale second-machine overlay was not detected'

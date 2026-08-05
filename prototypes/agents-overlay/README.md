@@ -3,9 +3,9 @@
 **Throwaway harness, not Slipway production code.** It answers one question:
 
 > Can Repo A remain skill-agnostic while Repo B reliably supplies private Matt
-> setup instructions (`AGENTS.local.md` plus `docs/agents/**`) across concurrent
-> runs, delivery sync, and a fresh machine, without private paths entering
-> delivery cargo?
+> setup instructions (`AGENTS.local.md`, `CLAUDE.local.md`, and
+> `docs/agents/**`) across concurrent runs, delivery sync, and a fresh machine,
+> without private paths entering delivery cargo?
 
 Run it from this repository with one command:
 
@@ -23,7 +23,8 @@ pass it as the first argument (it must be an empty/new disposable directory).
 
 The shared delivery fixture has a minimal `AGENTS.md` that says to read an
 optional `AGENTS.local.md` when present and a `CLAUDE.md` containing `@AGENTS.md`.
-The private overlay uses the requested Matt answers: local Markdown tracker,
+The private overlay adds a `CLAUDE.local.md` containing only
+`@AGENTS.local.md` and uses the requested Matt answers: local Markdown tracker,
 default triage labels, and single-context domain documentation.
 
 ## Three strategies exercised
@@ -37,9 +38,9 @@ default triage labels, and single-context domain documentation.
 
 For every strategy the harness creates two concurrent feature branches, adds a
 product change, cherry-picks only the exact product commit to Repo A, asserts
-that its cargo contains neither `AGENTS.local.md` nor `docs/agents/**`, changes
-Repo A's public `AGENTS.md`, syncs Repo B main, and tests a fresh worktree or
-second-machine reconstruction.
+that its cargo contains no `AGENTS.local.md`, `CLAUDE.local.md`, or
+`docs/agents/**`, changes Repo A's public `AGENTS.md`, syncs Repo B main, and
+tests a fresh worktree or second-machine reconstruction.
 
 ## Reading the output
 

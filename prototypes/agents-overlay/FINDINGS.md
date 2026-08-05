@@ -4,8 +4,9 @@
 
 Use the shared optional `AGENTS.local.md` extension point with a **ledger-backed,
 ignored Repo-B overlay**. Make hydration and freshness verification a mandatory
-Slipway run-start gate. Until that gate exists, the per-run metadata commit is
-the safer fallback. Do not introduce a long-lived agentic overlay branch.
+Slipway run-start gate. The production contract now includes that gate; older
+Slipway installations without it should use the per-run metadata-commit
+fallback. Do not introduce a long-lived agentic overlay branch.
 
 ## What was exercised
 
@@ -22,8 +23,9 @@ domain docs), promoted one exact product commit, changed Repo A's public
 `AGENTS.md`, and synchronized Repo B main.
 
 All three strategies proved that exact product-only promotion can keep
-`AGENTS.local.md` and `docs/agents/**` out of Repo A. Additional assertions also
-found no private overlay markers in Repo A's tracked instruction files.
+`AGENTS.local.md`, `CLAUDE.local.md`, and `docs/agents/**` out of Repo A.
+Additional assertions also found no private overlay markers in Repo A's tracked
+instruction files.
 
 Fresh `gpt-5.6-luna` agents at low reasoning effort then probed the generated
 repositories:
@@ -115,8 +117,8 @@ treated as required lifecycle machinery rather than a convenience.
 Repo A may contain only a generic, skill-agnostic extension point:
 
 ```markdown
-When `AGENTS.local.md` exists, read it before work. It is private Repo-B
-guidance; do not commit, promote, or require it in the delivery repository.
+When `AGENTS.local.md` exists, read it after this file. It contains local-only
+instructions and must not be committed.
 ```
 
 Repo B's ledger should own the canonical private overlay and its exact version:
@@ -124,6 +126,7 @@ Repo B's ledger should own the canonical private overlay and its exact version:
 ```text
 .slipway/agent-overlay/
   AGENTS.local.md
+  CLAUDE.local.md
   docs/agents/issue-tracker.md
   docs/agents/triage-labels.md
   docs/agents/domain.md
@@ -133,7 +136,7 @@ Repo B's ledger should own the canonical private overlay and its exact version:
 Before any planning, diagnosis, research, prototype, or implementation lane,
 Slipway run-start should:
 
-1. Resolve and verify the canonical ledger overlay version.
+1. Resolve and verify the canonical ledger overlay tree ID.
 2. Materialize the files into the exact Repo-B worktree.
 3. Add only the private paths to the repository-local Git exclude.
 4. Record the hydrated version under `.slipway-local/`.
@@ -157,7 +160,4 @@ Repo-A-compatible files.
 ## Remaining validation
 
 - Confirm the extension behavior in Claude Code and any other supported host.
-- Decide the durable overlay manifest format and content-hash rules.
-- Define whether manual edits to hydrated files are rejected, imported back
-  into the ledger, or overwritten after explicit confirmation.
 - Validate the design against a real paired project and provider workflow.
