@@ -1,0 +1,4 @@
+interface:
+  display_name: "Slipway Setup"
+  short_description: "Configure a paired Slipway project"
+  default_prompt: "Use $slipway-setup to configure this paired-repository project."

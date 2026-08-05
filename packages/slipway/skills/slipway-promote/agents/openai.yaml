@@ -1,0 +1,4 @@
+interface:
+  display_name: "Slipway Promote"
+  short_description: "Preflight product cargo for a delivery PR"
+  default_prompt: "Use $slipway-promote to preflight reviewed product commits for the delivery PR."

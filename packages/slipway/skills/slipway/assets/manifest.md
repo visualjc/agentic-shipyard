@@ -1,0 +1,25 @@
+# Slipway run manifest
+
+- Work branch: `<complete agentic work branch>`
+- Former branch: `<none|complete former name>`
+- Lane: `<lane>`
+- Build provider: `<matt|pstack>`
+- Coordinator: `<agent/session>`
+- State: `<planned|active|paused|blocked|delivery-waiting|finalizing>`
+- Phase: `<phase>`
+- Agentic base SHA: `<40-hex SHA>`
+- Agentic head SHA: `<40-hex SHA|unknown>`
+- Reviewed head SHA: `<40-hex SHA|none>`
+- Agentic PR: `<canonical URL|none>`
+- Agentic PR provider ID: `<provider ID|none>`
+- Agentic PR base: `<branch|none>`
+- Agentic PR head SHA: `<40-hex SHA|none>`
+- Agentic PR state: `<none|open|closed-unmerged>`
+- Delivery base SHA: `<40-hex SHA|unknown>`
+- Delivery branch: `<branch|none>`
+- Delivery head SHA: `<40-hex SHA|none>`
+- Delivery PR: `<canonical URL|none>`
+- Delivery PR provider ID: `<provider ID|none>`
+- Delivery PR state: `<none|open|merged|closed-unmerged>`
+- Created: `<UTC timestamp>`
+- Updated: `<UTC timestamp>`

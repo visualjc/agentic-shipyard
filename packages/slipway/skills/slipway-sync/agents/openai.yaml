@@ -1,0 +1,4 @@
+interface:
+  display_name: "Slipway Sync"
+  short_description: "Synchronize delivery main into agentic main"
+  default_prompt: "Use $slipway-sync to preflight the paired-repository main synchronization."

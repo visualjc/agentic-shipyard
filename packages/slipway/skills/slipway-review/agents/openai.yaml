@@ -1,0 +1,4 @@
+interface:
+  display_name: "Slipway Review"
+  short_description: "Review an exact Slipway delivery SHA"
+  default_prompt: "Use $slipway-review to independently review this exact candidate SHA."

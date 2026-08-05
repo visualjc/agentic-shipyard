@@ -1,0 +1,4 @@
+interface:
+  display_name: "Slipway Status"
+  short_description: "Summarize planned and active Slipway runs"
+  default_prompt: "Use $slipway-status to reconstruct the current delivery portfolio."

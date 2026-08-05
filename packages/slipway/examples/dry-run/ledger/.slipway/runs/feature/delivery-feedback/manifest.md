@@ -1,0 +1,25 @@
+# Slipway run manifest
+
+- Work branch: `feature/delivery-feedback`
+- Former branch: `none`
+- Lane: `delivery-follow-up`
+- Build provider: `matt`
+- Coordinator: `demo-coordinator-8`
+- State: `delivery-waiting`
+- Phase: `pr-monitoring`
+- Agentic base SHA: `0000000000000000000000000000000000000008`
+- Agentic head SHA: `3333333333333333333333333333333333333333`
+- Reviewed head SHA: `3333333333333333333333333333333333333333`
+- Agentic PR: `https://example.invalid/agent/demo/pull/9`
+- Agentic PR provider ID: `9`
+- Agentic PR base: `main`
+- Agentic PR head SHA: `3333333333333333333333333333333333333333`
+- Agentic PR state: `open`
+- Delivery base SHA: `dddddddddddddddddddddddddddddddddddddddd`
+- Delivery branch: `feature/delivery-feedback`
+- Delivery head SHA: `eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee`
+- Delivery PR: `https://example.invalid/team/demo/pull/42`
+- Delivery PR provider ID: `42`
+- Delivery PR state: `open`
+- Created: `2026-08-04T23:07:00Z`
+- Updated: `2026-08-04T23:44:00Z`

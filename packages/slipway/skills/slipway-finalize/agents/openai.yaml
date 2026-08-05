@@ -1,0 +1,4 @@
+interface:
+  display_name: "Slipway Finalize"
+  short_description: "Finalize a merged Slipway run safely"
+  default_prompt: "Use $slipway-finalize to reconcile and close this merged delivery run."

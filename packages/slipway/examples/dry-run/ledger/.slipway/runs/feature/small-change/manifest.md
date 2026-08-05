@@ -1,0 +1,25 @@
+# Slipway run manifest
+
+- Work branch: `feature/small-change`
+- Former branch: `none`
+- Lane: `small-development`
+- Build provider: `matt`
+- Coordinator: `demo-coordinator-2`
+- State: `active`
+- Phase: `requirements`
+- Agentic base SHA: `0000000000000000000000000000000000000002`
+- Agentic head SHA: `0000000000000000000000000000000000000002`
+- Reviewed head SHA: `none`
+- Agentic PR: `none`
+- Agentic PR provider ID: `none`
+- Agentic PR base: `none`
+- Agentic PR head SHA: `none`
+- Agentic PR state: `none`
+- Delivery base SHA: `unknown`
+- Delivery branch: `none`
+- Delivery head SHA: `none`
+- Delivery PR: `none`
+- Delivery PR provider ID: `none`
+- Delivery PR state: `none`
+- Created: `2026-08-04T23:01:00Z`
+- Updated: `2026-08-04T23:01:00Z`

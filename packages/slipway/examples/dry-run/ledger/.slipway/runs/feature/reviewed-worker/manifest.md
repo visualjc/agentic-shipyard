@@ -1,0 +1,25 @@
+# Slipway run manifest
+
+- Work branch: `feature/reviewed-worker`
+- Former branch: `none`
+- Lane: `small-development`
+- Build provider: `matt`
+- Coordinator: `demo-coordinator-4`
+- State: `delivery-waiting`
+- Phase: `promotion-preflight`
+- Agentic base SHA: `0000000000000000000000000000000000000004`
+- Agentic head SHA: `1111111111111111111111111111111111111111`
+- Reviewed head SHA: `1111111111111111111111111111111111111111`
+- Agentic PR: `https://example.invalid/agent/demo/pull/8`
+- Agentic PR provider ID: `8`
+- Agentic PR base: `main`
+- Agentic PR head SHA: `1111111111111111111111111111111111111111`
+- Agentic PR state: `open`
+- Delivery base SHA: `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`
+- Delivery branch: `feature/reviewed-worker`
+- Delivery head SHA: `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`
+- Delivery PR: `none`
+- Delivery PR provider ID: `none`
+- Delivery PR state: `none`
+- Created: `2026-08-04T23:04:00Z`
+- Updated: `2026-08-04T23:25:00Z`

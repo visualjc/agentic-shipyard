@@ -1,0 +1,4 @@
+interface:
+  display_name: "Slipway"
+  short_description: "Coordinate paired-repository delivery"
+  default_prompt: "Use $slipway to classify and coordinate this software delivery."

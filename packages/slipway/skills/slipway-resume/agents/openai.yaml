@@ -1,0 +1,4 @@
+interface:
+  display_name: "Slipway Resume"
+  short_description: "Resume a branch-named Slipway run"
+  default_prompt: "Use $slipway-resume to continue the run for this work branch."
