@@ -102,6 +102,16 @@ coordination problem.
 - The prototype demonstrated idempotent hydration, exact ledger-version
   recording, stale-policy detection, fresh-machine reconstruction, recovery
   after a policy update, and rehydration after main synchronization.
+- Fail-closed cases preserved divergent or unexpected local bytes unchanged,
+  rejected tracked private paths, and advanced a stale version only after its
+  existing files matched the reachable prior overlay tree.
+- The safe-hydration fixture uses the product manifest, replaces files through
+  staged siblings, audits bytes before advancing the version, and restores its
+  captured managed-content/path pre-state after deterministic fresh and stale
+  post-install faults. A stale rename removes only prior-tree-owned paths and
+  reaches the exact new tree without extras.
+- The same harness completed with real SHA-1 and SHA-256 repositories; overlay
+  identity validation does not assume a fixed object-ID length.
 - Repo-local Git excludes kept status clean without modifying Repo A's tracked
   `.gitignore`.
 
@@ -115,6 +125,11 @@ coordination problem.
 - Host-specific instruction behavior still needs validation. The prototype has
   one reproducible fresh Codex status probe; it does not verify Claude Code or
   every supported host.
+- Rollback is best-effort in this single-process harness. Concurrent external
+  filesystem mutation is outside the prototype and no cross-process atomicity
+  is claimed. Managed bytes, paths, types, absence, version, and full exclude
+  are checked; inode and hardlink metadata are explicitly outside the rollback
+  claim.
 
 **Assessment:** best fit for Slipway's defining boundary, provided hydration is
 treated as required lifecycle machinery rather than a convenience.

@@ -13,6 +13,12 @@ Run it from this repository with one command:
 ./prototypes/agents-overlay/run.sh
 ```
 
+To exercise Git's SHA-256 object format explicitly:
+
+```sh
+GIT_DEFAULT_HASH=sha256 ./prototypes/agents-overlay/run.sh
+```
+
 The observed comparison and recommendation are captured in
 [FINDINGS.md](FINDINGS.md).
 
@@ -52,6 +58,18 @@ product change, cherry-picks only the exact product commit to Repo A, asserts
 that its cargo contains no `AGENTS.local.md`, `CLAUDE.local.md`, or
 `docs/agents/**`, changes Repo A's public `AGENTS.md`, syncs Repo B main, and
 tests a fresh worktree or second-machine reconstruction.
+
+The ledger-backed strategy also exercises fail-closed hydration: divergent
+local bytes, unexpected materialized paths, and tracked private files are
+rejected without changing the attempted state; a reachable stale version
+advances only when every existing byte still matches its recorded prior tree.
+Its manifest fixture is copied from the product asset. A deterministic
+post-install fault verifies best-effort rollback of the complete managed-content
+and managed-path pre-state, including absence, bytes, node types, version, and
+the full clone-local exclude. It does not preserve or claim inode or hardlink
+metadata. The harness does not claim filesystem transaction atomicity;
+concurrent external mutation during hydration is outside this prototype's
+scope.
 
 ## Reading the output
 
