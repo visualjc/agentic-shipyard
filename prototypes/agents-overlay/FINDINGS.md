@@ -27,8 +27,8 @@ All three strategies proved that exact product-only promotion can keep
 Additional assertions also found no private overlay markers in Repo A's tracked
 instruction files.
 
-Fresh `gpt-5.6-luna` agents at low reasoning effort then probed the generated
-repositories:
+Earlier exploratory low-effort probes reported these generated-repository
+observations, but their exact fixtures and prompts were not retained:
 
 - Repo A reported no configured Matt tracker, labels, domain policy, or private
   skills.
@@ -38,6 +38,12 @@ repositories:
 - After ledger hydration, a fresh Repo B agent also recovered newly added
   optional CodeGraph guidance while confirming that the overlay was ignored and
   untracked.
+
+Those observations remain narrative only. A separate reproducible Codex probe
+of the current forced-status contract, including an exact branch-source fixture,
+prompt, orchestration mechanism, and output, is in
+[CODEX-PROBES.md](CODEX-PROBES.md). It does not reproduce or substantiate the
+four exploratory observations above.
 
 ## Strategy comparison
 
@@ -106,8 +112,9 @@ coordination problem.
 - Ignored files are invisible to ordinary Git history and status.
 - A missing or stale overlay can silently reduce agent capability unless
   run-start fails closed.
-- Host-specific instruction behavior still needs validation. The prototype
-  verified fresh Codex behavior but not Claude Code or every supported host.
+- Host-specific instruction behavior still needs validation. The prototype has
+  one reproducible fresh Codex status probe; it does not verify Claude Code or
+  every supported host.
 
 **Assessment:** best fit for Slipway's defining boundary, provided hydration is
 treated as required lifecycle machinery rather than a convenience.

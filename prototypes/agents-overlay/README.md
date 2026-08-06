@@ -16,10 +16,21 @@ Run it from this repository with one command:
 The observed comparison and recommendation are captured in
 [FINDINGS.md](FINDINGS.md).
 
-It uses only `bash` and Git, creates its paired trivia-app repositories under a
-new `mktemp` directory, and prints that directory at the end for inspection.
-Nothing under the real project is modified. To retain fixtures at a known path,
-pass it as the first argument (it must be an empty/new disposable directory).
+The harness also runs [verify-contract.sh](verify-contract.sh), a small
+table-driven guard against inverted safety prose in the product contract. It
+runs self-tests that append contradictory variants as bullets, soft-wrapped
+task-list items, and mid-paragraph clauses and require failure before checking
+the candidate contract.
+Host-specific Codex evidence is recorded separately in
+[CODEX-PROBES.md](CODEX-PROBES.md); it is reproducible evidence, not a claim
+that the shell harness launched an agent host.
+
+It uses `bash`, Git, and standard Unix utilities. With no argument, it creates
+its paired trivia-app repositories under a new `mktemp` directory and prints
+that directory at the end for inspection; this default path does not modify the
+real project. A caller may instead pass an empty/new disposable directory as
+the first argument. The harness writes directly beneath a caller-supplied path,
+so the caller is responsible for ensuring that path is safe and disposable.
 
 The shared delivery fixture has a minimal `AGENTS.md` that says to read an
 optional `AGENTS.local.md` when present and a `CLAUDE.md` containing `@AGENTS.md`.

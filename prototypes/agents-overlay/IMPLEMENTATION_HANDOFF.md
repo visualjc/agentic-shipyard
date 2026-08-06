@@ -116,7 +116,9 @@ has not been tested. Preserve the source-only, Markdown/YAML-only product.
 
 Extend the throwaway harness only if needed to cover a production invariant.
 At minimum, run its existing one-command validation and retain its distinction
-between verified Codex behavior and still-unverified fresh Claude behavior.
+between the one reproducible Codex forced-status behavior and still-unverified
+fresh Claude behavior. Treat the four earlier generated-repository Codex
+observations in `FINDINGS.md` as narrative-only evidence.
 
 ## Acceptance criteria
 

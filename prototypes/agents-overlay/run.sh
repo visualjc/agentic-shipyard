@@ -317,11 +317,14 @@ ignored_overlay_strategy() {
   gitq -C "$ledger" commit -qm 'ledger: canonical private Matt overlay'
   for feature in alpha beta; do
     gitq -C "$b" switch -q -c "feature/$feature" main
+    local exclude
+    exclude="$(gitq -C "$b" rev-parse --path-format=absolute --git-path info/exclude)"
+    grep -qxF '/team-local-cache/' "$exclude" || printf '%s\n' '/team-local-cache/' >> "$exclude"
     hydrate_from_ledger "$ledger" "$b"
     hydrate_from_ledger "$ledger" "$b"
     assert_overlay_fresh "$ledger" "$b" "ignored overlay idempotent hydration for $feature"
-    local exclude
-    exclude="$(gitq -C "$b" rev-parse --path-format=absolute --git-path info/exclude)"
+    test "$(grep -cxF /team-local-cache/ "$exclude")" -eq 1
+    note "PASS [ignored overlay]: unrelated pre-existing exclude survives hydration for $feature"
     test "$(grep -cxF /AGENTS.local.md "$exclude")" -eq 1
     test "$(grep -cxF /CLAUDE.local.md "$exclude")" -eq 1
     test "$(grep -cxF /docs/agents/ "$exclude")" -eq 1
@@ -371,6 +374,8 @@ ignored_overlay_strategy() {
 metadata_strategy
 overlay_branch_strategy
 ignored_overlay_strategy
+bash "$ROOT_DIR/verify-contract.sh" --self-test
+bash "$ROOT_DIR/verify-contract.sh"
 
 say 'Result'
 note "All three strategies passed cargo isolation. Disposable repositories retained at: $WORK_DIR"
