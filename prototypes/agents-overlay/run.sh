@@ -260,10 +260,108 @@ overlay_branch_strategy() {
   show_state "$b" 'overlay branch after rebase onto synced Repo-B main'
 }
 
+validate_canonical_overlay_tree() {
+  local ledger="$1" tree="$2" canonical_dir="$3" source_files="$4" label="$5"
+  local entry metadata mode type source_path resolved expected_manifest
+
+  resolved="$(gitq -C "$ledger" rev-parse --verify "$tree^{tree}" 2>/dev/null || true)"
+  if test -z "$tree" || test "$resolved" != "$tree" ||
+     test "$(gitq -C "$ledger" cat-file -t "$tree" 2>/dev/null || true)" != tree; then
+    note "HYDRATION REFUSED: $label overlay tree is missing or invalid"
+    return 1
+  fi
+
+  : > "$source_files"
+  while IFS= read -r -d '' entry; do
+    metadata="${entry%%$'\t'*}"
+    source_path="${entry#*$'\t'}"
+    mode="${metadata%% *}"
+    metadata="${metadata#* }"
+    type="${metadata%% *}"
+    if test "$mode" != 100644 || test "$type" != blob; then
+      note "HYDRATION REFUSED: $label source is not a regular file: $source_path"
+      return 1
+    fi
+    if ! [[ "$source_path" =~ ^[A-Za-z0-9._/-]+$ ]] ||
+       [[ "/$source_path/" == *'/../'* ]] || [[ "/$source_path/" == *'/./'* ]] ||
+       [[ "$source_path" == /* ]] || [[ "$source_path" == *'//'* ]]; then
+      note "HYDRATION REFUSED: $label source has an invalid destination: $source_path"
+      return 1
+    fi
+    case "$source_path" in
+      manifest.md|AGENTS.local.md|CLAUDE.local.md|docs/agents/*)
+        ;;
+      *)
+        note "HYDRATION REFUSED: $label source is outside the manifest allowlist: $source_path"
+        return 1
+        ;;
+    esac
+    if test "$source_path" = docs/agents/; then
+      note "HYDRATION REFUSED: $label docs/agents destination is not a file"
+      return 1
+    fi
+    printf '%s\n' "$source_path" >> "$source_files"
+  done < <(gitq -C "$ledger" ls-tree -r -z "$tree")
+
+  for source_path in manifest.md AGENTS.local.md CLAUDE.local.md; do
+    if test "$(grep -cxF "$source_path" "$source_files")" -ne 1; then
+      note "HYDRATION REFUSED: required $label source is missing or duplicated: $source_path"
+      return 1
+    fi
+  done
+
+  mkdir -p "$canonical_dir"
+  gitq -C "$ledger" archive "$tree" | tar -x -C "$canonical_dir"
+  while IFS= read -r source_path; do
+    if test ! -f "$canonical_dir/$source_path" || test -L "$canonical_dir/$source_path" ||
+       test ! -s "$canonical_dir/$source_path"; then
+      note "HYDRATION REFUSED: $label source is missing, empty, or non-regular: $source_path"
+      return 1
+    fi
+  done < "$source_files"
+
+  expected_manifest="$ROOT_DIR/../../packages/slipway/skills/slipway/assets/agent-overlay/manifest.md"
+  if test ! -f "$expected_manifest" || ! cmp -s "$canonical_dir/manifest.md" "$expected_manifest"; then
+    note "HYDRATION REFUSED: $label manifest or allowlist is invalid"
+    return 1
+  fi
+}
+
+verify_materialized_overlay() {
+  local canonical_dir="$1" source_files="$2" target="$3" audit_label="$4"
+  local source_path actual relative
+
+  while IFS= read -r source_path; do
+    test "$source_path" = manifest.md && continue
+    actual="$target/$source_path"
+    if test ! -f "$actual" || test -L "$actual" || ! cmp -s "$canonical_dir/$source_path" "$actual"; then
+      note "HYDRATION REFUSED: $audit_label failed: $source_path"
+      return 1
+    fi
+  done < "$source_files"
+
+  if test -d "$target/docs/agents" && test ! -d "$canonical_dir/docs/agents"; then
+    note "HYDRATION REFUSED: $audit_label found an extra docs/agents directory"
+    return 1
+  fi
+  if test -d "$target/docs/agents"; then
+    while IFS= read -r actual; do
+      relative="${actual#"$target/"}"
+      if test ! -e "$canonical_dir/$relative" || test -L "$actual" ||
+         { test ! -f "$actual" && test ! -d "$actual"; } ||
+         { test -d "$actual" && test ! -d "$canonical_dir/$relative"; } ||
+         { test -f "$actual" && { test ! -f "$canonical_dir/$relative" || ! cmp -s "$canonical_dir/$relative" "$actual"; }; }; then
+        note "HYDRATION REFUSED: $audit_label found an extra or invalid node: $relative"
+        return 1
+      fi
+    done < <(find "$target/docs/agents" -mindepth 1 -print)
+  fi
+}
+
 hydrate_from_ledger() (
   local ledger="$1" target="$2"
-  local version exclude temp_base stage_dir canonical_dir expected_manifest
-  local entry metadata mode type source_path tracked recorded baseline actual relative prior_file pattern
+  local version exclude temp_base stage_dir canonical_dir
+  local type source_path tracked recorded baseline actual relative prior_file pattern
   local resolved head_objects
   temp_base="${TMPDIR:-/tmp}"
   temp_base="${temp_base%/}"
@@ -281,71 +379,14 @@ hydrate_from_ledger() (
   trap cleanup_hydration_stage EXIT
 
   version="$(gitq -C "$ledger" rev-parse HEAD:.slipway/agent-overlay)"
-  resolved="$(gitq -C "$ledger" rev-parse --verify "$version^{tree}" 2>/dev/null || true)"
-  if test -z "$version" || test "$resolved" != "$version" || test "$(gitq -C "$ledger" cat-file -t "$version" 2>/dev/null || true)" != tree; then
-    note 'HYDRATION REFUSED: canonical overlay tree is missing or invalid'
-    return 1
-  fi
   head_objects="$(gitq -C "$ledger" rev-list --objects HEAD -- .slipway/agent-overlay)"
   if ! grep -qxF "$version .slipway/agent-overlay" <<< "$head_objects"; then
     note 'HYDRATION REFUSED: canonical overlay tree is not reachable at the bound ledger path'
     return 1
   fi
 
-  : > "$stage_dir/source-files"
-  while IFS= read -r -d '' entry; do
-    metadata="${entry%%$'\t'*}"
-    source_path="${entry#*$'\t'}"
-    mode="${metadata%% *}"
-    metadata="${metadata#* }"
-    type="${metadata%% *}"
-    if test "$mode" != 100644 || test "$type" != blob; then
-      note "HYDRATION REFUSED: canonical source is not a regular file: $source_path"
-      return 1
-    fi
-    if ! [[ "$source_path" =~ ^[A-Za-z0-9._/-]+$ ]] ||
-       [[ "/$source_path/" == *'/../'* ]] || [[ "/$source_path/" == *'/./'* ]] ||
-       [[ "$source_path" == /* ]] || [[ "$source_path" == *'//'* ]]; then
-      note "HYDRATION REFUSED: canonical source has an invalid destination: $source_path"
-      return 1
-    fi
-    case "$source_path" in
-      manifest.md|AGENTS.local.md|CLAUDE.local.md|docs/agents/*)
-        ;;
-      *)
-        note "HYDRATION REFUSED: canonical source is outside the manifest allowlist: $source_path"
-        return 1
-        ;;
-    esac
-    if test "$source_path" = docs/agents/; then
-      note 'HYDRATION REFUSED: canonical docs/agents destination is not a file'
-      return 1
-    fi
-    printf '%s\n' "$source_path" >> "$stage_dir/source-files"
-  done < <(gitq -C "$ledger" ls-tree -r -z "$version")
-
-  for source_path in manifest.md AGENTS.local.md CLAUDE.local.md; do
-    if test "$(grep -cxF "$source_path" "$stage_dir/source-files")" -ne 1; then
-      note "HYDRATION REFUSED: required canonical source is missing or duplicated: $source_path"
-      return 1
-    fi
-  done
-
   canonical_dir="$stage_dir/canonical"
-  mkdir -p "$canonical_dir"
-  gitq -C "$ledger" archive "$version" | tar -x -C "$canonical_dir"
-  while IFS= read -r source_path; do
-    if test ! -f "$canonical_dir/$source_path" || test -L "$canonical_dir/$source_path" || test ! -s "$canonical_dir/$source_path"; then
-      note "HYDRATION REFUSED: canonical source is missing, empty, or non-regular: $source_path"
-      return 1
-    fi
-  done < "$stage_dir/source-files"
-
-  expected_manifest="$ROOT_DIR/../../packages/slipway/skills/slipway/assets/agent-overlay/manifest.md"
-  if test ! -f "$expected_manifest" || ! cmp -s "$canonical_dir/manifest.md" "$expected_manifest"; then
-    note 'HYDRATION REFUSED: canonical manifest or allowlist is invalid'
-    return 1
-  fi
+  validate_canonical_overlay_tree "$ledger" "$version" "$canonical_dir" "$stage_dir/source-files" canonical || return 1
 
   if test -L "$target/docs" || { test -e "$target/docs" && test ! -d "$target/docs"; } ||
      test -L "$target/.slipway-local" || { test -e "$target/.slipway-local" && test ! -d "$target/.slipway-local"; }; then
@@ -380,6 +421,11 @@ hydrate_from_ledger() (
        ! grep -qxF "$recorded .slipway/agent-overlay" <<< "$head_objects"; then
       note 'HYDRATION REFUSED: recorded overlay tree ID is invalid or unreachable'
       return 1
+    fi
+    if test "$recorded" != "$version"; then
+      validate_canonical_overlay_tree \
+        "$ledger" "$recorded" "$stage_dir/baseline" "$stage_dir/baseline-source-files" \
+        'recorded historical' || return 1
     fi
   fi
   baseline="${recorded:-$version}"
@@ -599,43 +645,25 @@ hydrate_from_ledger() (
   done < "$stage_dir/source-files"
 
   # Audit the complete allowlisted materialization before the version advances.
-  if test "$transaction_failed" -eq 0; then
-    while IFS= read -r source_path; do
-      test "$source_path" = manifest.md && continue
-      actual="$target/$source_path"
-      if test ! -f "$actual" || test -L "$actual" || ! cmp -s "$canonical_dir/$source_path" "$actual"; then
-        note "HYDRATION REFUSED: post-install audit failed: $source_path"
-        transaction_failed=1
-        break
-      fi
-    done < "$stage_dir/source-files"
-  fi
-  if test "$transaction_failed" -eq 0 && test -d "$target/docs/agents"; then
-    if test ! -d "$canonical_dir/docs/agents"; then
-      note 'HYDRATION REFUSED: post-install audit found an extra docs/agents directory'
-      transaction_failed=1
-    fi
-  fi
-  if test "$transaction_failed" -eq 0 && test -d "$target/docs/agents"; then
-    while IFS= read -r actual; do
-      relative="${actual#"$target/"}"
-      if test ! -e "$canonical_dir/$relative" || test -L "$actual" ||
-         { test ! -f "$actual" && test ! -d "$actual"; } ||
-         { test -d "$actual" && test ! -d "$canonical_dir/$relative"; } ||
-         { test -f "$actual" && { test ! -f "$canonical_dir/$relative" || ! cmp -s "$canonical_dir/$relative" "$actual"; }; }; then
-        note "HYDRATION REFUSED: post-install audit found an extra or invalid node: $relative"
-        transaction_failed=1
-        break
-      fi
-    done < <(find "$target/docs/agents" -mindepth 1 -print)
+  if test "$transaction_failed" -eq 0 &&
+     ! verify_materialized_overlay "$canonical_dir" "$stage_dir/source-files" "$target" 'post-install audit'; then
+    transaction_failed=1
   fi
 
   if test "$transaction_failed" -eq 0 && test "$recorded" != "$version"; then
     replace_from_staged "$new_version" "$target/.slipway-local/agent-overlay.version" || transaction_failed=1
   fi
+  if test "$transaction_failed" -eq 0 && test "$recorded" != "$version" &&
+     test "${SLIPWAY_OVERLAY_FAULT_AFTER_VERSION:-0}" = 1; then
+    printf '\nInjected post-version divergence.\n' >> "$target/AGENTS.local.md" || transaction_failed=1
+  fi
   if test "$transaction_failed" -eq 0 &&
      { ! cmp -s "$new_exclude" "$exclude" || ! cmp -s "$new_version" "$target/.slipway-local/agent-overlay.version"; }; then
     note 'HYDRATION REFUSED: final exclude or version verification failed'
+    transaction_failed=1
+  fi
+  if test "$transaction_failed" -eq 0 &&
+     ! verify_materialized_overlay "$canonical_dir" "$stage_dir/source-files" "$target" 'final materialization audit'; then
     transaction_failed=1
   fi
   if test "$transaction_failed" -ne 0; then
@@ -803,6 +831,31 @@ ignored_overlay_strategy() {
   test "$before_state" = "$after_state"
   note 'PASS [ignored overlay]: malformed canonical manifest fails before target writes'
 
+  local malformed_baseline
+  refusal_ledger="$base/refuse-malformed-historical-ledger"
+  gitq clone -q "$ledger" "$refusal_ledger"
+  gitq -C "$refusal_ledger" config user.name 'Prototype Agent'
+  gitq -C "$refusal_ledger" config user.email 'prototype@example.test'
+  printf '%s\n' '# malformed historical manifest' > "$refusal_ledger/.slipway/agent-overlay/manifest.md"
+  gitq -C "$refusal_ledger" add .slipway/agent-overlay/manifest.md
+  gitq -C "$refusal_ledger" commit -qm 'fixture: malformed historical overlay manifest'
+  malformed_baseline="$(gitq -C "$refusal_ledger" rev-parse HEAD:.slipway/agent-overlay)"
+  write_overlay_manifest "$refusal_ledger/.slipway/agent-overlay"
+  gitq -C "$refusal_ledger" add .slipway/agent-overlay/manifest.md
+  gitq -C "$refusal_ledger" commit -qm 'fixture: restore canonical overlay manifest'
+  refusal_target="$base/refuse-malformed-historical"
+  gitq clone -q "$base/repo-b-origin.git" "$refusal_target"
+  hydrate_from_ledger "$ledger" "$refusal_target"
+  printf '%s\n' "$malformed_baseline" > "$refusal_target/.slipway-local/agent-overlay.version"
+  before_state="$(materialized_state "$refusal_target")"
+  if hydrate_from_ledger "$refusal_ledger" "$refusal_target"; then
+    note 'ASSERTION FAILED [ignored overlay]: malformed historical baseline established ownership'
+    exit 1
+  fi
+  after_state="$(materialized_state "$refusal_target")"
+  test "$before_state" = "$after_state"
+  note 'PASS [ignored overlay]: reachable historical baseline must satisfy the full canonical contract before it can establish ownership'
+
   refusal_ledger="$base/refuse-outside-allowlist-ledger"
   gitq clone -q "$ledger" "$refusal_ledger"
   gitq -C "$refusal_ledger" config user.name 'Prototype Agent'
@@ -861,6 +914,29 @@ ignored_overlay_strategy() {
   test ! -e "$refusal_target/docs"
   test ! -e "$refusal_target/.slipway-local"
   note 'PASS [ignored overlay]: injected post-install failure rolls back files, types, version, and full exclude'
+
+  local fault_ledger prior_fault_version
+  fault_ledger="$base/refuse-final-audit-ledger"
+  gitq clone -q "$ledger" "$fault_ledger"
+  gitq -C "$fault_ledger" config user.name 'Prototype Agent'
+  gitq -C "$fault_ledger" config user.email 'prototype@example.test'
+  refusal_target="$base/refuse-final-audit"
+  gitq clone -q "$base/repo-b-origin.git" "$refusal_target"
+  hydrate_from_ledger "$fault_ledger" "$refusal_target"
+  prior_fault_version="$(cat "$refusal_target/.slipway-local/agent-overlay.version")"
+  printf '\n## Fault fixture\n\nAdvance the canonical overlay before final verification.\n' >> \
+    "$fault_ledger/.slipway/agent-overlay/AGENTS.local.md"
+  gitq -C "$fault_ledger" add .slipway/agent-overlay/AGENTS.local.md
+  gitq -C "$fault_ledger" commit -qm 'fixture: advance overlay for final-audit fault'
+  before_state="$(materialized_state "$refusal_target")"
+  if SLIPWAY_OVERLAY_FAULT_AFTER_VERSION=1 hydrate_from_ledger "$fault_ledger" "$refusal_target"; then
+    note 'ASSERTION FAILED [ignored overlay]: post-version divergence escaped final verification'
+    exit 1
+  fi
+  after_state="$(materialized_state "$refusal_target")"
+  test "$before_state" = "$after_state"
+  test "$(cat "$refusal_target/.slipway-local/agent-overlay.version")" = "$prior_fault_version"
+  note 'PASS [ignored overlay]: final byte/type/extra-node audit detects post-version divergence and rolls back the full transaction'
 
   for feature in alpha beta; do
     gitq -C "$b" switch -q -c "feature/$feature" main
