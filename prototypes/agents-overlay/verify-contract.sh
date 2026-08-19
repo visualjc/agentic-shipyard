@@ -80,9 +80,11 @@ inspect_private_history_range() {
 check_dry_run_conformance() {
   local root="$1"
   local asset="$root/packages/slipway/skills/slipway/assets/run-status.md"
-  local canonical_manifest="$root/packages/slipway/skills/slipway/assets/agent-overlay/manifest.md"
-  local fixture_manifest="$root/packages/slipway/examples/dry-run/ledger/.slipway/agent-overlay/manifest.md"
-  local status health action health_count action_count health_line action_line status_count failed=0
+  local canonical_overlay="$root/packages/slipway/skills/slipway/assets/agent-overlay"
+  local fixture_overlay="$root/packages/slipway/examples/dry-run/ledger/.slipway/agent-overlay"
+  local canonical_manifest="$canonical_overlay/manifest.md"
+  local fixture_manifest="$fixture_overlay/manifest.md"
+  local status source_path health action health_count action_count health_line action_line status_count failed=0
   local canonical_normalized fixture_normalized
 
   if test ! -f "$asset" || test ! -f "$canonical_manifest" || test ! -f "$fixture_manifest"; then
@@ -130,18 +132,49 @@ check_dry_run_conformance() {
     failed=1
   fi
 
+  for source_path in manifest.md AGENTS.local.md CLAUDE.local.md; do
+    if test ! -f "$canonical_overlay/$source_path" ||
+       test -L "$canonical_overlay/$source_path" ||
+       test ! -s "$canonical_overlay/$source_path"; then
+      printf 'FAIL [dry-run-conformance]: canonical asset required source is missing or invalid: %s\n' \
+        "$source_path"
+      failed=1
+    fi
+    if test ! -f "$fixture_overlay/$source_path" ||
+       test -L "$fixture_overlay/$source_path" ||
+       test ! -s "$fixture_overlay/$source_path"; then
+      printf 'FAIL [dry-run-conformance]: dry-run fixture required source is missing or invalid: %s\n' \
+        "$source_path"
+      failed=1
+    fi
+  done
+  if test -f "$canonical_overlay/CLAUDE.local.md" &&
+     ! cmp -s <(printf '%s\n' '@AGENTS.local.md') "$canonical_overlay/CLAUDE.local.md"; then
+    printf 'FAIL [dry-run-conformance]: canonical asset CLAUDE.local.md adapter is invalid\n'
+    failed=1
+  fi
+  if test -f "$fixture_overlay/CLAUDE.local.md" &&
+     ! cmp -s <(printf '%s\n' '@AGENTS.local.md') "$fixture_overlay/CLAUDE.local.md"; then
+    printf 'FAIL [dry-run-conformance]: dry-run fixture CLAUDE.local.md adapter is invalid\n'
+    failed=1
+  fi
+
   # Purpose text describes the source context (product asset versus synthetic
   # dry-run fixture); every behavioral contract line must otherwise match.
   canonical_normalized="$(normalize_file "$canonical_manifest" | grep -v '^| purpose:')"
   fixture_normalized="$(normalize_file "$fixture_manifest" | grep -v '^| purpose:')"
   if [[ "$canonical_normalized" != *'| format: slipway-agent-overlay/v1'* ]] ||
+     [[ "$canonical_normalized" != *'required canonical sources'* ]] ||
+     [[ "$canonical_normalized" != *'| manifest.md'* ]] ||
      [[ "$canonical_normalized" != *'| agents.local.md'* ]] ||
      [[ "$canonical_normalized" != *'| claude.local.md'* ]] ||
      [[ "$canonical_normalized" != *'| docs/agents/'* ]] ||
-     [[ "$canonical_normalized" != *'every resolved file must be regular, relative to the overlay root, non-empty, and free of ./.. traversal'* ]] ||
+     [[ "$canonical_normalized" != *'each required source must be present exactly once as a regular, non-empty file relative to the overlay root, with no ./.. traversal. claude.local.md must contain exactly @agents.local.md followed by one lf'* ]] ||
+     [[ "$canonical_normalized" != *'docs/agents/ is optional; when present, every resolved file must be regular, relative to the overlay root, non-empty, and free of ./.. traversal'* ]] ||
      [[ "$canonical_normalized" != *'docs/agents/ is an allowlisted path pattern, not itself a file'* ]] ||
-     [[ "$canonical_normalized" != *'manifest.md is ledger metadata, not a materialized repo-b file'* ]]; then
-    printf 'FAIL [dry-run-conformance]: canonical v1 manifest is missing a required path/type/content/traversal/pattern rule\n'
+     [[ "$canonical_normalized" != *'manifest.md is ledger metadata, not a materialized repo-b file'* ]] ||
+     [[ "$canonical_normalized" != *'absence, duplication, invalid mode, an empty required source, or adapter mismatch makes the current or historical canonical tree invalid before hydration or lane work'* ]]; then
+    printf 'FAIL [dry-run-conformance]: canonical v1 manifest is missing a required-source/path/type/content/traversal/pattern rule\n'
     failed=1
   elif test "$fixture_normalized" != "$canonical_normalized"; then
     printf 'FAIL [dry-run-conformance]: synthetic overlay manifest has drifted semantically from the canonical v1 asset\n'
@@ -349,7 +382,7 @@ self_test_history_range() {
 }
 
 self_test_dry_run_conformance() {
-  local fixture source_status target_status result temp_file
+  local fixture source_path source_status target_status result temp_file fixture_overlay
   fixture="$(mktemp -d "${TMPDIR:-/tmp}/slipway-dry-run-conformance.XXXXXX")"
   mkdir -p \
     "$fixture/packages/slipway/skills/slipway/assets/agent-overlay" \
@@ -357,10 +390,13 @@ self_test_dry_run_conformance() {
     "$fixture/packages/slipway/examples/dry-run/ledger/.slipway/runs/feature/example"
   cp "$ROOT_DIR/packages/slipway/skills/slipway/assets/run-status.md" \
     "$fixture/packages/slipway/skills/slipway/assets/run-status.md"
-  cp "$ROOT_DIR/packages/slipway/skills/slipway/assets/agent-overlay/manifest.md" \
-    "$fixture/packages/slipway/skills/slipway/assets/agent-overlay/manifest.md"
-  cp "$ROOT_DIR/packages/slipway/examples/dry-run/ledger/.slipway/agent-overlay/manifest.md" \
-    "$fixture/packages/slipway/examples/dry-run/ledger/.slipway/agent-overlay/manifest.md"
+  for source_path in manifest.md AGENTS.local.md CLAUDE.local.md; do
+    cp "$ROOT_DIR/packages/slipway/skills/slipway/assets/agent-overlay/$source_path" \
+      "$fixture/packages/slipway/skills/slipway/assets/agent-overlay/$source_path"
+    cp "$ROOT_DIR/packages/slipway/examples/dry-run/ledger/.slipway/agent-overlay/$source_path" \
+      "$fixture/packages/slipway/examples/dry-run/ledger/.slipway/agent-overlay/$source_path"
+  done
+  fixture_overlay="$fixture/packages/slipway/examples/dry-run/ledger/.slipway/agent-overlay"
   source_status="$(find "$ROOT_DIR/packages/slipway/examples/dry-run/ledger/.slipway/runs" -type f -name status.md | sort | head -n 1)"
   target_status="$fixture/packages/slipway/examples/dry-run/ledger/.slipway/runs/feature/example/status.md"
   cp "$source_status" "$target_status"
@@ -388,8 +424,53 @@ self_test_dry_run_conformance() {
   printf 'PASS [self-test dry-run/mapping]: invalid health/action mapping is rejected\n'
   cp "$source_status" "$target_status"
 
+  rm "$fixture_overlay/AGENTS.local.md"
+  if result="$(check_dry_run_conformance "$fixture" 2>&1)"; then
+    printf 'FAIL [self-test dry-run/missing-agents]: missing AGENTS.local.md was accepted\n'
+    rm -rf -- "$fixture"
+    return 1
+  fi
+  if [[ "$result" != *'dry-run fixture required source is missing or invalid: AGENTS.local.md'* ]]; then
+    printf 'FAIL [self-test dry-run/missing-agents]: fixture failed for the wrong reason\n%s\n' "$result"
+    rm -rf -- "$fixture"
+    return 1
+  fi
+  printf 'PASS [self-test dry-run/missing-agents]: missing AGENTS.local.md is rejected\n'
+  cp "$ROOT_DIR/packages/slipway/examples/dry-run/ledger/.slipway/agent-overlay/AGENTS.local.md" \
+    "$fixture_overlay/AGENTS.local.md"
+
+  rm "$fixture_overlay/CLAUDE.local.md"
+  if result="$(check_dry_run_conformance "$fixture" 2>&1)"; then
+    printf 'FAIL [self-test dry-run/missing-claude]: missing CLAUDE.local.md was accepted\n'
+    rm -rf -- "$fixture"
+    return 1
+  fi
+  if [[ "$result" != *'dry-run fixture required source is missing or invalid: CLAUDE.local.md'* ]]; then
+    printf 'FAIL [self-test dry-run/missing-claude]: fixture failed for the wrong reason\n%s\n' "$result"
+    rm -rf -- "$fixture"
+    return 1
+  fi
+  printf 'PASS [self-test dry-run/missing-claude]: missing CLAUDE.local.md is rejected\n'
+  cp "$ROOT_DIR/packages/slipway/examples/dry-run/ledger/.slipway/agent-overlay/CLAUDE.local.md" \
+    "$fixture_overlay/CLAUDE.local.md"
+
+  printf '%s\n' '@WRONG.local.md' > "$fixture_overlay/CLAUDE.local.md"
+  if result="$(check_dry_run_conformance "$fixture" 2>&1)"; then
+    printf 'FAIL [self-test dry-run/altered-claude]: altered CLAUDE.local.md was accepted\n'
+    rm -rf -- "$fixture"
+    return 1
+  fi
+  if [[ "$result" != *'dry-run fixture CLAUDE.local.md adapter is invalid'* ]]; then
+    printf 'FAIL [self-test dry-run/altered-claude]: fixture failed for the wrong reason\n%s\n' "$result"
+    rm -rf -- "$fixture"
+    return 1
+  fi
+  printf 'PASS [self-test dry-run/altered-claude]: altered CLAUDE.local.md is rejected\n'
+  cp "$ROOT_DIR/packages/slipway/examples/dry-run/ledger/.slipway/agent-overlay/CLAUDE.local.md" \
+    "$fixture_overlay/CLAUDE.local.md"
+
   temp_file="$fixture/manifest.tmp"
-  sed 's/non-empty, and/free of empty content and/' \
+  sed 's/followed by one LF/followed by one CRLF/' \
     "$fixture/packages/slipway/examples/dry-run/ledger/.slipway/agent-overlay/manifest.md" > "$temp_file"
   mv "$temp_file" "$fixture/packages/slipway/examples/dry-run/ledger/.slipway/agent-overlay/manifest.md"
   if result="$(check_dry_run_conformance "$fixture" 2>&1)"; then

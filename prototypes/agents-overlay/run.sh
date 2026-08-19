@@ -319,6 +319,10 @@ validate_canonical_overlay_tree() {
       return 1
     fi
   done < "$source_files"
+  if ! cmp -s <(printf '%s\n' '@AGENTS.local.md') "$canonical_dir/CLAUDE.local.md"; then
+    note "HYDRATION REFUSED: $label CLAUDE.local.md adapter is invalid"
+    return 1
+  fi
 
   expected_manifest="$ROOT_DIR/../../packages/slipway/skills/slipway/assets/agent-overlay/manifest.md"
   if test ! -f "$expected_manifest" || ! cmp -s "$canonical_dir/manifest.md" "$expected_manifest"; then
@@ -830,6 +834,24 @@ ignored_overlay_strategy() {
   after_state="$(materialized_state "$refusal_target")"
   test "$before_state" = "$after_state"
   note 'PASS [ignored overlay]: malformed canonical manifest fails before target writes'
+
+  refusal_ledger="$base/refuse-altered-claude-ledger"
+  gitq clone -q "$ledger" "$refusal_ledger"
+  gitq -C "$refusal_ledger" config user.name 'Prototype Agent'
+  gitq -C "$refusal_ledger" config user.email 'prototype@example.test'
+  printf '%s\n' '@BROKEN.local.md' > "$refusal_ledger/.slipway/agent-overlay/CLAUDE.local.md"
+  gitq -C "$refusal_ledger" add .slipway/agent-overlay/CLAUDE.local.md
+  gitq -C "$refusal_ledger" commit -qm 'fixture: alter overlay Claude adapter'
+  refusal_target="$base/refuse-altered-claude"
+  gitq clone -q "$base/repo-b-origin.git" "$refusal_target"
+  before_state="$(materialized_state "$refusal_target")"
+  if hydrate_from_ledger "$refusal_ledger" "$refusal_target"; then
+    note 'ASSERTION FAILED [ignored overlay]: altered canonical Claude adapter was accepted'
+    exit 1
+  fi
+  after_state="$(materialized_state "$refusal_target")"
+  test "$before_state" = "$after_state"
+  note 'PASS [ignored overlay]: altered canonical Claude adapter fails before target writes'
 
   local malformed_baseline
   refusal_ledger="$base/refuse-malformed-historical-ledger"
