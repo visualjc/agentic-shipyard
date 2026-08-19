@@ -29,8 +29,10 @@ The ledger owns exactly one project-wide canonical private overlay at
 `.slipway/agent-overlay/`; it is not a run shard and never belongs in product
 ancestry. Its version is the Git **tree object ID** for
 `HEAD:.slipway/agent-overlay`, not the ledger branch HEAD, so unrelated run
-records do not make a healthy worktree stale. `manifest.md` allowlists only
-`AGENTS.local.md`, `CLAUDE.local.md`, and `docs/agents/**`; it is not itself
+records do not make a healthy worktree stale. The canonical manifest requires
+`manifest.md`, `AGENTS.local.md`, and `CLAUDE.local.md` as canonical regular
+file sources, and allowlists only materialized `AGENTS.local.md`,
+`CLAUDE.local.md`, and optional `docs/agents/**`; `manifest.md` is not itself
 materialized. The canonical seed assets are in `assets/agent-overlay/`.
 
 Every Repo-B worktree records the hydrated tree ID in ignored
@@ -83,9 +85,12 @@ Treat records as claims. Verify Git state before acting and provider state only 
 
 Hydration is mandatory, idempotent, and fail-closed. Resolve the current ledger
 overlay tree and validate its canonical manifest, format, required sources,
-allowlist, file modes, and destinations before any target write. A missing or
-invalid canonical manifest or source always blocks. Missing materialization in
-a fresh worktree is different: when no version is recorded, every existing
+allowlist, file modes, and destinations before any target write. `AGENTS.local.md`
+and `CLAUDE.local.md` must be non-empty, and `CLAUDE.local.md` bytes must be
+exactly `@AGENTS.local.md` followed by one LF. A required source that is
+missing, duplicated, empty, or has an invalid mode; an invalid canonical
+manifest; or a Claude adapter mismatch always blocks. Missing materialization
+in a fresh worktree is different: when no version is recorded, every existing
 managed node must be absent or match the current canonical tree exactly;
 Slipway may then install the missing current files and record that tree ID.
 When the recorded tree ID equals the current canonical tree but materialization
@@ -119,10 +124,12 @@ only after every no-write safety condition above passes. Hydration is normal
 worktree lifecycle preparation, not manual repair, and a successfully hydrated
 worktree becomes `healthy` with action `none` before lane work.
 
-A missing or invalid current or historical canonical manifest/source, invalid
-or unreachable recorded ID, invalid node or mode is `invalid`; a prior-byte or
-ownership mismatch is `divergent`; an unowned node is `unexpected`; and a
-tracked private path is `tracked`. These unsafe states use action `repair`.
+A missing, duplicated, empty, invalid-mode, or adapter-mismatched current or
+historical required canonical source, invalid current or historical canonical
+manifest, invalid or unreachable recorded ID, invalid node or mode is
+`invalid`; a prior-byte or ownership mismatch is `divergent`; an unowned node
+is `unexpected`; and a tracked private path is `tracked`. These unsafe states
+use action `repair`.
 Never overwrite a divergent local edit automatically. An unresolved unsafe
 state blocks lane work with exactly one manual repair action: reconcile the
 private files, or deliberately remove and recreate them, in the explicit
