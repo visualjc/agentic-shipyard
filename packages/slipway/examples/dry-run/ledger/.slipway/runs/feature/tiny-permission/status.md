@@ -5,6 +5,8 @@
 - Agentic branch/head: `feature/tiny-permission` @ `0000000000000000000000000000000000000007`
 - Agentic PR/head/state: `none` @ `none` — `none`
 - Ledger head: `7777777777777777777777777777777777777777`
+- Worktree overlay health: `healthy` @ `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`
+- Worktree overlay action: `none`
 - Delivery PR/head: `none` @ `none`
 - Observed at: `2026-08-04T23:06:00Z`
 

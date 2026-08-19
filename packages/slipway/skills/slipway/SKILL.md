@@ -14,7 +14,7 @@ Use the host's explicit skill syntax when requested. Invoke `$slipway` in Codex 
 ## Start
 
 1. Read [safety.md](references/safety.md).
-2. Locate the machine binding and ledger worktree described in [store.md](references/store.md). If setup is missing, incomplete, stale, or inconsistent, invoke `$slipway-setup` and stop lane execution.
+2. Locate the machine binding and ledger worktree described in [store.md](references/store.md). For the forced `status` operation, apply the shared [overlay lifecycle status contract](references/store.md#overlay-lifecycle); status must not invoke `$slipway-setup`, hydrate, or execute lane work. For every other operation, apply the shared lifecycle so proven-safe missing or stale materialization may hydrate normally; if setup is missing, incomplete, inconsistent, or the overlay remains unsafe, invoke `$slipway-setup` and stop lane execution.
 3. Determine whether the request starts a run, resumes one, or operates on the portfolio. Use the complete agentic work-branch name as the run identity.
 4. Classify the request using [classification.md](references/classification.md). State the lane and evidence. For `tiny-change`, request explicit permission; without it, select `small-development`.
 5. Preflight every capability required by the selected lane immediately before lane execution using [capability-preflight.md](references/capability-preflight.md). Block that lane when a capability is absent or ambiguous.
@@ -44,12 +44,12 @@ When a `slipway-*` entry point invokes this coordinator, preserve its forced ope
 
 - Use Matt Pocock skills as the baseline planning and building path. Use pstack only when project or run preferences explicitly select it. Read [build-providers.md](references/build-providers.md) before dispatching implementation.
 - Index canonical Wayfinder, grilling, research, prototype, specification, ticket, QA, and review artifacts. Do not duplicate their contents.
-- Keep product work on the agentic work branch. Keep agentic metadata in separate commits. Treat only exact reviewed product-only commits as delivery cargo.
+- Keep product work on the agentic work branch. Keep agentic metadata in separate commits. Treat only exact reviewed product-only commits as delivery cargo. The materialized, worktree-root private overlay is never a commit, PR diff, or cargo; reviewed Slipway template assets under the configured product path remain ordinary product source.
 - Update the run shard after each completed phase and before pause. Record observed facts, exact SHAs, open gates, and exactly one next action.
 
 ## Reusable assets
 
-- During setup, copy [project.md](assets/project.md), [preferences.md](assets/preferences.md), [portfolio.md](assets/portfolio.md), and the machine-local [binding.md](assets/binding.md).
+- During setup, copy [project.md](assets/project.md), [preferences.md](assets/preferences.md), [portfolio.md](assets/portfolio.md), the machine-local [binding.md](assets/binding.md), and the canonical [agent-overlay assets](assets/agent-overlay/manifest.md).
 - When starting or reconciling a run, copy [manifest.md](assets/manifest.md), [run-status.md](assets/run-status.md), [gates.md](assets/gates.md), and [artifacts.md](assets/artifacts.md).
 - Before delegation or independent review, copy [worker-brief.md](assets/worker-brief.md) or [reviewer-brief.md](assets/reviewer-brief.md).
 - When recording immutable evidence, copy [event.md](assets/event.md).

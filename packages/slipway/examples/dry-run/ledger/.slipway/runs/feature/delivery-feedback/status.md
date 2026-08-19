@@ -5,6 +5,8 @@
 - Agentic branch/head: `feature/delivery-feedback` @ `3333333333333333333333333333333333333333`
 - Agentic PR/head/state: `https://example.invalid/agent/demo/pull/9` @ `3333333333333333333333333333333333333333` — `open`
 - Ledger head: `8888888888888888888888888888888888888888`
+- Worktree overlay health: `healthy` @ `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`
+- Worktree overlay action: `none`
 - Delivery PR/head: `https://example.invalid/team/demo/pull/42` @ `eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee`
 - Observed at: `2026-08-04T23:44:00Z`
 

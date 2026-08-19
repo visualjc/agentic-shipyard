@@ -48,6 +48,22 @@ _Avoid_: Run folder, project store
 The parallel branch that owns Slipway durable state and never enters product ancestry.
 _Avoid_: State branch, metadata branch
 
+**Private agent overlay**:
+Project-wide agent policy owned by the ledger and materialized only as ignored files in an agentic worktree.
+_Avoid_: Metadata branch, private commit, agentic base branch
+
+**Overlay tree ID**:
+The Git tree object ID of the canonical ledger overlay directory; the stable content version used to detect missing or stale hydration without reacting to unrelated ledger commits.
+_Avoid_: Ledger SHA, policy commit
+
+**Public extension contract**:
+The skill-agnostic tracked instruction that optionally loads local-only policy, plus a host adapter such as `CLAUDE.md` importing `AGENTS.md`.
+_Avoid_: Matt configuration, Repo-B policy
+
+**Hydration**:
+The fail-closed act of validating and materializing the canonical private overlay into one exact agentic worktree, then recording and byte-verifying its overlay tree ID.
+_Avoid_: Checkout, overlay merge
+
 **Cargo commit**:
 An exact, reviewed agentic commit containing only product changes eligible for the delivery repository.
 _Avoid_: Promotion commit, sanitized commit

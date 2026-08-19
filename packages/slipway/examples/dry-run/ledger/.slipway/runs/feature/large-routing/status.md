@@ -5,6 +5,8 @@
 - Agentic branch/head: `feature/large-routing` @ `0000000000000000000000000000000000000001`
 - Agentic PR/head/state: `none` @ `none` — `none`
 - Ledger head: `1111111111111111111111111111111111111111`
+- Worktree overlay health: `healthy` @ `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`
+- Worktree overlay action: `none`
 - Delivery PR/head: `none` @ `none`
 - Observed at: `2026-08-04T23:00:00Z`
 

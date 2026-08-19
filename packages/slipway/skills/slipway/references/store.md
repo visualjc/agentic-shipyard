@@ -10,6 +10,11 @@ The ignored agentic-worktree file `.slipway-local/binding.md` locates the paired
 .slipway/
   project.md
   preferences.md
+  agent-overlay/
+    manifest.md
+    AGENTS.local.md
+    CLAUDE.local.md
+    docs/agents/**
   runs/<complete-work-branch>/
     manifest.md
     status.md
@@ -19,6 +24,23 @@ The ignored agentic-worktree file `.slipway-local/binding.md` locates the paired
   archive/<complete-work-branch>/summary.md
   portfolio.md
 ```
+
+The ledger owns exactly one project-wide canonical private overlay at
+`.slipway/agent-overlay/`; it is not a run shard and never belongs in product
+ancestry. Its version is the Git **tree object ID** for
+`HEAD:.slipway/agent-overlay`, not the ledger branch HEAD, so unrelated run
+records do not make a healthy worktree stale. `manifest.md` allowlists only
+`AGENTS.local.md`, `CLAUDE.local.md`, and `docs/agents/**`; it is not itself
+materialized. The canonical seed assets are in `assets/agent-overlay/`.
+
+Every Repo-B worktree records the hydrated tree ID in ignored
+`.slipway-local/agent-overlay.version`. The Repo-B clone's repository-local Git
+exclude, shared by its linked worktrees, must contain these materialized private
+paths and local state:
+`/AGENTS.local.md`, `/CLAUDE.local.md`, `/docs/agents/`, and
+`/.slipway-local/`. Slipway may manage only those four patterns and must
+preserve unrelated existing exclusions. Never add these paths to shared
+`.gitignore`, and never use `skip-worktree` or `assume-unchanged`.
 
 Branch slashes intentionally create nested directories. Discover runs recursively by finding `manifest.md`; read the canonical branch from the manifest rather than inferring it from directory depth. `portfolio.md` is an optional derived snapshot, not write authority.
 
@@ -38,7 +60,13 @@ Different runs own disjoint paths. Stage only explicit files and never use `git 
 
 Git serializes index and ref updates. If an index or ref lock is busy, stop the current Git operation, re-read ledger HEAD and status, and retry the exact scoped operation. Never delete a lock automatically. A failed ref update requires rebasing the pending record on the new ledger HEAD and rechecking the path; do not overwrite another run.
 
-Global project/preferences changes require an explicit setup window. Finalization writes only the run's disjoint archive summary and removes that run's manifest, status, gates, artifacts, and event files by exact path in the same scoped commit. Never recursively remove a run directory; prune only empty directories after confirming no other manifest lies below them. Status derives the portfolio by scanning active manifests and archive summaries, so concurrent runs do not continuously rewrite a global file.
+Global project, preferences, or agent-overlay changes require an explicit setup
+window. Finalization writes only the run's disjoint archive summary and removes
+that run's manifest, status, gates, artifacts, and event files by exact path in
+the same scoped commit. Never recursively remove a run directory; prune only
+empty directories after confirming no other manifest lies below them. Status
+derives the portfolio by scanning active manifests and archive summaries, so
+concurrent runs do not continuously rewrite a global file.
 
 ## Records
 
@@ -50,6 +78,67 @@ Global project/preferences changes require an explicit setup window. Finalizatio
 - `archive/**/summary.md` retains the compressed outcome, final refs, evidence pointers, and retained development tag after active details leave the ledger tip.
 
 Treat records as claims. Verify Git state before acting and provider state only when the next action depends on it. Never store tokens, secrets, full untrusted comments, or secret-bearing output.
+
+## Overlay lifecycle
+
+Hydration is mandatory, idempotent, and fail-closed. Resolve the current ledger
+overlay tree and validate its canonical manifest, format, required sources,
+allowlist, file modes, and destinations before any target write. A missing or
+invalid canonical manifest or source always blocks. Missing materialization in
+a fresh worktree is different: when no version is recorded, every existing
+managed node must be absent or match the current canonical tree exactly;
+Slipway may then install the missing current files and record that tree ID.
+When the recorded tree ID equals the current canonical tree but materialization
+is incomplete, every existing managed node, type, and byte must likewise match
+the current canonical manifest. Only then may Slipway restore the missing
+current files. In both fresh and current-version cases, unexpected, invalid, or
+tracked nodes prevent safe hydration.
+
+When the recorded tree ID differs from the current canonical tree, accept it
+as a baseline only if it resolves to a tree reachable as a prior
+`.slipway/agent-overlay` value in the bound ledger history. Load that historical
+tree and apply the same canonical manifest, format, required-source, allowlist,
+file-mode, and destination validation used for the current tree. Reachability
+alone does not establish ownership. Before writing, validate the tracked state
+and every existing managed node, type, and byte against the paths owned by that
+validated historical manifest. An obsolete path may be removed only when the
+historical manifest owns it and its local type and bytes still match that
+baseline. After this complete preflight, stage and install the current
+canonical state, preserving unrelated repository-local exclusions. Audit the
+complete allowlisted materialization, including the absence of obsolete or
+unexpected nodes, before advancing
+`.slipway-local/agent-overlay.version`; then reverify the bytes, version, and
+exclude state. Recovery from a failed write is best-effort and does not make an
+unaudited worktree healthy.
+
+Classify the live worktree only after the complete no-write preflight. Current
+bytes and version are `healthy` with action `none`. Safe materialization
+absence is `missing` with action `hydrate`; a safe validated historical
+baseline is `stale` with action `hydrate`. Those states are hydration-ready
+only after every no-write safety condition above passes. Hydration is normal
+worktree lifecycle preparation, not manual repair, and a successfully hydrated
+worktree becomes `healthy` with action `none` before lane work.
+
+A missing or invalid current or historical canonical manifest/source, invalid
+or unreachable recorded ID, invalid node or mode is `invalid`; a prior-byte or
+ownership mismatch is `divergent`; an unowned node is `unexpected`; and a
+tracked private path is `tracked`. These unsafe states use action `repair`.
+Never overwrite a divergent local edit automatically. An unresolved unsafe
+state blocks lane work with exactly one manual repair action: reconcile the
+private files, or deliberately remove and recreate them, in the explicit
+project-policy/setup window; then rehydrate and verify.
+
+Re-check after worktree creation, resume, accepted project-policy changes, and
+only after clean agentic main fast-forwards from authoritative delivery main.
+Status is read-only and needs no delivery capability; it must not invoke setup,
+hydrate, repair, or execute lane work. When the host can read the current or
+explicitly scoped local Repo-B worktree, perform the complete no-write
+preflight above and report its health, action, and hydrated tree ID. Report
+`missing` or `stale` with action `hydrate` only when the preflight proves that
+normal hydration is safe; otherwise report the corresponding unsafe health
+with action `repair`. For every other worktree, report its stored timestamped
+`Worktree overlay health` and `Worktree overlay action` observations and
+explicitly mark both unverified from this host.
 
 ## Pause and resume
 

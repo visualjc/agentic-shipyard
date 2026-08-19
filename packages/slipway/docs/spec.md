@@ -14,7 +14,7 @@ Slipway uses Matt Pocock's planning and implementation skills as its complete ba
 
 Durable state lives on a parallel ledger branch. Each active run owns a shard identified by its complete, unique agentic work-branch name. Different runs update disjoint shards; a single coordinator owns each run's mutable summary while workers and reviewers add immutable event records. Status derives the portfolio from active shards rather than requiring every worker to rewrite a global status file. Finalization compacts the completed run into portfolio history and removes the active shard from the ledger branch's current tree while Git history retains the detailed evidence.
 
-Product development always occurs on an agentic work branch created from clean agentic main. One agentic PR records that branch as the private development/review workspace and is never the team feedback or merge surface. Reviewed product-only commits are cherry-picked to the delivery PR branch. Team feedback arrives on that delivery PR, is implemented and tested on the same agentic work branch, and is cherry-picked back to the same delivery PR after a renewed exact-SHA delivery gate. After the human merge, agentic main fast-forwards to the authoritative delivery-main commit; the agentic PR is closed without merge; only then may the run finalize.
+Product development always occurs on an agentic work branch created from clean agentic main. A ledger-backed ignored private overlay supplies Repo-B-only policy through `AGENTS.local.md`, `CLAUDE.local.md`, and `docs/agents/**`; its Git tree ID is verified before lane work and it cannot become product cargo. One agentic PR records that branch as the private development/review workspace and is never the team feedback or merge surface. Reviewed product-only commits are cherry-picked to the delivery PR branch. Team feedback arrives on that delivery PR, is implemented and tested on the same agentic work branch, and is cherry-picked back to the same delivery PR after a renewed exact-SHA delivery gate. After the human merge, agentic main fast-forwards to the authoritative delivery-main commit, the overlay is rehydrated, the agentic PR is closed without merge, and only then may the run finalize.
 
 ## User Stories
 
@@ -68,6 +68,8 @@ Product development always occurs on an agentic work branch created from clean a
 48. As an evaluator, I want Slipway and Shipyard to remain separate products so that their usability, code, safety, and maintenance trade-offs can be compared fairly.
 49. As a developer, I want canonical skills kept separate from host installation artifacts so that the repository has one source of truth without tracked discovery links or generated tool directories.
 50. As a developer, I want one global Agent Skills installation to serve Cursor, Codex, and compatible hosts so that duplicate host copies cannot disagree.
+51. As a developer, I want private project agent policy hydrated from the ledger only into Repo B so that the delivery repository stays skill-agnostic.
+52. As a developer, I want unresolved absent or stale state, tracked or unexpected paths, and byte-divergent private overlays to block lane work, while proven-safe fresh or stale hydration may make the overlay healthy before the lane starts, so that private guidance is never silently missing or overwritten.
 
 ## Implementation Decisions
 
@@ -81,13 +83,14 @@ Product development always occurs on an agentic work branch created from clean a
 - Make `$slipway` the primary coordinator. Provide direct setup, status, review, sync, promote, resume, and finalize commands for explicit invocation.
 - Require paired repositories in the first iteration. Setup uses read-only discovery, a proposed binding, explicit user confirmation, and initialization; it never creates repositories or changes remotes, credentials, or the delivery branch.
 - Keep portable project preferences separate from machine-local repository bindings and keep both out of product ancestry.
+- Keep one canonical private agent overlay on the ledger. Version it by the overlay directory's Git tree ID, materialize only its manifest-allowlisted files into ignored Repo-B paths, and fail closed rather than overwriting divergent local policy. Keep the public extension contract separate and skill-agnostic.
 - Treat Matt skills as the baseline capability set. Use Wayfinder for large decision fog, grill-with-docs for bounded requirements, research and prototype for questions, to-spec and to-tickets for contracts, implement and TDD for building, and code-review for review.
 - Make pstack an explicit opt-in build provider and defer CCPM.
 - Classify before execution. Require explained user permission for the tiny lane and fall back to small development without permission.
 - Use the full, validated work-branch name as the run identity. Prohibit reuse and slash-delimited prefix overlap with another active run. Treat rename as an explicit migration that records the former name.
 - Store each active run in a disjoint shard on a parallel ledger branch. Give one coordinator ownership of mutable summaries, require workers/reviewers to add unique immutable events, and finalize by removing exact owned files rather than recursively deleting a branch-derived directory.
 - Derive portfolio status by scanning active run records. Update compact global portfolio history only during coordinated setup or finalization.
-- Keep Matt-produced planning artifacts on the agentic work branch when they are code-adjacent, committed separately from cargo. Store exact branch/SHA pointers in the ledger instead of duplicating content.
+- Route Matt setup drafts through the private overlay adapter: persist its project instructions in the canonical ledger overlay and rehydrate/verify. Do not commit Matt setup output per run; other code-adjacent planning artifacts remain separate from cargo.
 - Require agentic work branches to start from agentic main. Never develop on agentic main or the ledger branch.
 - Require product-only commit boundaries and a fresh exact-SHA delivery gate covering repository QA, acceptance, independent review, and cargo exclusions.
 - Create and durably record one agentic PR as the private development/review workspace. Never use it for team feedback or merge it into agentic main.

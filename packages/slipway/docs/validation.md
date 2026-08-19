@@ -25,6 +25,26 @@ Fresh Cursor IDE, Cursor CLI, Codex, and Claude Code discovery remains a post-me
 - In the original `experiment/slipway` worktree, the pre-existing TypeScript source, tests, package manifests, active Shipyard skills, and root README matched accepted SHA `d03351135a44e9f2017ae1dedb646d488d33824c` exactly. The clean `feature/slipway` cargo branch is intentionally based on the repositories' shared bootstrap `main` and adds only the standalone Slipway package plus repository-level ignore policy; it does not claim to contain the unmerged Shipyard policy-engine branch.
 - Run-fixture validation found eight unique, path-disjoint active work-branch identities, one non-reused archived identity, nine globally unique immutable active-snapshot events, no shared global `status.md`, a matching worker/reviewer exact SHA, and identical delivery/agentic main SHAs after finalization. A retained-tag snapshot records the authorized PR-42 transfer, and a separate finalized-ledger snapshot preserves the same branch/PR identity through merge while omitting its former active shard. Every fixture manifest, status, gate, artifact, event, and archive record follows the current reusable asset contract.
 
+## Agent-overlay validation matrix
+
+The overlay contract was exercised in disposable synthetic repositories. The
+package's dry-run fixtures are product conformance assets; they are distinct
+from materialized private overlay files and from the executable development
+harness. That harness is retained as agentic development evidence and is
+intentionally excluded from product cargo.
+
+| Area | Validated behavior and evidence boundary |
+| --- | --- |
+| Object formats | SHA-1 and SHA-256 repositories both hydrate from the recorded overlay tree. Object IDs are treated as opaque values, with no fixed-length assumption. |
+| Hydration | Fresh hydration materializes the expected bytes and version. Repeated hydration is idempotent. |
+| Fail-closed states | Fresh absence hydrates. A safely recoverable stale state advances only when its prior managed bytes still match. After hydration is expected, unresolved missing, stale, divergent, unexpected, tracked, and structurally invalid states block lane work; divergent and unexpected files are preserved. |
+| Worktrees and exclusions | Linked worktrees use the clone-local repository exclude while retaining per-worktree overlay files and version state as ignored, untracked data. |
+| Ledger stability | An unrelated ledger commit does not stale the overlay because freshness is tied to the overlay tree, not the ledger commit ID. |
+| Synchronization | After authoritative-main synchronization, rehydration restores the expected ignored overlay state. |
+| Cargo isolation | Exact product-only promotion kept private overlay paths out of Repo A, and tracked public instruction files contained no private markers. Synthetic package fixtures remain intentional product conformance assets. |
+| Faults and rollback | Deterministic injected faults exercise best-effort restoration of the prior managed state. This is single-process evidence, not a transactional guarantee under concurrent mutation; inode and hardlink metadata are outside the claim. |
+| Host behavior | One reproducible fresh-context Codex forced-status probe validated read-only handling of a divergent overlay. It did not validate automatic public-to-local instruction discovery or an installed suite. Claude Code and other hosts remain unverified. |
+
 ## Fresh-context behavioral tests
 
 Independent read-only agents received the Slipway skill path and realistic prompts without this design discussion or expected outputs.
@@ -109,4 +129,4 @@ Result: status can discover manifests recursively without a shared mutable run t
 
 ## Recommendation
 
-Continue the Slipway experiment. The prototype now covers Jim's planning, building, private-metadata, team-feedback, synchronization, portfolio, and recovery workflow without adding a harness. Trial it on non-critical deliveries beside Shipyard. Retain selected Shipyard enforcement only where real trials demonstrate that instructions, exact-SHA review, scoped Git operations, and plain durable state are not sufficient.
+Continue the Slipway experiment. The validation evidence now covers Jim's planning, building, private-metadata, team-feedback, synchronization, portfolio, and recovery workflow without adding an executable harness to product cargo. Trial it on non-critical deliveries beside Shipyard. Retain selected Shipyard enforcement only where real trials demonstrate that instructions, exact-SHA review, scoped Git operations, and plain durable state are not sufficient.

@@ -6,6 +6,7 @@
 - Delivery repository: `team/demo`
 - Delivery main: `main`
 - Ledger branch: `slipway-ledger`
+- Agent overlay setup: `complete`
 - Build provider: `matt`
 - Matt project setup: `complete`
 - Optional providers detected: `none`
@@ -13,4 +14,4 @@
 
 ## Cargo policy
 
-Include `src/` and `test/`. Exclude `.ua/`, `.slipway/`, `.slipway-local/`, `docs/prd/`, planning ADRs, research/prototypes, and briefs.
+Include `src/` and `test/`. Exclude `.ua/`, `.slipway/`, `.slipway-local/`, root `/AGENTS.local.md`, `/CLAUDE.local.md`, `/docs/agents/`, `docs/prd/`, planning ADRs, research/prototypes, and briefs.

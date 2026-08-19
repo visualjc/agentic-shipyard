@@ -5,6 +5,8 @@
 - Agentic branch/head: `feature/reviewed-worker` @ `1111111111111111111111111111111111111111`
 - Agentic PR/head/state: `https://example.invalid/agent/demo/pull/8` @ `1111111111111111111111111111111111111111` — `open`
 - Ledger head: `4444444444444444444444444444444444444444`
+- Worktree overlay health: `healthy` @ `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`
+- Worktree overlay action: `none`
 - Delivery PR/head: `none` @ `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`
 - Observed at: `2026-08-04T23:25:00Z`
 

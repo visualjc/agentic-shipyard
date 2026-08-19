@@ -5,6 +5,8 @@
 - Agentic branch/head: `fix/ambiguous-market-line` @ `0000000000000000000000000000000000000003`
 - Agentic PR/head/state: `none` @ `none` — `none`
 - Ledger head: `3333333333333333333333333333333333333333`
+- Worktree overlay health: `healthy` @ `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`
+- Worktree overlay action: `none`
 - Delivery PR/head: `none` @ `none`
 - Observed at: `2026-08-04T23:10:00Z`
 
