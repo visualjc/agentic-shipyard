@@ -14,9 +14,9 @@ It is a Markdown/YAML skill suite with no runtime service. Start with the
 
 An agentic repository may contain plans, prototypes, private skill policy, and
 durable ledger state. The delivery repository receives only exact reviewed
-product cargo. Slipway keeps private project-wide agent instructions in a
-ledger-backed ignored overlay, so shared Git history does not require Matt
-skills or any other personal agent toolset. This README is product
+product cargo. Slipway keeps private project-wide instructions and tool
+metadata in ledger-backed context modules that it loads explicitly, so shared
+Git history does not require Matt skills or any other personal agent toolset. This README is product
 documentation and remains valid in either repository.
 
 Shipyard remains the separate policy-engine product used for comparison;

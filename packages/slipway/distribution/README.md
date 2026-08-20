@@ -44,13 +44,12 @@ Select the capabilities needed for the intended lanes and ensure `setup-matt-poc
 
 Missing capabilities do not block Slipway installation, status, resume, or unrelated lanes. Setup blocks only when `setup-matt-pocock-skills` is missing. Each delivery lane blocks immediately before the first action that needs one of its catalog capabilities; `research`, `prototype`, and `triage` are required only when that route selects them.
 
-For a paired project, setup separately confirms a skill-agnostic public
-extension (`AGENTS.md` optional-local line and optional `CLAUDE.md` shim) and
-private policy. It seeds the ledger-owned private overlay and hydrates it only
-into ignored Repo-B paths. Matt setup drafts are redirected into that overlay,
-not committed to tracked `AGENTS.md` or `CLAUDE.md`; hosts should not assume
-private local-instruction behavior beyond the verified Codex prototype until
-their own fresh-context check passes.
+For a paired project, setup confirms private context and cargo policy without
+creating a tracked public bootstrap. It seeds the ledger-owned context registry
+and caches it only under ignored Repo-B local state. Matt setup drafts are
+redirected into the private `matt-skills` module, never tracked `AGENTS.md` or
+`CLAUDE.md`. Invoking Slipway loads the selected modules; arbitrary host
+sessions are intentionally outside that guarantee.
 
 For Claude Code, the same upstream is available as the official `mattpocock-skills` plugin or through the Agent Skills installer. Choose one Matt installation mechanism for that host; installing both creates duplicates. Slipway itself is still installed separately as described below.
 

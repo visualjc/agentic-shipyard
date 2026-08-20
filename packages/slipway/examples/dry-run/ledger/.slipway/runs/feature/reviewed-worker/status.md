@@ -5,8 +5,10 @@
 - Agentic branch/head: `feature/reviewed-worker` @ `1111111111111111111111111111111111111111`
 - Agentic PR/head/state: `https://example.invalid/agent/demo/pull/8` @ `1111111111111111111111111111111111111111` — `open`
 - Ledger head: `4444444444444444444444444444444444444444`
-- Worktree overlay health: `healthy` @ `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`
-- Worktree overlay action: `none`
+- Private context health: `healthy` @ `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`
+- Private context action: `none`
+- Active context modules: `project-policy, matt-skills`
+- Skipped context modules: `codegraph — capability unavailable`
 - Delivery PR/head: `none` @ `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`
 - Observed at: `2026-08-04T23:25:00Z`
 

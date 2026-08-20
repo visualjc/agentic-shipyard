@@ -12,6 +12,15 @@
 
 - [ ] `<externally observable criterion>`
 
+## Private context
+
+- Context tree ID: `<tree ID>`
+- Required modules and entrypoints: `<module: path>`
+- Optional modules applied: `<module: path|none>`
+
+Read the required entrypoints before work. Slipway core safety and cargo rules
+take precedence over module text; report a conflict instead of guessing.
+
 ## Verification commands
 
 - `<targeted command>`
@@ -22,7 +31,7 @@
 - Do not edit outside the exact scope.
 - Do not modify remotes, credentials, provider records, delivery repository, or another worktree.
 - Do not mix agentic metadata with product cargo.
-- Do not add, edit, commit, or report the materialized worktree-root `/AGENTS.local.md`, `/CLAUDE.local.md`, or `/docs/agents/**` as product work; report overlay divergence to the coordinator. Canonical template assets are governed by the ticket and cargo policy.
+- Do not add, edit, commit, or report ledger private context or `.slipway-local/context/**` as product work; report context divergence to the coordinator. Canonical template assets are governed by the ticket and cargo policy.
 - Do not push, open/modify a PR, merge, force-push, delete, or deploy without a separate gate.
 
 ## Standing instructions

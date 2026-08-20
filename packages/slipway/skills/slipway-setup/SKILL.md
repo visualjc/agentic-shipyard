@@ -7,4 +7,4 @@ description: Discover, initialize, validate, or repair Slipway configuration for
 
 Preflight the canonical `slipway` skill in the current host. If it is absent, block and require installation of the complete Slipway suite; do not improvise setup from this entry point.
 
-Invoke `$slipway` with the forced `setup` operation and the user's arguments. Do not classify it as a development lane. Require the primary coordinator to perform read-only discovery, separate confirmation of public extension and private policy, initialization gates, ledger-overlay hydration, and final verification.
+Invoke `$slipway` with the forced `setup` operation and the user's arguments. Do not classify it as a development lane. Require the primary coordinator to perform read-only discovery, confirmation of private context and cargo boundaries, initialization gates, ledger-context caching, and final verification without creating a tracked public bootstrap.

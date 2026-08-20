@@ -5,8 +5,10 @@
 - Agentic branch/head: `feature/capability-gate` @ `0000000000000000000000000000000000000006`
 - Agentic PR/head/state: `none` @ `none` — `none`
 - Ledger head: `6666666666666666666666666666666666666666`
-- Worktree overlay health: `healthy` @ `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`
-- Worktree overlay action: `none`
+- Private context health: `healthy` @ `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`
+- Private context action: `none`
+- Active context modules: `project-policy, matt-skills`
+- Skipped context modules: `codegraph — capability unavailable`
 - Delivery PR/head: `none` @ `none`
 - Observed at: `2026-08-04T23:05:00Z`
 

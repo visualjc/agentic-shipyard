@@ -48,21 +48,21 @@ _Avoid_: Run folder, project store
 The parallel branch that owns Slipway durable state and never enters product ancestry.
 _Avoid_: State branch, metadata branch
 
-**Private agent overlay**:
-Project-wide agent policy owned by the ledger and materialized only as ignored files in an agentic worktree.
-_Avoid_: Metadata branch, private commit, agentic base branch
+**Private context registry**:
+Project-wide declarative modules owned by the ledger and loaded explicitly by Slipway without a tracked repository bootstrap.
+_Avoid_: Host instructions, plugin runtime, private commit
 
-**Overlay tree ID**:
-The Git tree object ID of the canonical ledger overlay directory; the stable content version used to detect missing or stale hydration without reacting to unrelated ledger commits.
+**Context tree ID**:
+The Git tree object ID of the canonical ledger context directory; the stable version used to verify an ignored worktree cache without reacting to unrelated ledger commits.
 _Avoid_: Ledger SHA, policy commit
 
-**Public extension contract**:
-The skill-agnostic tracked instruction that optionally loads local-only policy, plus a host adapter such as `CLAUDE.md` importing `AGENTS.md`.
-_Avoid_: Matt configuration, Repo-B policy
+**Context module**:
+A non-executable Markdown entrypoint with declared activation, capability, and propagation metadata that augments Slipway within core safety boundaries.
+_Avoid_: Hook, host plugin, executable adapter
 
-**Hydration**:
-The fail-closed act of validating and materializing the canonical private overlay into one exact agentic worktree, then recording and byte-verifying its overlay tree ID.
-_Avoid_: Checkout, overlay merge
+**Context caching**:
+The fail-closed act of validating and copying the canonical context tree under `.slipway-local/context/`, then recording and verifying its tree ID.
+_Avoid_: Host discovery, checkout, overlay merge
 
 **Cargo commit**:
 An exact, reviewed agentic commit containing only product changes eligible for the delivery repository.

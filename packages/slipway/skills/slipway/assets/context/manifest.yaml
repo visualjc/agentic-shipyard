@@ -1,0 +1,23 @@
+format: slipway-private-context/v1
+modules:
+  - id: project-policy
+    entrypoint: modules/project-policy/CONTEXT.md
+    required: true
+    operations: [all]
+    capabilities: []
+    repository_markers: []
+    propagate: [coordinator, worker, reviewer]
+  - id: matt-skills
+    entrypoint: modules/matt-skills/CONTEXT.md
+    required: false
+    operations: [development, diagnosis, research, prototype, review]
+    capabilities: [mattpocock-skills]
+    repository_markers: []
+    propagate: [coordinator, worker, reviewer]
+  - id: codegraph
+    entrypoint: modules/codegraph/CONTEXT.md
+    required: false
+    operations: [development, diagnosis, research, prototype, review]
+    capabilities: [codegraph]
+    repository_markers: [.codegraph/]
+    propagate: [coordinator, worker, reviewer]

@@ -8,6 +8,14 @@
 - Canonical spec/tickets: `<pointers>`
 - Acceptance criteria: `<pointers or concise criteria>`
 
+## Private context
+
+- Context tree ID: `<tree ID>`
+- Required review modules and entrypoints: `<module: path|none>`
+
+Read the selected entrypoints before review. Core review independence, safety,
+and cargo rules take precedence over module text.
+
 ## Review
 
 - Use a fresh independent context.

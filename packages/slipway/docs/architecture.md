@@ -18,25 +18,25 @@ Status scans active manifests and branch-specific archive summaries. It does not
 
 Git's index and ref locks serialize commits but do not provide a Slipway transaction system. Scoped `git commit --only` operations reduce accidental cross-run commits. Busy locks and failed ref updates cause reread-and-retry, never automatic lock deletion.
 
-## Private agent overlay
+## Private context modules
 
-The ledger also owns one project-wide `.slipway/agent-overlay/` directory. Its
-Git tree object ID, rather than ledger `HEAD`, versions the canonical private
-policy so unrelated run records do not make every worktree stale. A manifest
-permits only `AGENTS.local.md`, `CLAUDE.local.md`, and `docs/agents/**`; the
-first is the policy and the second is only the `@AGENTS.local.md` adapter.
-Slipway materializes these ignored files only into Repo-B worktrees and records
-the hydrated tree ID under `.slipway-local/`.
+The ledger owns one project-wide `.slipway/context/` registry. Its Git tree
+object ID, rather than ledger `HEAD`, versions canonical private context so
+unrelated run records do not change it. A YAML manifest declares
+non-executable Markdown modules, activation conditions, capability
+requirements, and propagation targets. Slipway may cache the validated tree
+only under ignored `.slipway-local/context/` in Repo B.
 
-The tracked delivery-compatible contract is deliberately minimal: a generic
-`AGENTS.md` optional-local-extension line that exposes no Slipway topology or
-private skill, and, when desired, `CLAUDE.md` as `@AGENTS.md`. Setup separately
-confirms that public contract and private policy. Hydration validates the
-manifest, destination allowlist, local Git exclude, tree ID, tracked state, and
-bytes before lane work; it fails closed and never overwrites local divergence.
-The disposable harness verifies Git and hydration behavior only. Host-specific
-loading behavior requires separate fresh-context evidence outside delivery
-cargo; fresh Claude Code behavior remains to be verified.
+Invoking Slipway is the bootstrap. Slipway selects applicable modules,
+explicitly reads coordinator entrypoints, and passes exact module/tree
+references to workers and reviewers. Missing optional capabilities skip their
+modules; missing required context blocks. Core safety, cargo, repository
+identity, exact-SHA review, and external-write gates always win over modules.
+
+No tracked public adapter exists. Setup observes team-owned `AGENTS.md`,
+`CLAUDE.md`, or other instructions but never creates or changes them merely to
+expose private context. Arbitrary sessions that bypass Slipway receive no
+guaranteed private augmentation; this is intentional.
 
 ## Product flow
 
@@ -54,7 +54,7 @@ delivery main -> fast-forward -> agentic main -> agentic work branch
                               fast-forward agentic main; close agentic PR
 ```
 
-Team feedback is read from the delivery PR and implemented on the same agentic work branch. Every revision renews the exact-SHA delivery gate before new product commits are cherry-picked to the same delivery PR. Materialized worktree-root private overlay files are rejected from commits, PRs, and cargo; after an authoritative-main fast-forward, Slipway rehydrates and verifies the ignored overlay before further work.
+Team feedback is read from the delivery PR and implemented on the same agentic work branch. Every revision renews the exact-SHA delivery gate before new product commits are cherry-picked to the same delivery PR. Ledger context and `.slipway-local/**` are rejected from commits, PRs, and cargo; after an authoritative-main fast-forward, Slipway refreshes the ignored context cache before further work.
 
 ## Fixture cargo
 
