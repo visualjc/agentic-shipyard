@@ -18,6 +18,21 @@ Keep portable records on the ledger branch under `.slipway/`. Keep absolute mach
 
 The ledger branch must remain outside product ancestry and use a dedicated clean worktree. In the confirmed setup window, seed `.slipway/context/` from [the canonical assets](../assets/context/manifest.yaml) and validate the registry. Its live ledger tree is authoritative. Cache it only under Repo B's ignored `.slipway-local/context/`, add only `/.slipway-local/` to that clone's repository-local Git exclude, and record the tree ID separately per worktree. Never add private context to a shared `.gitignore`, create a long-lived context branch, use hidden index flags, remove a worktree, or discard ledger changes during setup. Repair divergence only inside the confirmed setup window after the user confirms the exact affected paths and reconciliation. Never silently overwrite private edits; refresh and verify after a confirmed repair.
 
+## Existing-project migration
+
+When a configured project has legacy `.slipway/agent-overlay/` policy but no
+context registry, treat conversion as an explicit setup migration, not normal
+cache hydration. Translate the private policy and supporting guidance into
+context modules; do not carry host adapter files forward as context. Keep the
+legacy ledger and materialized files unchanged until the new context tree
+validates, its ignored cache byte-verifies, and every active run status records
+the context tree, health, and active/skipped module selection for that run's
+current operation. Only then, inside the confirmed setup window, remove the
+exact legacy ledger, materialized, and version paths plus only the obsolete
+legacy-specific repository-exclude entries. Retain `/.slipway-local/` and
+preserve unrelated exclusions. Commit migration metadata separately and never
+create or change a tracked public instruction file during conversion.
+
 When Matt project conventions are absent and a work branch exists, validate its default private context first, then invoke `setup-matt-pocock-skills` through the [run start contract](run-start.md), never on agentic main. Allow discovery, questions, and confirmed draft generation, but intercept every tracked instruction destination. In the explicit setup window, persist the private draft and supporting metadata under `.slipway/context/modules/matt-skills/`, commit the ledger update, refresh and verify the ignored cache, then mark Matt setup complete. Do not create a per-run metadata commit. If no work branch exists, record `Matt project setup: first-run-required`; run-start consumes that gate before lane work.
 
 Setup is complete only when binding and ledger records agree, the main relationship is known, private context is confirmed, the registry is seeded and locally verified in Repo B, required core skills are discoverable, cargo rules are confirmed, tracked public instructions were not changed merely for Slipway, and the next action is explicit. Setup stays read-only until its existing confirmation gate.

@@ -51,6 +51,11 @@ redirected into the private `matt-skills` module, never tracked `AGENTS.md` or
 `CLAUDE.md`. Invoking Slipway loads the selected modules; arbitrary host
 sessions are intentionally outside that guarantee.
 
+Existing paired projects that still use `.slipway/agent-overlay/` must run the
+confirmed `$slipway-setup` migration before their next lane or delivery gate.
+The migration preserves legacy policy until the new context cache and active
+run module records are verified; it never adds a tracked host adapter.
+
 For Claude Code, the same upstream is available as the official `mattpocock-skills` plugin or through the Agent Skills installer. Choose one Matt installation mechanism for that host; installing both creates duplicates. Slipway itself is still installed separately as described below.
 
 The required `code-review` capability is specifically Matt's `skills/engineering/code-review/SKILL.md` with frontmatter name `code-review`. A host built-in `/code-review`, `intent-pr-review`, `pr-change-walkthrough`, or another similarly named reviewer does not satisfy the delivery gate unless the user explicitly changes the configured capability after comparing its contract.

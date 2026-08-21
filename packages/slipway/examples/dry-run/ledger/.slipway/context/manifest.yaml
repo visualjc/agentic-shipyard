@@ -10,14 +10,14 @@ modules:
   - id: matt-skills
     entrypoint: modules/matt-skills/CONTEXT.md
     required: false
-    operations: [development, review]
+    operations: [development, diagnosis, research, prototype, review]
     capabilities: [mattpocock-skills]
     repository_markers: []
     propagate: [coordinator, worker, reviewer]
   - id: codegraph
     entrypoint: modules/codegraph/CONTEXT.md
     required: false
-    operations: [development, review]
+    operations: [development, diagnosis, research, prototype, review]
     capabilities: [codegraph]
     repository_markers: [.codegraph/]
     propagate: [coordinator, worker, reviewer]
