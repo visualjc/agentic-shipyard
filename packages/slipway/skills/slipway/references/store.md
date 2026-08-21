@@ -99,6 +99,28 @@ entries. Invalid, divergent, unexpected, or tracked cache state blocks lane
 work with exactly one repair action in the explicit project-policy/setup
 window.
 
+### Context operation mapping
+
+Use this mapping for module selection and active-run migration; do not invent an
+operation from a free-form phase label. Apart from the special manifest value
+`all`, the operation vocabulary is `development`, `diagnosis`, `research`,
+`prototype`, and `review`.
+
+| Current route | Manifest operation |
+| --- | --- |
+| `setup`, `tiny-change`, `small-development`, `large-development`, `bug-fix`, or implementation of accepted delivery feedback | `development` |
+| `bug-investigation` | `diagnosis` |
+| Research-only or prototype-only route | `research` or `prototype`, respectively; when both routes are active, evaluate both and use the union of selected modules |
+| `review-only`, QA, exact-SHA review, agentic-PR work, promotion, synchronization, finalization, or delivery-feedback assessment/monitoring | `review` |
+| Classification before one of the routes above | The prospective route's mapped operation |
+| `session-continuity` or a paused run | The operation mapped from the run's single recorded next action |
+| Forced `status` | No module activation; validate context and report the stored selection |
+
+A module with `operations: [all]` applies to every mapped operation. If the
+recorded phase and next action map differently or do not identify one route,
+block and reconcile the run record before selecting modules or completing
+migration.
+
 After the cache is healthy, resolve modules for the current operation. A module
 applies only when its operation matches, every repository marker exists, and
 every declared capability is available. A missing required module or

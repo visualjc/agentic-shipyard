@@ -27,11 +27,13 @@ context modules; do not carry host adapter files forward as context. Keep the
 legacy ledger and materialized files unchanged until the new context tree
 validates, its ignored cache byte-verifies, and every active run status records
 the context tree, health, and active/skipped module selection for that run's
-current operation. Only then, inside the confirmed setup window, remove the
-exact legacy ledger, materialized, and version paths plus only the obsolete
-legacy-specific repository-exclude entries. Retain `/.slipway-local/` and
-preserve unrelated exclusions. Commit migration metadata separately and never
-create or change a tracked public instruction file during conversion.
+current operation according to the shared [context operation
+mapping](store.md#context-operation-mapping). Only then, inside the confirmed
+setup window, remove the exact legacy ledger, materialized, and version paths
+plus only the obsolete legacy-specific repository-exclude entries. Retain
+`/.slipway-local/` and preserve unrelated exclusions. Commit migration metadata
+separately and never create or change a tracked public instruction file during
+conversion.
 
 When Matt project conventions are absent and a work branch exists, validate its default private context first, then invoke `setup-matt-pocock-skills` through the [run start contract](run-start.md), never on agentic main. Allow discovery, questions, and confirmed draft generation, but intercept every tracked instruction destination. In the explicit setup window, persist the private draft and supporting metadata under `.slipway/context/modules/matt-skills/`, commit the ledger update, refresh and verify the ignored cache, then mark Matt setup complete. Do not create a per-run metadata commit. If no work branch exists, record `Matt project setup: first-run-required`; run-start consumes that gate before lane work.
 
