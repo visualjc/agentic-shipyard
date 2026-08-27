@@ -82,12 +82,21 @@ Treat records as claims. Verify Git state before acting and provider state only 
 
 ## Private context lifecycle
 
-Before lane work, resolve `HEAD:.slipway/context` in the bound ledger and
-validate `manifest.yaml` plus every selected module entrypoint. IDs and paths
-must be unique and relative; entrypoints and supporting files must be regular,
-non-empty files inside the context tree. Reject traversal, symlinks, executable
-entries, duplicate IDs, unknown fields that change execution, or any command or
-hook declaration. Treat the tree ID as opaque.
+After core safety and before classification, source discovery, product-file
+reads, project-tool use, worktree creation, or workflow action, read the
+machine binding and resolve `HEAD:.slipway/context` in the bound ledger.
+Validate the available canonical tree, `manifest.yaml`, local cache and recorded
+tree ID, plus every selected module entrypoint. IDs and paths must be unique and
+relative; entrypoints and supporting files must be regular, non-empty files
+inside the context tree. Reject traversal, symlinks, executable entries,
+duplicate IDs, unknown fields that change execution, or any command or hook
+declaration. Treat the tree ID as opaque.
+
+Bootstrap may use only the binding, path checks, Git object/history reads,
+manifest and module reads, cache validation, and a proven-safe hydration needed
+to establish context. It must not inspect product source or invoke a project
+discovery tool before baseline context is loaded or degraded fallback is
+reported.
 
 Cache only a validated canonical tree under `.slipway-local/context/`. A fresh
 or missing cache may hydrate normally. A stale cache may update only when its
@@ -98,6 +107,20 @@ overwrite divergent local bytes. Audit the complete cache before recording
 entries. Invalid, divergent, unexpected, or tracked cache state blocks lane
 work with exactly one repair action in the explicit project-policy/setup
 window.
+
+Bootstrap failure does not make a clearly read-only request unusable. Before
+fallback, warn with the unavailable component, validation failure, and resulting
+limitation. The read-only operation may then use fallback discovery, but must
+record degraded context, must not use invalid context bytes, and must not claim
+compliance with unavailable module guidance or tool requirements. Degraded
+fallback is response-only: do not initialize or update a run, append an event,
+or use the result to satisfy a review or delivery gate. Any mutation, lane
+execution, provider write, cargo transfer, main update, or other delivery
+mutation remains blocked. Treat ambiguous effects as mutating. Fallback never
+authorizes overwriting or repairing divergent context. An explicitly invoked
+`setup` operation is the sole repair exception: after reporting the missing or
+unsafe context, it may perform only the initialization or repair scope confirmed
+under the setup contract.
 
 ### Context operation mapping
 
@@ -114,18 +137,24 @@ operation from a free-form phase label. Apart from the special manifest value
 | `review-only`, QA, exact-SHA review, agentic-PR work, promotion, synchronization, finalization, or delivery-feedback assessment/monitoring | `review` |
 | Classification before one of the routes above | The prospective route's mapped operation |
 | `session-continuity` or a paused run | The operation mapped from the run's single recorded next action |
-| Forced `status` | No module activation; validate context and report the stored selection |
+| Forced `status` | Baseline `operations: [all]` coordinator modules only; validate context and report the stored selection without lane-module activation |
 
 A module with `operations: [all]` applies to every mapped operation. If the
 recorded phase and next action map differently or do not identify one route,
 block and reconcile the run record before selecting modules or completing
 migration.
 
-After the cache is healthy, resolve modules for the current operation. A module
+Before classification, resolve and load every applicable coordinator-targeted
+module declared `operations: [all]`. After classification, resolve additional
+modules for the current operation before its first relevant action. A module
 applies only when its operation matches, every repository marker exists, and
 every declared capability is available. A missing required module or
-capability blocks. Skip an unavailable optional module and report the reason.
-Record the context tree ID plus activated and skipped module IDs in run status.
+capability blocks mutation; a read-only operation may continue only through the
+warned degraded fallback above. Skip an unavailable optional module and report
+the reason. Record the context tree ID plus activated and skipped module IDs in
+run status only when context is healthy enough to permit workflow-state writes.
+For degraded fallback, report the unavailable required module and reason in the
+response without creating or updating durable state.
 
 Load each activated entrypoint explicitly before its target acts. The
 coordinator loads coordinator-targeted modules before classification or
@@ -138,8 +167,11 @@ augment those rules but cannot weaken them; an ambiguous conflict blocks.
 
 Re-check after worktree creation, resume, accepted context changes, and only
 after clean agentic main fast-forwards from authoritative delivery main. Status
-is read-only: it validates and reports the current or scoped local cache but
-does not hydrate, repair, activate lane modules, or execute lane work. For an
+is read-only: it validates the binding, canonical context, and current or scoped
+local cache, then loads available baseline `operations: [all]` coordinator
+modules from a validated source. It does not hydrate, repair, activate
+operation-specific lane modules, or execute lane work. If baseline context is
+unavailable, warn and continue the status scan in degraded mode. For an
 inaccessible worktree, report stored timestamped context observations and mark
 them unverified from this host.
 

@@ -61,7 +61,7 @@ A non-executable Markdown entrypoint with declared activation, capability, and p
 _Avoid_: Hook, host plugin, executable adapter
 
 **Context caching**:
-The fail-closed act of validating and copying the canonical context tree under `.slipway-local/context/`, then recording and verifying its tree ID.
+The validation-first act of copying the canonical context tree under `.slipway-local/context/`, then recording and verifying its tree ID. Unsafe bytes are never overwritten; unavailable context may produce an explicitly degraded read-only fallback but still blocks mutation.
 _Avoid_: Host discovery, checkout, overlay merge
 
 **Cargo commit**:

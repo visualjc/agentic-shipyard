@@ -28,6 +28,18 @@ operation, explicitly reads coordinator context, and passes exact selected
 context to workers and reviewers. Arbitrary sessions that bypass Slipway are
 not guaranteed to receive private context.
 
+On every Slipway invocation, bootstrap precedes classification, repository
+discovery, product-file reads, project-tool use, and workflow action. Slipway
+first loads applicable coordinator modules declared `operations: [all]`, then
+loads additional required modules after classification and before their first
+operation-specific action. If required context is unavailable, a clearly
+read-only request may proceed only after an explicit degraded-context warning;
+mutation and delivery workflow remain blocked. Fallback never uses or
+overwrites invalid context bytes and never claims compliance with unavailable
+guidance. It performs no durable workflow writes and cannot satisfy a review or
+delivery gate. Explicit setup is the sole exception that may initialize or
+repair context under its confirmation gates.
+
 Context precedence is fixed: Slipway safety and authorization, project/cargo
 configuration, selected private modules, then lane/task instructions within
 the higher-level boundaries. Modules may augment but never weaken safety,
@@ -44,6 +56,10 @@ optional and activates only when its marker and capability are present.
 - The delivery repository has zero awareness of the private context system.
 - Private context is durable, versioned, selective, and available to delegated
   work without host instruction discovery.
+- Read-only investigation remains useful during context outages, while its
+  degraded provenance and limitations stay visible.
+- Workflow mutations still fail closed when required project guidance is not
+  available.
 - Direct non-Slipway sessions may not receive the augmentation.
 - Context/cache paths stay excluded from cargo; context templates inside the
   reviewed Slipway package remain ordinary product source.

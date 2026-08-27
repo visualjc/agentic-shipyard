@@ -27,11 +27,25 @@ non-executable Markdown modules, activation conditions, capability
 requirements, and propagation targets. Slipway may cache the validated tree
 only under ignored `.slipway-local/context/` in Repo B.
 
+Slipway bootstraps this context on every invocation after core safety and
+before classification or repository discovery. It loads coordinator baseline
+modules declared `operations: [all]` first, then loads additional required
+modules after classification and before their operation's first action. A
+clearly read-only request may continue after an explicit degraded-context
+warning when required context is unavailable; mutation and delivery workflow
+remain fail-closed. Fallback never overwrites or consumes invalid cache bytes.
+It also performs no workflow-state writes and cannot seal review or delivery
+evidence. Forced status loads available baseline context but does not hydrate or
+repair the cache. Explicit setup is the sole exception that may initialize or
+repair context under its existing confirmation gates.
+
 Invoking Slipway is the bootstrap. Slipway selects applicable modules,
 explicitly reads coordinator entrypoints, and passes exact module/tree
 references to workers and reviewers. Missing optional capabilities skip their
-modules; missing required context blocks. Core safety, cargo, repository
-identity, exact-SHA review, and external-write gates always win over modules.
+modules. Missing required context permits only an explicitly warned read-only
+fallback; it blocks mutation and delivery workflow. Core safety, cargo,
+repository identity, exact-SHA review, and external-write gates always win over
+modules.
 
 No tracked public adapter exists. Setup observes team-owned `AGENTS.md`,
 `CLAUDE.md`, or other instructions but never creates or changes them merely to

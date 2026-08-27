@@ -4,8 +4,8 @@
 
 1. Resolve the complete work-branch name. Invoke `$slipway-status` first when unknown.
 2. Read the project/preferences plus that run's manifest, status, gates, artifacts, and immutable events.
-3. Verify the agentic worktree, branch, exact SHAs, ledger HEAD, and worktree state. Before any resumed lane action, apply the complete [private context lifecycle](../references/store.md#private-context-lifecycle). Allow a proven-safe missing or stale cache to refresh, then resolve and load the selected modules. Read provider state only when the next action depends on it.
-4. Reconcile observations into coordinator-owned records. A changed candidate SHA invalidates prior QA/review. Only unresolved unsafe context or a missing required module blocks and routes to the one setup action defined in [store.md](../references/store.md).
+3. Verify the agentic worktree, branch, exact SHAs, ledger HEAD, and worktree state. Confirm the mandatory [private context lifecycle](../references/store.md#private-context-lifecycle) loaded baseline context before the resume scan. Before any resumed lane action, allow a proven-safe missing or stale cache to refresh, then resolve and load the selected operation-specific modules. Read provider state only when the next action depends on it.
+4. Reconcile observations into coordinator-owned records. A changed candidate SHA invalidates prior QA/review. A read-only resume inspection may warn and continue with degraded context, but unresolved unsafe context or a missing required module blocks resumed lane execution and routes to the one setup action defined in [store.md](../references/store.md).
 5. Load only canonical artifacts needed for the recorded next action, then resume through the matching playbook.
 
 ## Pause

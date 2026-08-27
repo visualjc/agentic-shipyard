@@ -123,6 +123,24 @@ It does not claim automatic discovery by Codex, Cursor, Claude Code, or an
 arbitrary session that bypasses Slipway. The delivery repository requires no
 tracked bootstrap and has zero awareness of the private context system.
 
+### Mandatory bootstrap conformance
+
+The primary skill and lifecycle references must place binding, manifest, and
+baseline `operations: [all]` coordinator-module loading before classification,
+repository search, product-file reads, or project-tool use. Focused source
+inspection must also prove both failure branches: an explicit degraded warning
+before read-only fallback, and a block before mutation or delivery workflow.
+Degraded fallback must remain response-only and must not create workflow state
+or satisfy a review or delivery gate. Forced status must load available
+baseline context without hydration or repair. Forced setup must remain able to
+initialize or repair missing context under its existing confirmation gates.
+
+Host installation proof is intentionally separate. After the updated suite is
+copied to Cursor or Claude, run one fresh natural-language read-only trace. Pass
+only when private bootstrap precedes source discovery and required project-tool
+guidance is attempted before general fallback. Preserve one prompt and raw trace
+as non-cargo evidence; do not build or repeatedly rerun a large host matrix.
+
 ## Fresh-context behavioral tests
 
 Independent read-only agents received the Slipway skill path and realistic prompts without this design discussion or expected outputs.
