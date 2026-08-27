@@ -1,6 +1,6 @@
 # Install Slipway
 
-`packages/slipway/skills/` is the canonical source. Install all eight directories as one suite; do not track project-root discovery links or generated host directories.
+`packages/slipway/skills/` is the canonical source. Install all eight directories as one suite; do not track project-root discovery links or generated host directories. Staging copies exactly those eight canonical skill directories and excludes root contributor tooling such as `AGENTS.md`, `.codex/`, custom-agent TOML files, and every other repository-root artifact.
 
 The eight directories cannot be replaced with one filesystem rename because they share a host root with unrelated skills. Treat installation as a coordinated transaction: stage and validate the complete suite, close active host sessions, activate all eight, verify, and roll back the entire suite if any activation step fails. “Atomic” below means no host session is allowed to observe or use a partial or mixed-version suite; it is not a claim that eight directory replacements are one filesystem operation.
 

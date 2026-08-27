@@ -16,6 +16,11 @@ Fresh Cursor IDE, Cursor CLI, Codex, and Claude Code discovery remains a post-me
 
 ## Static validation
 
+- Source-repository Codex tooling is validated independently with strict config
+  loading, a feature listing for multi-agent support, whitespace checks, and a
+  staged-distribution boundary check. Those checks confirm the root `AGENTS.md`
+  and `.codex/` contributor tooling neither alters a skill nor enters a staged
+  eight-directory Slipway suite.
 - The official skill-authoring `quick_validate.py` passed all eight skills: `slipway`, setup, status, resume, review, sync, promote, and finalize. The validator's missing PyYAML dependency was installed only into a temporary directory and is not a project dependency.
 - YAML inspection confirmed that every `agents/openai.yaml` has the intended display name, a 25–64 character short description, and a default prompt containing its literal `$slipway-*` invocation.
 - A local link check resolved every relative Markdown link.
@@ -24,6 +29,84 @@ Fresh Cursor IDE, Cursor CLI, Codex, and Claude Code discovery remains a post-me
 - `git diff --check` passed.
 - In the original `experiment/slipway` worktree, the pre-existing TypeScript source, tests, package manifests, active Shipyard skills, and root README matched accepted SHA `d03351135a44e9f2017ae1dedb646d488d33824c` exactly. The clean `feature/slipway` cargo branch is intentionally based on the repositories' shared bootstrap `main` and adds only the standalone Slipway package plus repository-level ignore policy; it does not claim to contain the unmerged Shipyard policy-engine branch.
 - Run-fixture validation found eight unique, path-disjoint active work-branch identities, one non-reused archived identity, nine globally unique immutable active-snapshot events, no shared global `status.md`, a matching worker/reviewer exact SHA, and identical delivery/agentic main SHAs after finalization. A retained-tag snapshot records the authorized PR-42 transfer, and a separate finalized-ledger snapshot preserves the same branch/PR identity through merge while omitting its former active shard. Every fixture manifest, status, gate, artifact, event, and archive record follows the current reusable asset contract.
+
+## Source-repository orchestration verification (#19)
+
+This is a contributor-tooling check, not a claim that installed Slipway skills
+load Codex configuration. The accepted Codex 0.144.4 compatibility exception is
+recorded on [spec #16](https://github.com/visualjc/agentic-shipyard/issues/16#issuecomment-5443984317)
+and [ticket #17](https://github.com/visualjc/agentic-shipyard/issues/17#issuecomment-5443984506):
+use the strict-client `features.multi_agent` plus `agents.max_threads` form and
+always select a named role for delegated work. Do not add unsupported
+`agents.enabled` or `default_subagent_*` keys.
+
+The following reproducible record passed against the source tree and a fresh
+staging directory. Set `repo_root=$(git rev-parse --show-toplevel)` and
+`stage_dir=$(mktemp -d)`; retain the run's exact candidate SHA in its immutable
+review event because a commit cannot truthfully contain its own final SHA.
+
+```bash
+cd "$repo_root"
+skill_names=(slipway slipway-setup slipway-status slipway-resume slipway-review slipway-sync slipway-promote slipway-finalize)
+validator_dir=$(mktemp -d)
+python3 -m pip install --quiet --target "$validator_dir/site" PyYAML
+curl -fsSL https://raw.githubusercontent.com/anthropics/skills/main/skills/skill-creator/scripts/quick_validate.py -o "$validator_dir/quick_validate.py"
+for skill_name in "${skill_names[@]}"; do
+  PYTHONPATH="$validator_dir/site" python3 "$validator_dir/quick_validate.py" "packages/slipway/skills/$skill_name"
+  cp -R "packages/slipway/skills/$skill_name" "$stage_dir/$skill_name"
+  PYTHONPATH="$validator_dir/site" python3 "$validator_dir/quick_validate.py" "$stage_dir/$skill_name"
+done
+test "$(find "$stage_dir" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = 8
+```
+
+The PyYAML dependency is isolated under `$validator_dir`; it is not a project
+dependency. The role assertion uses the same six-element list and exact
+`name`, `model`, `model_reasoning_effort`, and `sandbox_mode` values from the
+role files before checking the QA instruction text.
+
+- `codex --strict-config doctor --summary` loaded the configuration, and
+  `codex features list | rg '^multi_agent\\s'` reported `multi_agent` enabled.
+  The doctor still reports host-local terminal and rollout-state conditions;
+  they do not invalidate config parsing.
+- A fresh read-only Codex probe listed exactly `context_gatherer`,
+  `repo_knowledge`, `planner`, `developer`, `qa_tester`, and `reviewer` with
+  their pinned model, reasoning effort, and sandbox. Independent TOML
+  assertions require those six names and settings, reject duplicates, and
+  confirm QA remains Luna/high with a workspace-write sandbox plus its
+  no-source-edit/no-rewriting-formatter instruction.
+- Run the official `quick_validate.py` once for each of the eight source skill
+  directories and again after copying those same directories to `$stage_dir`.
+  Both exact-eight runs pass; the staged directory names must equal
+  `slipway`, `slipway-setup`, `slipway-status`, `slipway-resume`,
+  `slipway-review`, `slipway-sync`, `slipway-promote`, and
+  `slipway-finalize`.
+- The forbidden-path and staged-isolation checks pass: neither source skill
+  changes nor staging contains `AGENTS.md`, `.codex/`, custom-agent TOML, live
+  private context/cache such as `.slipway-local/context` or the ledger's
+  `.slipway/context`, credentials, or machine-specific absolute paths. Reviewed
+  reusable context templates under included product paths, including
+  `slipway/assets/context/`, remain intentional suite content. Relative
+  Markdown links resolve, and secret/path scans find no committed credential or
+  personal-path value.
+- A disposable unrelated Git repository remains without root `AGENTS.md` or
+  `.codex/` after a read-only Codex probe. This proves this repository's
+  contributor tooling is neither created nor required outside the source tree.
+- Negative checks pass when strict loading rejects an injected unsupported
+  `agents.enabled` setting and when the exact-eight staging assertion rejects a
+  ninth directory. These failures are required evidence, not successful
+  configurations.
+- The fresh orchestration check records the ordered roles: Luna/low discovery,
+  Terra/medium planning, Sol/high approval, one Terra/medium implementation
+  writer, concurrent Luna/high QA and Terra/high independent review, then Sol
+  reconciliation. Sol does not edit product files, implement product changes,
+  or run QA; fix loops return serially to the sole developer and renew evidence
+  for the resulting exact candidate SHA.
+
+The lightweight record does not claim fresh global-host installation,
+Cursor/Claude discovery, provider mutation, or a clean host environment. Those
+checks remain unavailable or intentionally skipped here; the residual risk is
+host-version drift and the ordinary limits of instruction-enforced role
+separation.
 
 ## Private context-module evidence
 

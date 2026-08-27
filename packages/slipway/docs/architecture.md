@@ -8,7 +8,7 @@ The agent classifies effort, explains the route, invokes installed skills, choos
 
 Slipway coordinates these capabilities rather than restating their artifacts. Wayfinder owns decision maps. Grilling/domain modeling owns requirement decisions. Research and prototype own question artifacts. To-spec and to-tickets own implementation contracts and blocker edges. Implement/TDD own ticket implementation. Code-review owns independent findings.
 
-`packages/slipway/skills/` is the only canonical source for the eight-skill suite. Do not track root `.agents/`, `.cursor/`, `.claude/`, generated `build/`, or other host installation artifacts in the product repository. Install all eight folders atomically into the host's global skill root by following [distribution/README.md](../distribution/README.md). The seven direct commands are intentionally thin entry points into the primary skill's shared playbooks, references, and assets; they are not standalone packages.
+`packages/slipway/skills/` is the only canonical source for the eight-skill suite. The narrow source-repository exception is tracked Codex contributor tooling at root `AGENTS.md` and `.codex/`: it coordinates work on this repository only and is neither a skill nor an installation artifact. It is not copied, generated, hydrated, or required by unrelated projects. Install all eight folders atomically into the host's global skill root by following [distribution/README.md](../distribution/README.md). The seven direct commands are intentionally thin entry points into the primary skill's shared playbooks, references, and assets; they are not standalone packages.
 
 ## Durable state
 
