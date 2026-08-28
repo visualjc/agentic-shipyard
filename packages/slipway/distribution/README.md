@@ -64,10 +64,12 @@ The required `code-review` capability is specifically Matt's `skills/engineering
 
 Use one exact source at a time:
 
-- Stable: `slipway-deploy/main` at a verified exact SHA.
+- Stable: `https://github.com/NativeInteractive/agentic-shipyard.git` branch `main`, source path `packages/slipway/skills/`. Operators must resolve and record the current exact commit SHA before copying.
 - Development: an explicitly selected agentic worktree at a verified branch and exact reviewed SHA.
 
 Report the selected source path, branch, and SHA before installation. A development install replaces the stable suite; it does not create a second named copy.
+
+Public HTTPS read access does not depend on your GitHub username and needs no `visualjc` identity or private credentials.
 
 ## Preflight
 
@@ -113,7 +115,7 @@ Start a fresh host session and verify:
 
 ## Restore, update, and uninstall
 
-- Restore stable mode by reinstalling from verified `slipway-deploy/main`.
+- Restore stable mode by reinstalling from `https://github.com/NativeInteractive/agentic-shipyard.git` branch `main`, source path `packages/slipway/skills/`, after resolving and recording the current exact commit SHA before copying.
 - Update by repeating preflight and replacing all eight directories atomically as one version.
 - Uninstall only the eight names listed above, after explicit confirmation. Never remove unrelated skills or global host configuration.
 
